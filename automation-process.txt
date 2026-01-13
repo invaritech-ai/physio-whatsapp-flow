@@ -1,0 +1,11 @@
+I want to create a python app which will talk to a whatsApp bot from Twillio. The main objective of the app is to manage and streamline the physio appointment sessions.
+There will be 3 parts of it:
+1. Customer Interface
+2. Physiotherapist Interface
+3. Admin Interface
+
+For 1st: Customer mentions the date or time and duration of the session (30 min, 45 min, 60min) they are interested in making the appointment for, bot looks up the calendly calendar to find the available time slots, if that slot is available, proceed with booking, if not, suggest other closer options. Customer gets a reminder 30 min before the appointment starts. And receive a receipt based on their payment plan, if the physio confirms the appointment, and the payment is made.
+
+For 2nd: Physiotherapist Interface: Physio gets a notification at the time of appointment, with 2 buttons started, cancelled. If started, after the time period of the session, the session is automatically marked as completed. then get a notification mentioning if the customer paid, and upload proof.
+
+For 3rd: Admin gets a notification for a payment if credit card, this is what we received, do you approve, If FPS, let us know if the payment is successful.
