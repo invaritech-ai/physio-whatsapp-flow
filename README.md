@@ -27,9 +27,22 @@ This application is a WhatsApp Bot designed to streamline the physiotherapy appo
 *   **Notifications**:
     *   **Upcoming Session**: A background scheduler runs every 5 minutes. 30 minutes before a session, the **Customer** gets a reminder.
     *   **Start Session**: At the appointment time, the **Physiotherapist** receives a message: *"Appointment Starting ID: X... Reply 'start X' or 'cancel X'"*.
+    *   **At Session End Time** (based on selected duration):
+        *   Bot automatically triggers payment collection flow
+        *   Physio receives: *"Session completed. How was payment handled?"*
 *   **Actions**:
     *   **Start**: Physio replies `start <appointment_id>` → Bot updates status to `started` and informs the Physio of the payment status (e.g., "Approved").
     *   **Cancel**: Physio replies `cancel` (or `cancel <id>`) → Bot acknowledges the cancellation.
+
+### 4.   Payment Collection Flow (Triggered automatically when session ends):
+*  **Payment Status Question**: Bot asks: *"How was payment handled? Reply with:1️⃣ Payment received2️⃣ FPS 3️⃣ Consolidating with other session"*
+*  **Payment Status Options**:
+    *   **Option 1 - Payment received**: Bot asks for payment method:
+            *   *"What payment method was used? Reply with 'cash' or 'card'"*
+            *   Physio selects Cash or Card → Bot records and marks session as completed
+    *   **Option 2 - FPS**: Bot records FPS payment and marks session as completed
+    *   **Option 3 - Consolidating**: Bot records consolidation with other session and marks session as completed
+*  **All responses are logged** to console with timestamps for record-keeping
 
 ## Prerequisites & Setup
 

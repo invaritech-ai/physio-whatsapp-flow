@@ -193,13 +193,25 @@ def notify_admin_of_payment(user, payment, appt):
     send_whatsapp_message(ADMIN_PHONE, msg, media_url=media_url)
 
 async def handle_physio_message(user, body, sender, db: Session):
+    # Check if physio is in a payment flow conversation
+    if user.conversation_state == "awaiting_payment_status":
+        await handle_payment_status_response(user, body, sender, db)
+        return
+    elif user.conversation_state == "awaiting_payment_method":
+        await handle_payment_method_response(user, body, sender, db)
+        return
+        
     if "start" in body:
         # Extract ID (e.g. 'start 1')
+        from datetime import datetime, timedelta
         try:
             appt_id = int(body.split()[1])
             appt = db.get(Appointment, appt_id)
             if appt:
+                # Update status and recalculate end_time from NOW
                 appt.status = "started"
+                appt.start_time = datetime.utcnow()  # Track actual start
+                appt.end_time = datetime.utcnow() + timedelta(minutes=1)
                 db.add(appt)
                 db.commit()
                 
@@ -213,18 +225,119 @@ async def handle_physio_message(user, body, sender, db: Session):
                     pay_status = payment.status.capitalize()
                     pay_mode = payment.payment_method.capitalize()
                 
-                msg = f"Session {appt_id} started.\nPayment Status: {pay_status}\nMode: {pay_mode}"
+                msg = f"Session {appt_id} started.\nPayment Status: {pay_status}\nMode: {pay_mode}\n\nSession will auto-complete at {appt.end_time.strftime('%H:%M:%S')} UTC ({appt.duration_minutes} min)."
             else:
                 msg = "Appointment not found."
         except:
              msg = "Please specify appointment ID, e.g., 'start 1'"
              
-        send_whatsapp_message(sender, msg)
+        send_whatsapp_message(sender, msg)   
     elif "cancel" in body:
         msg = "Session cancelled."
         send_whatsapp_message(sender, msg)
     else:
         msg = "Physio Interface: Reply 'start <id>' to begin a session or 'cancel' to cancel."
+        send_whatsapp_message(sender, msg)
+
+async def handle_payment_status_response(user, body, sender, db: Session):
+    # Handle physio's response about payment status after session ends
+    appt_id = user.active_appointment_id
+    appt = db.get(Appointment, appt_id)
+    
+    if not appt:
+        user.conversation_state = "idle"
+        user.active_appointment_id = None
+        db.add(user)
+        db.commit()
+        msg = "Error: Could not find the appointment. Please try again."
+        send_whatsapp_message(sender, msg)
+        return
+    
+    if "payment received" in body or body == "1" or "1" in body and "payment" in body:
+        # Payment received - ask for method
+        user.conversation_state = "awaiting_payment_method"
+        db.add(user)
+        db.commit()
+        
+        msg = "Great! What payment method was used?\nReply with 'cash' or 'card'"
+        send_whatsapp_message(sender, msg)
+        
+    elif "fps" in body or body == "2":
+        # FPS payment
+        appt.physio_payment_status = "fps"
+        appt.status = "completed"
+        db.add(appt)
+        
+        user.conversation_state = "idle"
+        user.active_appointment_id = None
+        db.add(user)
+        db.commit()
+        
+        msg = "Recorded: FPS payment. Session completed!"
+        send_whatsapp_message(sender, msg)
+        
+    elif "consolidating" in body or body == "3" or "other session" in body:
+        # Consolidating with other session
+        appt.physio_payment_status = "consolidating"
+        appt.status = "completed"
+        db.add(appt)
+        
+        user.conversation_state = "idle"
+        user.active_appointment_id = None
+        db.add(user)
+        db.commit()
+        
+        msg = "Recorded: Consolidating with other session. Session completed!"
+        send_whatsapp_message(sender, msg)
+        
+    else:
+        msg = "Please reply with one of the options:\n1️⃣ Payment received\n2️⃣ FPS\n3️⃣ Consolidating with other session"
+        send_whatsapp_message(sender, msg)
+
+async def handle_payment_method_response(user, body, sender, db: Session):
+    """Handle physio's response about payment method (cash or card)"""
+    appt_id = user.active_appointment_id
+    appt = db.get(Appointment, appt_id)
+    
+    if not appt:
+        user.conversation_state = "idle"
+        user.active_appointment_id = None
+        db.add(user)
+        db.commit()
+        msg = "Error: Could not find the appointment. Please try again."
+        send_whatsapp_message(sender, msg)
+        return
+  
+    if "cash" in body:
+        appt.physio_payment_status = "payment_received"
+        appt.physio_payment_method = "cash"
+        appt.status = "completed"
+        db.add(appt)
+        
+        user.conversation_state = "idle"
+        user.active_appointment_id = None
+        db.add(user)
+        db.commit()
+        
+        msg = "Cash payment received. Session completed!"
+        send_whatsapp_message(sender, msg)
+        
+    elif "card" in body:
+        appt.physio_payment_status = "payment_received"
+        appt.physio_payment_method = "card"
+        appt.status = "completed"
+        db.add(appt)
+        
+        user.conversation_state = "idle"
+        user.active_appointment_id = None
+        db.add(user)
+        db.commit()
+        
+        msg = "Card payment received. Session completed!"
+        send_whatsapp_message(sender, msg)
+        
+    else:
+        msg = "Please reply with one of the options: 'cash' or 'card'"
         send_whatsapp_message(sender, msg)
 
 async def handle_admin_message(user, body, sender, db: Session):
