@@ -31,7 +31,13 @@ This application is a WhatsApp Bot designed to streamline the physiotherapy appo
         *   Bot automatically triggers payment collection flow
         *   Physio receives: *"Session completed. How was payment handled?"*
 *   **Actions**:
-    *   **Start**: Physio replies `start <appointment_id>` → Bot updates status to `started` and informs the Physio of the payment status (e.g., "Approved").
+    *   **Start Session**: Physio replies `start <appointment_id>` → Bot updates status to `started` and informs the Physio of the payment status (e.g., "Approved").
+    *   **Add Notes**: During an active session, Physio can type `add notes` to enter note-taking mode:
+        *   Each message becomes a timestamped note about the client
+        *   Type `done` to exit note-taking mode
+        *   Can re-enter note mode multiple times during a session
+        *   Original text case is preserved for clinical accuracy
+    *   **View Notes**: Physio can type `view notes <appointment_id>` to view all notes for a specific session (e.g., "view notes 1")
     *   **Cancel**: Physio replies `cancel` (or `cancel <id>`) → Bot acknowledges the cancellation.
 
 ### 4.   Payment Collection Flow (Triggered automatically when session ends):
@@ -70,6 +76,10 @@ PHYSIO_PHONE_NUMBER=whatsapp:+0987654321
 
 # Database (Optional, defaults to local SQLite)
 DATABASE_URL=sqlite:///./physio.db
+
+# Debug Mode (Optional, defaults to false)
+# When true: Messages are logged but not sent via Twilio, allows manual role switching
+DEBUG_MODE=false
 ```
 
 ### Installation
@@ -100,7 +110,7 @@ DATABASE_URL=sqlite:///./physio.db
 ## Project Structure
 *   `main.py`: Entry point, FastAPI app, webhook handler, and scheduler.
 *   `bot_logic.py`: Core logic for handling messages and routing based on user roles.
-*   `models.py`: Database models (User, Appointment, Payment).
+*   `models.py`: Database models (User, Appointment, Payment, SessionNote).
 *   `services/`:
     *   `twilio_client.py`: Wrapper for Twilio API.
     *   `calendly.py`: Wrapper for Calendly API (Availability & Booking).
