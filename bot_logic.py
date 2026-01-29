@@ -1,11 +1,19 @@
 from services.twilio_client import send_whatsapp_message
 from services.calendly import check_availability, get_current_user_uuid
-from models import User, Appointment, Payment
+from models import User, Appointment, Payment, SessionNote
 from sqlmodel import Session, select, col
 import os
 
 ADMIN_PHONE = os.getenv("ADMIN_PHONE_NUMBER")
 PHYSIO_PHONE = os.getenv("PHYSIO_PHONE_NUMBER")
+
+# Debug mode: enables manual role switching and conversation logging (local dev only)
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+
+def debug_log(message: str):
+    """Only logs in debug mode - use for conversation logs"""
+    if DEBUG_MODE:
+        print(message)
 
 def get_or_create_user(session: Session, phone: str, name: str = None):
     statement = select(User).where(User.phone_number == phone)
@@ -19,15 +27,16 @@ def get_or_create_user(session: Session, phone: str, name: str = None):
         expected_role = "physio"
 
     if not user:
-        # Create new user
+        # Create new user with role based on env vars
         print(f"DEBUG: Creating new user {phone} as {expected_role}")
         user = User(phone_number=phone, name=name, role=expected_role)
         session.add(user)
         session.commit()
         session.refresh(user)
     else:
-        # Update existing user role if it doesn't match config
-        if user.role != expected_role:
+        # Auto-correct roles only in production (when DEBUG_MODE is off)
+        # This allows manual role switching for testing while ensuring production security
+        if not DEBUG_MODE and user.role != expected_role:
             print(f"DEBUG: Correcting role for {phone} from {user.role} to {expected_role}")
             user.role = expected_role
             session.add(user)
@@ -47,10 +56,37 @@ async def process_message(form_data: dict, db: Session):
     
     user = get_or_create_user(db, sender)
     
+    # Log incoming message (debug only)
+    debug_log(f"📱 [{user.role.upper()}] {sender}: {body}")
+    
+    # Role switching commands (debug only - for local testing)
+    if DEBUG_MODE and ("switch to" in body or "be " in body):
+        if "customer" in body:
+            user.role = "customer"
+            db.add(user)
+            db.commit()
+            msg = "✅ Switched to CUSTOMER role.\n\nYou can now book appointments. Say 'Hi' to start!"
+            send_whatsapp_message(sender, msg)
+            return
+        elif "admin" in body:
+            user.role = "admin"
+            db.add(user)
+            db.commit()
+            msg = "✅ Switched to ADMIN role.\n\nYou can now approve payments with 'approve <payment_id>'"
+            send_whatsapp_message(sender, msg)
+            return
+        elif "physio" in body:
+            user.role = "physio"
+            db.add(user)
+            db.commit()
+            msg = "✅ Switched to PHYSIO role.\n\nYou can start sessions with 'start <appointment_id>'"
+            send_whatsapp_message(sender, msg)
+            return
+    
     if user.role == "customer":
         await handle_customer_message(user, body, num_media, media_url, sender, db)
     elif user.role == "physio":
-        await handle_physio_message(user, body, sender, db)
+        await handle_physio_message(user, body, body, sender, db)
     elif user.role == "admin":
         await handle_admin_message(user, body, sender, db)
 
@@ -107,7 +143,7 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
         try:
             available_slots = check_availability(duration)
         except Exception as e:
-            print(f"Error checking availability: {e}")
+            debug_log(f"Error checking availability: {e}")
             available_slots = []
 
         if available_slots:
@@ -192,13 +228,110 @@ def notify_admin_of_payment(user, payment, appt):
         
     send_whatsapp_message(ADMIN_PHONE, msg, media_url=media_url)
 
-async def handle_physio_message(user, body, sender, db: Session):
+async def handle_note_input(user, body, sender, db: Session):
+    """Handle note input when physio is in note-taking mode
+    
+    Args:
+        body: The original message body (preserves case for notes)
+    """
+    from datetime import datetime
+    
+    # Check if user wants to exit note-taking mode (case-insensitive)
+    if body.strip().lower() == "done":
+        user.conversation_state = "idle"
+        db.add(user)
+        db.commit()
+        
+        # Get all notes for this session
+        statement = select(SessionNote).where(SessionNote.appointment_id == user.active_appointment_id).order_by(SessionNote.created_at)
+        notes = db.exec(statement).all()
+        
+        msg = f"✅ Note-taking completed!\n\nTotal notes saved: {len(notes)}\n\nYou can continue with the session or type 'add notes' again to add more notes."
+        send_whatsapp_message(sender, msg)
+        return
+    
+    # Save the note with original case preserved
+    if user.active_appointment_id:
+        note = SessionNote(
+            appointment_id=user.active_appointment_id,
+            note_text=body,  # Original case preserved
+            created_at=datetime.utcnow(),
+            created_by="physio"
+        )
+        db.add(note)
+        db.commit()
+        
+        timestamp_str = note.created_at.strftime('%H:%M:%S')
+        msg = f"📝 Note saved at {timestamp_str}\n\nContinue adding notes or type 'done' to finish."
+        send_whatsapp_message(sender, msg)
+    else:
+        user.conversation_state = "idle"
+        db.add(user)
+        db.commit()
+        msg = "Error: No active session found. Exiting note-taking mode."
+        send_whatsapp_message(sender, msg)
+
+async def handle_physio_message(user, body, original_body, sender, db: Session):
     # Check if physio is in a payment flow conversation
     if user.conversation_state == "awaiting_payment_status":
         await handle_payment_status_response(user, body, sender, db)
         return
     elif user.conversation_state == "awaiting_payment_method":
         await handle_payment_method_response(user, body, sender, db)
+        return
+    elif user.conversation_state == "adding_notes":
+        await handle_note_input(user, original_body, sender, db)
+        return
+    
+    # Check for "add notes" command during active session
+    if "add notes" in body or "add note" in body:
+        # Check if there's an active session
+        if user.active_appointment_id:
+            appt = db.get(Appointment, user.active_appointment_id)
+            if appt and appt.status == "started":
+                user.conversation_state = "adding_notes"
+                db.add(user)
+                db.commit()
+                
+                msg = f"📝 Note-taking mode activated for Session {appt.id}.\n\nType your notes (one message per note). Each note will be timestamped.\n\nType 'done' when finished adding notes."
+                send_whatsapp_message(sender, msg)
+                return
+            else:
+                msg = "No active session found. Please start a session first with 'start <id>'"
+                send_whatsapp_message(sender, msg)
+                return
+        else:
+            msg = "No active session found. Please start a session first with 'start <id>'"
+            send_whatsapp_message(sender, msg)
+            return
+    
+    # View notes for a specific appointment
+    if "view notes" in body:
+        try:
+            appt_id = int(body.split()[2])  # "view notes 1"
+            appt = db.get(Appointment, appt_id)
+            
+            if appt:
+                # Get all notes for this appointment
+                statement = select(SessionNote).where(
+                    SessionNote.appointment_id == appt_id
+                ).order_by(SessionNote.created_at)
+                notes = db.exec(statement).all()
+                
+                if notes:
+                    msg = f"📋 Notes for Session {appt_id}:\n\n"
+                    for i, note in enumerate(notes, 1):
+                        timestamp = note.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                        msg += f"{i}. [{timestamp}]\n{note.note_text}\n\n"
+                    msg += f"Total: {len(notes)} note(s)"
+                else:
+                    msg = f"No notes found for Session {appt_id}"
+            else:
+                msg = "Appointment not found."
+        except (IndexError, ValueError):
+            msg = "Usage: view notes <appointment_id>\nExample: view notes 1"
+        
+        send_whatsapp_message(sender, msg)
         return
         
     if "start" in body:
@@ -208,11 +341,15 @@ async def handle_physio_message(user, body, sender, db: Session):
             appt_id = int(body.split()[1])
             appt = db.get(Appointment, appt_id)
             if appt:
-                # Update status and recalculate end_time from NOW
+                # Update status and recalculate end_time from NOW using actual duration
                 appt.status = "started"
                 appt.start_time = datetime.utcnow()  # Track actual start
-                appt.end_time = datetime.utcnow() + timedelta(minutes=1)
+                appt.end_time = datetime.utcnow() + timedelta(minutes=appt.duration_minutes)
                 db.add(appt)
+                
+                # Track this as the active appointment for the physio
+                user.active_appointment_id = appt.id
+                db.add(user)
                 db.commit()
                 
                 # Check Payment Status
@@ -225,22 +362,22 @@ async def handle_physio_message(user, body, sender, db: Session):
                     pay_status = payment.status.capitalize()
                     pay_mode = payment.payment_method.capitalize()
                 
-                msg = f"Session {appt_id} started.\nPayment Status: {pay_status}\nMode: {pay_mode}\n\nSession will auto-complete at {appt.end_time.strftime('%H:%M:%S')} UTC ({appt.duration_minutes} min)."
+                msg = f"Session {appt_id} started.\nPayment Status: {pay_status}\nMode: {pay_mode}\n\nSession will auto-complete at {appt.end_time.strftime('%H:%M:%S')} UTC ({appt.duration_minutes} min).\n\n💡 You can type 'add notes' during the session to record notes about the client."
             else:
                 msg = "Appointment not found."
         except:
              msg = "Please specify appointment ID, e.g., 'start 1'"
              
-        send_whatsapp_message(sender, msg)   
+        send_whatsapp_message(sender, msg)
     elif "cancel" in body:
         msg = "Session cancelled."
         send_whatsapp_message(sender, msg)
     else:
-        msg = "Physio Interface: Reply 'start <id>' to begin a session or 'cancel' to cancel."
+        msg = "Physio Interface:\n• 'start <id>' - Begin a session\n• 'add notes' - Add notes during session\n• 'view notes <id>' - View notes for a session\n• 'cancel' - Cancel session"
         send_whatsapp_message(sender, msg)
 
 async def handle_payment_status_response(user, body, sender, db: Session):
-    # Handle physio's response about payment status after session ends
+    """Handle physio's response about payment status after session ends"""
     appt_id = user.active_appointment_id
     appt = db.get(Appointment, appt_id)
     
@@ -253,7 +390,7 @@ async def handle_payment_status_response(user, body, sender, db: Session):
         send_whatsapp_message(sender, msg)
         return
     
-    if "payment received" in body or body == "1" or "1" in body and "payment" in body:
+    if "payment received" in body or body == "1" or ("1" in body and "payment" in body):
         # Payment received - ask for method
         user.conversation_state = "awaiting_payment_method"
         db.add(user)

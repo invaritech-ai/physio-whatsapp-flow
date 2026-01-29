@@ -10,12 +10,10 @@ class User(SQLModel, table=True):
     role: str = Field(default="customer") # customer, physio, admin
     
     # State management for conversation flow
-    conversation_state: str = Field(default="idle") # idle, awaiting_name, awaiting_email, awaiting_payment_status, awaiting_payment_method
+    conversation_state: str = Field(default="idle") # idle, awaiting_name, awaiting_email, awaiting_payment_status, awaiting_payment_method, adding_notes
     last_proposed_start: Optional[datetime] = None
     last_proposed_duration: Optional[int] = None
-    
-    # Physio-specific state for tracking ongoing session
-    active_appointment_id: Optional[int] = None
+    active_appointment_id: Optional[int] = None  # For physios to track current session
 
 class Appointment(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
@@ -43,3 +41,10 @@ class Payment(SQLModel, table=True):
     payment_method: str  # credit_card, fps
     proof_url: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class SessionNote(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    appointment_id: int = Field(foreign_key="appointment.id")
+    note_text: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by: str = Field(default="physio")  # Who created the note
