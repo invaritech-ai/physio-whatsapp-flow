@@ -1,19 +1,23 @@
-from typing import Optional
+from __future__ import annotations
+
 from datetime import datetime
-from sqlmodel import Field, SQLModel, Relationship
+from typing import Optional
+
+from sqlmodel import Field, SQLModel
+
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     phone_number: str = Field(index=True, unique=True)
     name: Optional[str] = None
     email: Optional[str] = None
-    role: str = Field(default="customer") # customer, physio, admin
-    
-    # State management for conversation flow
-    conversation_state: str = Field(default="idle") # idle, awaiting_name, awaiting_email, awaiting_payment_status, awaiting_payment_method, adding_notes
+    role: str = Field(default="customer")  # customer, physio, admin
+
+    conversation_state: str = Field(default="idle")
     last_proposed_start: Optional[datetime] = None
     last_proposed_duration: Optional[int] = None
-    active_appointment_id: Optional[int] = None  # For physios to track current session
+    active_appointment_id: Optional[int] = None
+
 
 class Appointment(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
@@ -25,13 +29,10 @@ class Appointment(SQLModel, table=True):
     calendly_uuid: str
     reminder_sent: bool = Field(default=False)
     physio_notified: bool = Field(default=False)
-    
-    # Physio-reported payment information (after session)
-    physio_payment_status: Optional[str] = None  # payment_received, fps, consolidating
-    physio_payment_method: Optional[str] = None  # cash, card (only if payment_received)
-    
-    # Relationships
-    # customer: User = Relationship(back_populates="appointments")
+
+    physio_payment_status: Optional[str] = None
+    physio_payment_method: Optional[str] = None
+
 
 class Payment(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
@@ -42,9 +43,10 @@ class Payment(SQLModel, table=True):
     proof_url: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class SessionNote(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     appointment_id: int = Field(foreign_key="appointment.id")
     note_text: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    created_by: str = Field(default="physio")  # Who created the note
+    created_by: str = Field(default="physio")

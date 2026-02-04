@@ -1,8 +1,11 @@
 fastapi
 uvicorn
 sqlmodel
+alembic
 twilio
 requests
 python-dotenv
 apscheduler
 python-multipart
+pydantic-settings
+psycopg[binary]

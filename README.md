@@ -59,7 +59,7 @@ This application is a WhatsApp Bot designed to streamline the physiotherapy appo
 *   **ngrok** (for local development webhook exposure)
 
 ### Environment Variables
-Create a `.env` file in the root directory with the following keys:
+Create a `.env` file in the root directory with the following keys (or copy `.env.example`):
 
 ```env
 # Twilio Configuration
@@ -97,7 +97,7 @@ DEBUG_MODE=false
 
 3.  **Run the Application**:
     ```bash
-    uvicorn main:app --reload
+    uvicorn app.main:app --reload
     ```
 
 4.  **Expose Local Server (for Twilio Webhook)**:
@@ -108,9 +108,29 @@ DEBUG_MODE=false
     *   Update your Twilio WhatsApp Sandbox "When a message comes in" URL to: `https://xxxx.ngrok.io/whatsapp`
 
 ## Project Structure
-*   `main.py`: Entry point, FastAPI app, webhook handler, and scheduler.
-*   `bot_logic.py`: Core logic for handling messages and routing based on user roles.
-*   `models.py`: Database models (User, Appointment, Payment, SessionNote).
-*   `services/`:
-    *   `twilio_client.py`: Wrapper for Twilio API.
-    *   `calendly.py`: Wrapper for Calendly API (Availability & Booking).
+*   `app/main.py`: FastAPI app, webhook handler, and (temporary) scheduler.
+*   `app/bot_logic.py`: Core logic for handling messages and routing based on user roles.
+*   `app/models.py`: SQLModel database models (User, Appointment, Payment, SessionNote).
+*   `app/core/config.py`: Pydantic settings (loads from `.env`).
+*   `app/db/session.py`: DB engine/session helpers.
+*   `app/services/`: Integrations (Twilio + Calendly).
+*   `alembic/`: Database migrations.
+
+## Database Migrations (Alembic)
+Run these from the repo root:
+
+```bash
+alembic upgrade head
+```
+
+Create a new migration after model changes:
+
+```bash
+alembic revision --autogenerate -m "describe change"
+```
+
+## Git Workflow (Trunk-Based)
+*   `main`: production-ready
+*   `dev`: integration branch
+*   `feat/<name>`: short-lived feature branches, merged into `dev`
+*   Promote `dev` → `main` via PR when stable and tested

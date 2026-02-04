@@ -129,7 +129,7 @@ def test_view_notes_invalid():
 
 if __name__ == "__main__":
     print(f"Targeting: {BASE_URL}")
-    print("Make sure your uvicorn server is running: 'uvicorn main:app --reload'")
+    print("Make sure your uvicorn server is running: 'uvicorn app.main:app --reload'")
     print("\n" + "="*60)
     print("BASIC FLOW TESTS")
     print("="*60)

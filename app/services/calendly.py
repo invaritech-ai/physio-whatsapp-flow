@@ -1,0 +1,111 @@
+import os
+from datetime import datetime, timedelta
+
+import requests
+
+from app.core.config import settings
+
+CALENDLY_API_TOKEN = settings.calendly_api_token or os.getenv("CALENDLY_API_TOKEN")
+BASE_URL = "https://api.calendly.com"
+
+headers = {
+    "Authorization": f"Bearer {CALENDLY_API_TOKEN}",
+    "Content-Type": "application/json",
+}
+
+
+def get_current_user_uuid():
+    """Fetch the current user's URI/UUID from Calendly."""
+    url = f"{BASE_URL}/users/me"
+    response = requests.get(url, headers=headers, timeout=20)
+    if response.status_code == 200:
+        return response.json()["resource"]["uri"]
+    return None
+
+
+def get_event_types(user_uri):
+    """Fetch event types for the user."""
+    url = f"{BASE_URL}/event_types?user={user_uri}"
+    response = requests.get(url, headers=headers, timeout=20)
+    return response.json().get("collection", [])
+
+
+def check_availability(duration_minutes: int, start_date: datetime = None, end_date: datetime = None):
+    """
+    Check for available slots by fetching scheduled events and finding gaps.
+    Assumes a 9am-5pm work day.
+    """
+    if not start_date:
+        start_date = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
+        if datetime.utcnow().hour >= 17:
+            start_date += timedelta(days=1)
+
+    if not end_date:
+        end_date = start_date + timedelta(days=3)
+
+    user_uri = get_current_user_uuid()
+    if not user_uri:
+        print("Error: Could not fetch user URI")
+        return []
+
+    url = f"{BASE_URL}/scheduled_events"
+    params = {
+        "user": user_uri,
+        "min_start_time": start_date.isoformat() + "Z",
+        "max_start_time": end_date.isoformat() + "Z",
+        "status": "active",
+    }
+    response = requests.get(url, headers=headers, params=params, timeout=30)
+    scheduled_events = response.json().get("collection", [])
+
+    scheduled_events.sort(key=lambda x: x["start_time"])
+
+    available_slots = []
+    current_day = start_date
+    while current_day < end_date:
+        work_start = current_day.replace(hour=9, minute=0, second=0)
+        work_end = current_day.replace(hour=17, minute=0, second=0)
+
+        day_events = [e for e in scheduled_events if e["start_time"].startswith(current_day.strftime("%Y-%m-%d"))]
+
+        last_end_time = work_start
+        for event in day_events:
+            evt_start = datetime.fromisoformat(event["start_time"].replace("Z", ""))
+            evt_end = datetime.fromisoformat(event["end_time"].replace("Z", ""))
+
+            if (evt_start - last_end_time).total_seconds() / 60 >= duration_minutes:
+                available_slots.append(last_end_time)
+
+            last_end_time = max(last_end_time, evt_end)
+
+        if (work_end - last_end_time).total_seconds() / 60 >= duration_minutes:
+            available_slots.append(last_end_time)
+
+        current_day += timedelta(days=1)
+
+    return available_slots
+
+
+def get_event_link(duration_minutes: int):
+    """Fetch the Scheduling URL for the event type matching the duration."""
+    user_uri = get_current_user_uuid()
+    if not user_uri:
+        return None
+
+    event_types = get_event_types(user_uri)
+
+    target_event = None
+    for et in event_types:
+        if not et.get("active"):
+            continue
+        if str(duration_minutes) in et.get("name", ""):
+            target_event = et
+            break
+
+    if not target_event:
+        target_event = next((et for et in event_types if et.get("active")), None)
+
+    if target_event:
+        return target_event.get("scheduling_url")
+
+    return "https://calendly.com"
