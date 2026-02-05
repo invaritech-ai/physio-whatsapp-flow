@@ -5,11 +5,13 @@ from datetime import datetime, timedelta
 import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
 
 from app.bot_logic import process_message
+from app.core.auth import get_current_user
 from app.core.config import settings
 from app.db.session import create_db_and_tables, engine
 from app.models import Appointment, User
@@ -110,7 +112,7 @@ def send_scheduled_reminders() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
+    # create_db_and_tables()
     scheduler.add_job(send_scheduled_reminders, "interval", minutes=5)
     scheduler.start()
     yield
@@ -118,6 +120,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Allow browser clients to call the API during dev.
+# TODO: tighten origins for production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/whatsapp")
@@ -137,3 +149,8 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
 @app.get("/")
 def read_root():
     return {"message": "Physio Bot API is running"}
+
+
+@app.get("/me")
+def read_me(current_user: dict = Depends(get_current_user)):
+    return current_user

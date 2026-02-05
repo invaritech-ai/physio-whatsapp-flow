@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     admin_phone_number: str | None = None
     physio_phone_number: str | None = None
 
+    neon_auth_url: str | None = None
+    neon_jwks_url: str | None = None
+    neon_jwt_issuer: str | None = None
+    neon_jwt_audience: str | None = None
+
     debug_mode: bool = False
     public_base_url: str | None = None
 
