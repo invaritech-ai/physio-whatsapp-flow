@@ -5,13 +5,11 @@ from datetime import datetime, timedelta
 import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
 
-from app.bot_logic import process_message
-from app.core.auth import get_current_user
+from app.api.router import api_router
 from app.core.config import settings
 from app.db.session import create_db_and_tables, engine
 from app.models import Appointment, User
@@ -131,26 +129,4 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.post("/whatsapp")
-async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
-    try:
-        form_data = await request.form()
-        with Session(engine) as session:
-            await process_message(dict(form_data), session)
-        return {"status": "success"}
-    except Exception as e:
-        import traceback
-
-        print(f"Error: {str(e)}\n{traceback.format_exc()}")
-        return JSONResponse(status_code=500, content={"message": str(e), "traceback": traceback.format_exc()})
-
-
-@app.get("/")
-def read_root():
-    return {"message": "Physio Bot API is running"}
-
-
-@app.get("/me")
-def read_me(current_user: dict = Depends(get_current_user)):
-    return current_user
+app.include_router(api_router)
