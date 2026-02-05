@@ -105,16 +105,20 @@ DEBUG_MODE=false
     ngrok http 8000
     ```
     *   Copy the generated HTTPS URL (e.g., `https://xxxx.ngrok.io`).
-    *   Update your Twilio WhatsApp Sandbox "When a message comes in" URL to: `https://xxxx.ngrok.io/whatsapp`
+    *   Update your Twilio WhatsApp Sandbox "When a message comes in" URL to: `https://xxxx.ngrok.io/api/v1/whatsapp`
 
 ## Project Structure
 *   `app/main.py`: FastAPI app, webhook handler, and (temporary) scheduler.
 *   `app/bot_logic.py`: Core logic for handling messages and routing based on user roles.
 *   `app/models/`: SQLModel database models (User, Appointment, Payment, SessionNote).
+*   `app/api/`: Route registry, versioned API modules (`/api/v1/*`).
 *   `app/core/config.py`: Pydantic settings (loads from `.env`).
 *   `app/db/session.py`: DB engine/session helpers.
 *   `app/services/`: Integrations (Twilio + Calendly).
 *   `alembic/`: Database migrations.
+*   `docs/`: Project documentation.
+
+Detailed structure: [docs/project-structure.md](docs/project-structure.md)
 
 ## Database Migrations (Alembic)
 Detailed guide: [docs/alembic.md](docs/alembic.md)
