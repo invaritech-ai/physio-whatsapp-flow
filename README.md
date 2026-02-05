@@ -110,7 +110,7 @@ DEBUG_MODE=false
 ## Project Structure
 *   `app/main.py`: FastAPI app, webhook handler, and (temporary) scheduler.
 *   `app/bot_logic.py`: Core logic for handling messages and routing based on user roles.
-*   `app/models.py`: SQLModel database models (User, Appointment, Payment, SessionNote).
+*   `app/models/`: SQLModel database models (User, Appointment, Payment, SessionNote).
 *   `app/core/config.py`: Pydantic settings (loads from `.env`).
 *   `app/db/session.py`: DB engine/session helpers.
 *   `app/services/`: Integrations (Twilio + Calendly).

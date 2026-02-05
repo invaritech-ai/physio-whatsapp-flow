@@ -12,7 +12,7 @@ uses `SQLModel.metadata` for autogenerate.
 1. `alembic.ini` contains a placeholder `sqlalchemy.url`, but it is not used at runtime.
 
 **Files You Update**
-1. `app/models.py`
+1. `app/models/`
    - Update SQLModel classes when adding tables, columns, indexes, or defaults.
    - Keep model defaults in sync with DB defaults for accurate autogeneration.
 1. `alembic/versions/<new_revision>.py`
@@ -30,7 +30,7 @@ uses `SQLModel.metadata` for autogenerate.
 
 **How To Update Schema**
 1. Modify models
-   - Edit `app/models.py` (or other model modules) to reflect the new schema.
+   - Edit `app/models/` modules to reflect the new schema.
 1. Ensure metadata is loaded
    - If models are split across modules, ensure those modules are imported by `alembic/env.py`.
 1. Generate a new migration
