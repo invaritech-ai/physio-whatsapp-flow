@@ -117,6 +117,8 @@ DEBUG_MODE=false
 *   `alembic/`: Database migrations.
 
 ## Database Migrations (Alembic)
+Detailed guide: [docs/alembic.md](docs/alembic.md)
+
 Run these from the repo root:
 
 ```bash
