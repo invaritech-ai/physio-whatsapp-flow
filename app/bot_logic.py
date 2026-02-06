@@ -269,6 +269,7 @@ async def handle_note_input(user, body, sender, db: Session):
     if user.active_appointment_id:
         note = SessionNote(
             appointment_id=user.active_appointment_id,
+            physio_id=user.id,
             note_text=body,
             created_at=datetime.utcnow(),
             created_by="physio",
