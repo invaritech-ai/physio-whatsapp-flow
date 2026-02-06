@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -36,8 +36,9 @@ def check_availability(duration_minutes: int, start_date: datetime = None, end_d
     Assumes a 9am-5pm work day.
     """
     if not start_date:
-        start_date = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
-        if datetime.utcnow().hour >= 17:
+        now = datetime.now(timezone.utc)
+        start_date = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now.hour >= 17:
             start_date += timedelta(days=1)
 
     if not end_date:
@@ -70,8 +71,8 @@ def check_availability(duration_minutes: int, start_date: datetime = None, end_d
 
         last_end_time = work_start
         for event in day_events:
-            evt_start = datetime.fromisoformat(event["start_time"].replace("Z", ""))
-            evt_end = datetime.fromisoformat(event["end_time"].replace("Z", ""))
+            evt_start = datetime.fromisoformat(event["start_time"].replace("Z", "+00:00"))
+            evt_end = datetime.fromisoformat(event["end_time"].replace("Z", "+00:00"))
 
             if (evt_start - last_end_time).total_seconds() / 60 >= duration_minutes:
                 available_slots.append(last_end_time)

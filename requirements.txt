@@ -10,3 +10,5 @@ python-multipart
 pydantic-settings
 psycopg[binary]
 PyJWT[crypto]
+celery[redis]
+redis

@@ -54,6 +54,7 @@ This application is a WhatsApp Bot designed to streamline the physiotherapy appo
 
 ### Requirements
 *   **Python 3.9+**
+*   **Redis** (for Celery task queue)
 *   **Twilio Account** (for WhatsApp Sandbox or Production API)
 *   **Calendly Account** (with API Token)
 *   **ngrok** (for local development webhook exposure)
@@ -77,6 +78,10 @@ PHYSIO_PHONE_NUMBER=whatsapp:+0987654321
 # Database (Optional, defaults to local SQLite)
 DATABASE_URL=sqlite:///./physio.db
 
+# Celery + Redis (async task queue)
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
+
 # Debug Mode (Optional, defaults to false)
 # When true: Messages are logged but not sent via Twilio, allows manual role switching
 DEBUG_MODE=false
@@ -95,12 +100,22 @@ DEBUG_MODE=false
     pip install -r requirements.txt
     ```
 
-3.  **Run the Application**:
+3.  **Start Redis** (required for Celery):
+    ```bash
+    docker run -d --name redis -p 6379:6379 redis:7-alpine
+    ```
+
+4.  **Start Celery Worker**:
+    ```bash
+    celery -A app.worker:celery_app worker --loglevel=info
+    ```
+
+5.  **Run the Application**:
     ```bash
     uvicorn app.main:app --reload
     ```
 
-4.  **Expose Local Server (for Twilio Webhook)**:
+6.  **Expose Local Server (for Twilio Webhook)**:
     ```bash
     ngrok http 8000
     ```
@@ -112,9 +127,12 @@ DEBUG_MODE=false
 *   `app/bot_logic.py`: Core logic for handling messages and routing based on user roles.
 *   `app/models/`: SQLModel database models (User, Appointment, Payment, SessionNote).
 *   `app/api/`: Route registry, versioned API modules (`/api/v1/*`).
+    *   `app/api/v1/routes/session_notes.py`: REST API for session notes (CRUD operations).
 *   `app/core/config.py`: Pydantic settings (loads from `.env`).
 *   `app/db/session.py`: DB engine/session helpers.
 *   `app/services/`: Integrations (Twilio + Calendly).
+*   `app/worker.py`: Celery app configuration.
+*   `app/tasks/`: Background tasks (WhatsApp message processing, etc.).
 *   `alembic/`: Database migrations.
 *   `docs/`: Project documentation.
 
@@ -134,6 +152,30 @@ Create a new migration after model changes:
 ```bash
 alembic revision --autogenerate -m "describe change"
 ```
+
+## API Endpoints
+
+### WhatsApp Webhook
+*   `POST /api/v1/whatsapp` - Twilio webhook for incoming WhatsApp messages (enqueues Celery task)
+*   `POST /api/v1/whatsapp/test` - Manual test endpoint for sending messages (JSON format)
+
+### Session Notes API
+*   `GET /api/v1/session-notes?appointment_id={id}` - List notes for an appointment
+*   `GET /api/v1/session-notes?physio_id={id}` - List notes by physio
+*   `GET /api/v1/session-notes?appointment_id={id}&physio_id={id}` - List notes (filtered)
+*   `GET /api/v1/session-notes/{note_id}` - Get a single note
+*   `POST /api/v1/session-notes` - Create a new note
+*   `PATCH /api/v1/session-notes/{note_id}` - Update a note
+*   `DELETE /api/v1/session-notes/{note_id}` - Delete a note
+
+Documentation: [SESSION_NOTES_API.md](SESSION_NOTES_API.md)
+
+### Web API (Protected)
+*   `GET /api/v1/me` - Get current authenticated user (Neon Auth JWT)
+
+### Interactive Documentation
+*   Swagger UI: `http://localhost:8000/docs`
+*   ReDoc: `http://localhost:8000/redoc`
 
 ## Git Workflow (Trunk-Based)
 *   `main`: production-ready
