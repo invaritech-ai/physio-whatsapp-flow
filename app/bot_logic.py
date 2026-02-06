@@ -176,6 +176,18 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
         await confirm_internal_booking(user, sender, db)
         return
 
+    # Check for greetings
+    if any(keyword in body for keyword in ["hello", "hi", "hey", "start", "help"]):
+        send_whatsapp_message(
+            sender,
+            "👋 Hello! Welcome to Harry's Physiotherapy booking.\n\n"
+            "To book an appointment, please tell me how long you need:\n"
+            "• 30 min\n"
+            "• 45 min\n"
+            "• 60 min"
+        )
+        return
+
     send_whatsapp_message(
         sender,
         "I didn't quite catch that. You can say 'Hello' to start, mention a duration like '30 min', or reply 'booked' if you just finished scheduling.",
