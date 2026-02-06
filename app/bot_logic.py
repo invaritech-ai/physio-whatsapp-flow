@@ -237,6 +237,13 @@ def handle_customer_message(
             return
 
         link = get_event_link(user.last_proposed_duration or 30)
+        if not link:
+            send_whatsapp_message(
+                sender,
+                "Sorry, we couldn't generate a booking link right now. "
+                "Please try again later.",
+            )
+            return
         send_whatsapp_message(
             sender,
             (

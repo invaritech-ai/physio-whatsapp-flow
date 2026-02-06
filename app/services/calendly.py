@@ -52,8 +52,8 @@ def check_availability(duration_minutes: int, start_date: datetime = None, end_d
     url = f"{BASE_URL}/scheduled_events"
     params = {
         "user": user_uri,
-        "min_start_time": start_date.isoformat() + "Z",
-        "max_start_time": end_date.isoformat() + "Z",
+        "min_start_time": start_date.isoformat(),
+        "max_start_time": end_date.isoformat(),
         "status": "active",
     }
     response = requests.get(url, headers=headers, params=params, timeout=30)

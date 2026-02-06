@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.db.session import create_db_and_tables, engine
+from app.db.session import engine
 from app.models import Appointment, User
 from app.services.twilio_client import send_whatsapp_message
 
@@ -73,10 +73,6 @@ def send_scheduled_reminders() -> None:
         )
         ended_appointments = session.exec(statement_ended).all()
 
-        all_started = session.exec(select(Appointment).where(Appointment.status == "started")).all()
-        for a in all_started:
-            print(f"Started Appt {a.id}: end_time={a.end_time}, now={now}, ended={a.end_time <= now}")
-
         for appt in ended_appointments:
             if not physio_number:
                 continue
@@ -110,7 +106,6 @@ def send_scheduled_reminders() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # create_db_and_tables()
     scheduler.add_job(send_scheduled_reminders, "interval", minutes=5)
     scheduler.start()
     yield
