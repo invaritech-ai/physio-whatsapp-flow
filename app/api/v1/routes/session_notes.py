@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import field_validator
@@ -8,7 +8,8 @@ from sqlmodel import Session, SQLModel, select
 
 from app.db.session import get_session
 from app.models.appointment import Appointment
-from app.models.session_note import SessionNote
+from app.models.session_note import SessionNote, SessionNoteBase
+from app.models.user import User
 
 router = APIRouter(prefix="/session-notes", tags=["session-notes"])
 
@@ -16,13 +17,8 @@ router = APIRouter(prefix="/session-notes", tags=["session-notes"])
 # --- Request/Response Schemas ---
 
 
-class SessionNoteCreate(SQLModel):
+class SessionNoteCreate(SessionNoteBase):
     """Request body for creating a session note."""
-
-    appointment_id: int
-    physio_id: int | None = None
-    note_text: str
-    created_by: str = "physio"
 
     @field_validator("note_text")
     @classmethod
@@ -33,7 +29,10 @@ class SessionNoteCreate(SQLModel):
 
 
 class SessionNoteUpdate(SQLModel):
-    """Request body for updating a session note (partial update)."""
+    """Request body for updating a session note (partial update).
+
+    All fields optional — cannot derive from base.
+    """
 
     physio_id: int | None = None
     note_text: str | None = None
@@ -47,15 +46,11 @@ class SessionNoteUpdate(SQLModel):
         return v.strip() if v else v
 
 
-class SessionNoteRead(SQLModel):
+class SessionNoteRead(SessionNoteBase):
     """Response body for a session note."""
 
     id: int
-    appointment_id: int
-    physio_id: int | None
-    note_text: str
     created_at: datetime
-    created_by: str
 
 
 # --- Endpoints ---
@@ -71,18 +66,15 @@ def list_session_notes(
 
     At least one filter parameter must be provided.
     """
-    # Require at least one filter parameter
     if appointment_id is None and physio_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="At least one filter parameter (appointment_id or physio_id) must be provided",
         )
 
-    # Build the query with filters
     statement = select(SessionNote)
 
     if appointment_id is not None:
-        # Validate appointment exists
         appointment = db.get(Appointment, appointment_id)
         if not appointment:
             raise HTTPException(
@@ -92,8 +84,6 @@ def list_session_notes(
         statement = statement.where(SessionNote.appointment_id == appointment_id)
 
     if physio_id is not None:
-        # Validate physio exists (optional - could be removed if validation not needed)
-        from app.models.user import User
         physio = db.get(User, physio_id)
         if not physio:
             raise HTTPException(
@@ -128,7 +118,6 @@ def create_session_note(
     db: Session = Depends(get_session),
 ):
     """Create a new session note for an appointment."""
-    # Validate appointment exists
     appointment = db.get(Appointment, payload.appointment_id)
     if not appointment:
         raise HTTPException(
@@ -140,7 +129,7 @@ def create_session_note(
         appointment_id=payload.appointment_id,
         physio_id=payload.physio_id,
         note_text=payload.note_text,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         created_by=payload.created_by,
     )
     db.add(note)
