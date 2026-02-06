@@ -1,0 +1,95 @@
+"""Shared test fixtures for pytest."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel.pool import StaticPool
+
+from app.models import (
+    Client,
+    Session as TherapySession,
+    Therapist,
+    TherapistSpecialty,
+    User,
+)
+
+
+@pytest.fixture(name="db_session")
+def db_session_fixture():
+    """Create in-memory SQLite database for testing."""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        yield session
+
+
+@pytest.fixture(name="mock_send_whatsapp")
+def mock_send_whatsapp_fixture():
+    """Mock send_whatsapp_message to prevent actual Twilio calls."""
+    # Patch where it's used (in helpers), not where it's defined
+    import uuid
+
+    with patch("app.services.bot.helpers.send_whatsapp_message") as mock:
+        # Return unique SID each time to avoid unique constraint violations
+        mock.side_effect = lambda *args, **kwargs: f"SM{uuid.uuid4().hex[:10]}"
+        yield mock
+
+
+@pytest.fixture(name="sample_client")
+def sample_client_fixture(db_session):
+    """Create a sample client for testing."""
+    client = Client(
+        phone_e164="+85212345678", name="Test User", conversation_state="IDLE"
+    )
+    db_session.add(client)
+    db_session.commit()
+    db_session.refresh(client)
+    return client
+
+
+@pytest.fixture(name="sample_specialties")
+def sample_specialties_fixture(db_session):
+    """Create sample specialties for testing."""
+    specialties = [
+        TherapistSpecialty(name="Sports Rehab", is_active=True),
+        TherapistSpecialty(name="Orthopedic", is_active=True),
+        TherapistSpecialty(name="Neurological", is_active=True),
+    ]
+    for spec in specialties:
+        db_session.add(spec)
+    db_session.commit()
+    for spec in specialties:
+        db_session.refresh(spec)
+    return specialties
+
+
+@pytest.fixture(name="sample_therapist")
+def sample_therapist_fixture(db_session):
+    """Create a sample therapist for testing."""
+    # First create user
+    user = User(
+        neon_auth_sub="test-auth-sub",
+        email="therapist@test.com",
+        display_name="Dr. Test",
+        role="therapist",
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    if user.id is not None:
+        # Then create therapist
+        therapist = Therapist(
+            user_id=user.id, display_name="Dr. Test Therapist", is_active=True
+        )
+        db_session.add(therapist)
+        db_session.commit()
+        db_session.refresh(therapist)
+        return therapist
