@@ -127,9 +127,12 @@ DEBUG_MODE=false
 *   `app/bot_logic.py`: Core logic for handling messages and routing based on user roles.
 *   `app/models/`: SQLModel database models (User, Appointment, Payment, SessionNote).
 *   `app/api/`: Route registry, versioned API modules (`/api/v1/*`).
+    *   `app/api/v1/routes/session_notes.py`: REST API for session notes (CRUD operations).
 *   `app/core/config.py`: Pydantic settings (loads from `.env`).
 *   `app/db/session.py`: DB engine/session helpers.
 *   `app/services/`: Integrations (Twilio + Calendly).
+*   `app/worker.py`: Celery app configuration.
+*   `app/tasks/`: Background tasks (WhatsApp message processing, etc.).
 *   `alembic/`: Database migrations.
 *   `docs/`: Project documentation.
 
@@ -149,6 +152,30 @@ Create a new migration after model changes:
 ```bash
 alembic revision --autogenerate -m "describe change"
 ```
+
+## API Endpoints
+
+### WhatsApp Webhook
+*   `POST /api/v1/whatsapp` - Twilio webhook for incoming WhatsApp messages (enqueues Celery task)
+*   `POST /api/v1/whatsapp/test` - Manual test endpoint for sending messages (JSON format)
+
+### Session Notes API
+*   `GET /api/v1/session-notes?appointment_id={id}` - List notes for an appointment
+*   `GET /api/v1/session-notes?physio_id={id}` - List notes by physio
+*   `GET /api/v1/session-notes?appointment_id={id}&physio_id={id}` - List notes (filtered)
+*   `GET /api/v1/session-notes/{note_id}` - Get a single note
+*   `POST /api/v1/session-notes` - Create a new note
+*   `PATCH /api/v1/session-notes/{note_id}` - Update a note
+*   `DELETE /api/v1/session-notes/{note_id}` - Delete a note
+
+Documentation: [SESSION_NOTES_API.md](SESSION_NOTES_API.md)
+
+### Web API (Protected)
+*   `GET /api/v1/me` - Get current authenticated user (Neon Auth JWT)
+
+### Interactive Documentation
+*   Swagger UI: `http://localhost:8000/docs`
+*   ReDoc: `http://localhost:8000/redoc`
 
 ## Git Workflow (Trunk-Based)
 *   `main`: production-ready
