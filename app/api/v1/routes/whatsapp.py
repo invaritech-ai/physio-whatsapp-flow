@@ -1,3 +1,6 @@
+from typing import cast
+
+from celery import Task
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -27,7 +30,7 @@ async def whatsapp_webhook(request: Request):
         payload = dict(form_data)
 
         # Enqueue message processing as background task
-        task = process_whatsapp_message.delay(payload)
+        task = cast(Task, process_whatsapp_message).delay(payload)
 
         return {"status": "queued", "task_id": task.id}
     except Exception as e:
@@ -57,7 +60,7 @@ async def whatsapp_test_endpoint(message: WhatsAppTestMessage):
             payload["MediaUrl0"] = message.MediaUrl0
 
         # Enqueue message processing as background task
-        task = process_whatsapp_message.delay(payload)
+        task = cast(Task, process_whatsapp_message).delay(payload)
 
         return {
             "status": "queued",
