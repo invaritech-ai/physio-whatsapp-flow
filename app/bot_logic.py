@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from sqlmodel import Session, select
 
@@ -121,12 +122,18 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
         )
         return
 
-    if "min" in body:
+    duration = None
+    duration_match = re.search(r"\b(30|45|60)\s*(?:min|mins|minutes)?\b", body)
+    if duration_match:
+        duration = int(duration_match.group(1))
+    elif re.search(r"\b1\b", body):
         duration = 30
-        if "45" in body:
-            duration = 45
-        elif "60" in body:
-            duration = 60
+    elif re.search(r"\b2\b", body):
+        duration = 45
+    elif re.search(r"\b3\b", body):
+        duration = 60
+
+    if duration:
 
         try:
             available_slots = check_availability(duration)
@@ -180,11 +187,12 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
     if any(keyword in body for keyword in ["hello", "hi", "hey", "start", "help"]):
         send_whatsapp_message(
             sender,
-            "👋 Hello! Welcome to Harry's Physiotherapy booking.\n\n"
-            "To book an appointment, please tell me how long you need:\n"
-            "• 30 min\n"
-            "• 45 min\n"
-            "• 60 min"
+            "Hello. Welcome to Harry Physiotherapy Booking.\n\n"
+            "To book an appointment, choose a session length:\n"
+            "1 - 30 minutes\n"
+            "2 - 45 minutes\n"
+            "3 - 60 minutes\n\n"
+            "You can reply with 1, 2, 3 or 30, 45, 60 (with or without 'min')."
         )
         return
 
