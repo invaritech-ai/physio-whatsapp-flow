@@ -14,4 +14,4 @@ celery_app.conf.update(
 )
 
 # Import tasks to register them
-from app.tasks import ping  # noqa: E402, F401
+from app.tasks import process_whatsapp  # noqa: E402, F401

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -21,7 +21,7 @@ scheduler = AsyncIOScheduler()
 
 def send_scheduled_reminders() -> None:
     with Session(engine) as session:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         thirty_mins_later = now + timedelta(minutes=30)
 
         statement = select(Appointment).where(
