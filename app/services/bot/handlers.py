@@ -204,11 +204,27 @@ def handle_awaiting_days(client, body: str, db: Session) -> tuple[str, str]:
     db.add(client)
     db.commit()
 
+    # Check if user is rebooking with their preferred therapist
+    is_rebooking = conv_data.get("rebooking", False)
+    if is_rebooking and client.preferred_therapist_id:
+        # Use the preferred therapist for rebook shortcut
+        matched_therapist = db.exec(
+            select(Therapist).where(
+                Therapist.id == client.preferred_therapist_id,
+                Therapist.is_active == True,  # noqa: E712
+            )
+        ).first()
+
+        # If preferred therapist is no longer active, fall back to matching
+        if not matched_therapist:
+            is_rebooking = False
+
     # STUB: Matching logic (Phase 3 will replace this)
-    # For now, just get the first active therapist
-    matched_therapist = db.exec(
-        select(Therapist).where(Therapist.is_active == True)  # noqa: E712
-    ).first()
+    if not is_rebooking or not matched_therapist:
+        # For now, just get the first active therapist
+        matched_therapist = db.exec(
+            select(Therapist).where(Therapist.is_active == True)  # noqa: E712
+        ).first()
 
     if not matched_therapist:
         reset_conversation(client, db)

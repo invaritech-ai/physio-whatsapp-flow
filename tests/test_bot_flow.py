@@ -1,9 +1,11 @@
 """Integration tests for complete bot conversation flows."""
 
+import json
+
 import pytest
 from sqlmodel import select
 
-from app.models import Client, MessageLog
+from app.models import Client, MessageLog, Therapist, User
 from app.services.bot import states
 from app.services.bot.router import process_message
 
@@ -452,3 +454,84 @@ class TestMediaAndEmptyMessages:
         # Verify no messages logged (can't create client without phone)
         message_logs = db_session.exec(select(MessageLog)).all()
         assert len(message_logs) == 0
+
+    def test_rebook_uses_preferred_therapist(
+        self, db_session, sample_specialties, mock_send_whatsapp
+    ):
+        """Rebooking with same therapist should actually use preferred therapist."""
+        # Create two therapists
+        user1 = User(
+            neon_auth_sub="auth-1",
+            email="therapist1@test.com",
+            display_name="Dr. One",
+            role="therapist",
+            is_active=True,
+        )
+        user2 = User(
+            neon_auth_sub="auth-2",
+            email="therapist2@test.com",
+            display_name="Dr. Two",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user1)
+        db_session.add(user2)
+        db_session.commit()
+
+        therapist1 = Therapist(user_id=user1.id, display_name="Dr. One", is_active=True)
+        therapist2 = Therapist(user_id=user2.id, display_name="Dr. Two", is_active=True)
+        db_session.add(therapist1)
+        db_session.add(therapist2)
+        db_session.commit()
+        db_session.refresh(therapist1)
+        db_session.refresh(therapist2)
+
+        # Create client with preferred therapist 2
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+            preferred_therapist_id=therapist2.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        # Start rebook flow
+        form_data = {
+            "From": "whatsapp:+85212345678",
+            "Body": "Hi",
+            "MessageSid": "SM001",
+            "NumMedia": "0",
+        }
+        result = process_message(form_data, db_session)
+        assert result["next_state"] == states.AWAITING_REBOOK_CHOICE
+
+        # Choose same therapist (option 1)
+        form_data["Body"] = "1"
+        form_data["MessageSid"] = "SM002"
+        result = process_message(form_data, db_session)
+        assert result["next_state"] == states.AWAITING_DURATION
+
+        # Complete booking flow
+        form_data["Body"] = "1"  # 30 min
+        form_data["MessageSid"] = "SM003"
+        process_message(form_data, db_session)
+
+        form_data["Body"] = "1"  # First specialty (alphabetically)
+        form_data["MessageSid"] = "SM004"
+        process_message(form_data, db_session)
+
+        form_data["Body"] = "1"  # Morning
+        form_data["MessageSid"] = "SM005"
+        process_message(form_data, db_session)
+
+        form_data["Body"] = "1,3,5"  # Mon, Wed, Fri
+        form_data["MessageSid"] = "SM006"
+        result = process_message(form_data, db_session)
+        assert result["next_state"] == states.AWAITING_MATCH_CONFIRM
+
+        # Verify matched therapist is therapist2 (preferred), not therapist1 (first active)
+        db_session.refresh(client)
+        conv_data = json.loads(client.conversation_data or "{}")
+        assert conv_data.get("matched_therapist_id") == therapist2.id
+        assert conv_data.get("matched_therapist_id") != therapist1.id
