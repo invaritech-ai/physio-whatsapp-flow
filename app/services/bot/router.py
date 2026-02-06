@@ -39,17 +39,17 @@ def process_message(form_data: dict, db: Session) -> dict:
         if num_media > 0:
             media_url = form_data.get("MediaUrl0")
 
-        # Validate required fields
-        if not sender or not body:
+        # Validate sender (required)
+        if not sender:
             return {
                 "status": "error",
-                "message": "Missing required fields (From, Body)",
+                "message": "Missing required field: From",
             }
 
-        # Get or create client
+        # Get or create client (before validation so we can log)
         client = get_or_create_client(db, sender)
 
-        # Log inbound message
+        # Log inbound message (ALWAYS log, even if body is empty)
         log_inbound(
             db=db,
             phone_e164=client.phone_e164,
@@ -58,6 +58,26 @@ def process_message(form_data: dict, db: Session) -> dict:
             client_id=client.id,
             media_url=media_url,
         )
+
+        # Handle empty body (media-only or blank message)
+        if not body:
+            # Media-only messages or blank messages get a helpful response
+            response_text = (
+                "I received your message! However, I can only respond to text messages. "
+                "Please send me a text message to continue our conversation."
+            )
+            send_and_log(
+                db=db,
+                phone_e164=client.phone_e164,
+                body=response_text,
+                client_id=client.id,
+            )
+            return {
+                "status": "success",
+                "next_state": client.conversation_state,
+                "client_id": client.id,
+                "note": "Empty body or media-only message",
+            }
 
         # Get handler for current state
         current_state = client.conversation_state

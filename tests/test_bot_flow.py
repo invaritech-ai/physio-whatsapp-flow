@@ -376,3 +376,79 @@ class TestMessageLoggingInFlow:
         # Verify all messages have same client_id
         client_ids = set(m.client_id for m in message_logs)
         assert len(client_ids) == 1
+
+class TestMediaAndEmptyMessages:
+    """Test handling of media-only and empty messages."""
+
+    def test_media_only_message_is_logged(
+        self, db_session, mock_send_whatsapp
+    ):
+        """Media-only messages (empty body) should be logged and get a response."""
+        form_data = {
+            "From": "whatsapp:+85212345678",
+            "Body": "",  # Empty body
+            "MessageSid": "SM001",
+            "NumMedia": "1",
+            "MediaUrl0": "https://api.twilio.com/media/ME123456",
+        }
+        result = process_message(form_data, db_session)
+
+        # Should succeed with helpful message
+        assert result["status"] == "success"
+        assert "note" in result
+        assert result["note"] == "Empty body or media-only message"
+
+        # Verify inbound message was logged with media_url
+        inbound_logs = db_session.exec(
+            select(MessageLog).where(MessageLog.direction == "inbound")
+        ).all()
+        assert len(inbound_logs) == 1
+        assert inbound_logs[0].body == ""
+        assert inbound_logs[0].media_url == "https://api.twilio.com/media/ME123456"
+
+        # Verify outbound response was sent and logged
+        outbound_logs = db_session.exec(
+            select(MessageLog).where(MessageLog.direction == "outbound")
+        ).all()
+        assert len(outbound_logs) == 1
+        assert "text message" in outbound_logs[0].body.lower()
+
+    def test_blank_message_is_logged(
+        self, db_session, mock_send_whatsapp
+    ):
+        """Blank messages (whitespace only) should be logged and get a response."""
+        form_data = {
+            "From": "whatsapp:+85212345678",
+            "Body": "   ",  # Whitespace only
+            "MessageSid": "SM002",
+            "NumMedia": "0",
+        }
+        result = process_message(form_data, db_session)
+
+        # Should succeed with helpful message
+        assert result["status"] == "success"
+        assert "note" in result
+
+        # Verify message was logged
+        message_logs = db_session.exec(select(MessageLog)).all()
+        assert len(message_logs) == 2  # 1 inbound + 1 outbound
+
+    def test_missing_sender_returns_error(
+        self, db_session, mock_send_whatsapp
+    ):
+        """Missing sender should return error (no logging possible)."""
+        form_data = {
+            "From": "",  # Empty sender
+            "Body": "Hello",
+            "MessageSid": "SM003",
+            "NumMedia": "0",
+        }
+        result = process_message(form_data, db_session)
+
+        # Should fail
+        assert result["status"] == "error"
+        assert "From" in result["message"]
+
+        # Verify no messages logged (can't create client without phone)
+        message_logs = db_session.exec(select(MessageLog)).all()
+        assert len(message_logs) == 0
