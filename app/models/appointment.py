@@ -6,7 +6,7 @@ from sqlmodel import Field, SQLModel
 
 
 class Appointment(SQLModel, table=True):
-    id: int = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     customer_id: int = Field(foreign_key="user.id")
     start_time: datetime
     end_time: datetime

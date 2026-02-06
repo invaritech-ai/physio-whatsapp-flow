@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import os
 
-from sqlmodel import Session, select
+from datetime import datetime, timezone
+from typing import Any, cast
+
+from sqlalchemy import desc
+from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.models import Appointment, Payment, SessionNote, User
@@ -20,7 +24,7 @@ def debug_log(message: str) -> None:
         print(message)
 
 
-def get_or_create_user(session: Session, phone: str, name: str | None = None):
+def get_or_create_user(session: Session, phone: str, name: str | None = None) -> User:
     statement = select(User).where(User.phone_number == phone)
     user = session.exec(statement).first()
 
@@ -38,7 +42,10 @@ def get_or_create_user(session: Session, phone: str, name: str | None = None):
         session.refresh(user)
     else:
         if not DEBUG_MODE and user.role != expected_role:
-            print(f"DEBUG: Correcting role for {phone} from {user.role} to {expected_role}")
+            print(
+                "DEBUG: Correcting role for "
+                f"{phone} from {user.role} to {expected_role}"
+            )
             user.role = expected_role
             session.add(user)
             session.commit()
@@ -47,44 +54,81 @@ def get_or_create_user(session: Session, phone: str, name: str | None = None):
     return user
 
 
-async def process_message(form_data: dict, db: Session):
+async def process_message(form_data: dict[str, Any], db: Session):
     sender = form_data.get("From")
-    body_normalized = form_data.get("Body", "").strip().lower()
-    num_media = int(form_data.get("NumMedia", 0))
+    if not sender:
+        debug_log("Missing sender in inbound payload.")
+        return
+
+    sender_str = cast(str, sender)
+    body_normalized = str(form_data.get("Body", "")).strip().lower()
+    num_media = int(form_data.get("NumMedia", 0) or 0)
     media_url = form_data.get("MediaUrl0")
 
-    user = get_or_create_user(db, sender)
-    debug_log(f"📱 [{user.role.upper()}] {sender}: {body_normalized}")
+    user = get_or_create_user(db, sender_str)
+    debug_log(f"📱 [{user.role.upper()}] {sender_str}: {body_normalized}")
 
     if DEBUG_MODE and ("switch to" in body_normalized or "be " in body_normalized):
         if "customer" in body_normalized:
             user.role = "customer"
             db.add(user)
             db.commit()
-            send_whatsapp_message(sender, "✅ Switched to CUSTOMER role.\n\nYou can now book appointments. Say 'Hi' to start!")
+            send_whatsapp_message(
+                sender_str,
+                "✅ Switched to CUSTOMER role.\n\n"
+                "You can now book appointments. Say 'Hi' to start!",
+            )
             return
         if "admin" in body_normalized:
             user.role = "admin"
             db.add(user)
             db.commit()
-            send_whatsapp_message(sender, "✅ Switched to ADMIN role.\n\nYou can now approve payments with 'approve <payment_id>'")
+            send_whatsapp_message(
+                sender_str,
+                "✅ Switched to ADMIN role.\n\n"
+                "You can now approve payments with 'approve <payment_id>'",
+            )
             return
         if "physio" in body_normalized:
             user.role = "physio"
             db.add(user)
             db.commit()
-            send_whatsapp_message(sender, "✅ Switched to PHYSIO role.\n\nYou can start sessions with 'start <appointment_id>'")
+            send_whatsapp_message(
+                sender_str,
+                "✅ Switched to PHYSIO role.\n\n"
+                "You can start sessions with 'start <appointment_id>'",
+            )
             return
 
     if user.role == "customer":
-        await handle_customer_message(user, body_normalized, num_media, media_url, sender, db)
+        await handle_customer_message(
+            user,
+            body_normalized,
+            num_media,
+            media_url,
+            sender_str,
+            db,
+        )
     elif user.role == "physio":
-        await handle_physio_message(user, body_normalized, form_data.get("Body", ""), sender, db)
+        await handle_physio_message(
+            user,
+            body_normalized,
+            str(form_data.get("Body", "")),
+            sender_str,
+            db,
+        )
     elif user.role == "admin":
-        await handle_admin_message(user, body_normalized, sender, db)
+        await handle_admin_message(user, body_normalized, sender_str, db)
 
 
-async def handle_customer_message(user, body, num_media, media_url, sender, db: Session):
+async def handle_customer_message(
+    user: User,
+    body: str,
+    num_media: int,
+    media_url: str | None,
+    sender: str,
+    db: Session,
+) -> None:
     is_payment = False
     if num_media > 0:
         is_payment = True
@@ -94,30 +138,48 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
     if is_payment:
         statement = (
             select(Appointment)
-            .where(Appointment.customer_id == user.id, Appointment.status == "scheduled")
-            .order_by(Appointment.start_time.desc())
+            .where(
+                Appointment.customer_id == user.id,
+                Appointment.status == "scheduled",
+            )
+            .order_by(desc(col(Appointment.start_time)))
         )
         appt = db.exec(statement).first()
 
         if appt:
-            payment = Payment(
-                appointment_id=appt.id,
-                amount=500.0,
-                payment_method="fps",
-                status="pending",
-                proof_url=media_url if media_url else "text-confirmation",
-            )
-            db.add(payment)
-            db.commit()
+            try:
+                payment = Payment(
+                    appointment_id=appt.id,
+                    amount=500.0,
+                    payment_method="fps",
+                    status="pending",
+                    proof_url=media_url if media_url else "text-confirmation",
+                )
+                db.add(payment)
+                db.commit()
+                db.refresh(payment)
 
-            send_whatsapp_message(sender, "Thank you! We have received your payment proof. We will confirm shortly.")
-            notify_admin_of_payment(user, payment, appt)
+                send_whatsapp_message(
+                    sender,
+                    "Thank you! We have received your payment proof. "
+                    "We will confirm shortly.",
+                )
+                notify_admin_of_payment(user, payment, appt)
+            except Exception as e:
+                db.rollback()
+                debug_log(f"Error creating payment: {e}")
+                send_whatsapp_message(
+                    sender,
+                    "Error processing payment. Please try again later."
+                )
             return
 
         send_whatsapp_message(
             sender,
-            "Thank you. However, I couldn't find a pending appointment to link this payment to.\n\n"
-            "To book, please tell me the duration (30, 45, 60 min) you are interested in.",
+            "Thank you. However, I couldn't find a pending appointment to link "
+            "this payment to.\n\n"
+            "To book, please tell me the duration (30, 45, 60 min) you are "
+            "interested in.",
         )
         return
 
@@ -143,25 +205,38 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
 
             send_whatsapp_message(
                 sender,
-                f"Found a slot on {slot.strftime('%Y-%m-%d at %H:%M')}. Reply 'book' if you would like the link to secure this time.",
+                (
+                    f"Found a slot on {slot.strftime('%Y-%m-%d at %H:%M')}. "
+                    "Reply 'book' if you would like the link to secure this time."
+                ),
             )
             return
 
-        send_whatsapp_message(sender, "Sorry, no slots found for the next 3 days. Please try again later.")
+        send_whatsapp_message(
+            sender,
+            "Sorry, no slots found for the next 3 days. Please try again later.",
+        )
         return
 
     if "book" in body and "booked" not in body:
         from app.services.calendly import get_event_link
 
         if not user.last_proposed_start:
-            send_whatsapp_message(sender, "Please check availability first by mentioning '30 min', '45 min', etc.")
+            send_whatsapp_message(
+                sender,
+                "Please check availability first by mentioning '30 min', '45 min', "
+                "etc.",
+            )
             return
 
         link = get_event_link(user.last_proposed_duration or 30)
         send_whatsapp_message(
             sender,
-            "Please book your slot using this link: "
-            f"{link}\n\nIMPORTANT: Once you have completed the booking on the website, reply 'booked' here to proceed with payment.",
+            (
+                "Please book your slot using this link: "
+                f"{link}\n\nIMPORTANT: Once you have completed the booking on the "
+                "website, reply 'booked' here to proceed with payment."
+            ),
         )
         return
 
@@ -169,7 +244,10 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
         if not user.last_proposed_start:
             send_whatsapp_message(
                 sender,
-                "I can't find a pending booking context. Rather than 'booked', please start by saying 'Hi' to find a slot.",
+                (
+                    "I can't find a pending booking context. Rather than 'booked', "
+                    "please start by saying 'Hi' to find a slot."
+                ),
             )
             return
 
@@ -178,40 +256,68 @@ async def handle_customer_message(user, body, num_media, media_url, sender, db: 
 
     send_whatsapp_message(
         sender,
-        "I didn't quite catch that. You can say 'Hello' to start, mention a duration like '30 min', or reply 'booked' if you just finished scheduling.",
+        (
+            "I didn't quite catch that. You can say 'Hello' to start, "
+            "mention a duration like '30 min', or reply 'booked' if you just "
+            "finished scheduling."
+        ),
     )
 
 
-async def confirm_internal_booking(user, sender, db: Session):
+async def confirm_internal_booking(user: User, sender: str, db: Session) -> None:
     from datetime import timedelta
+
+    if not user.last_proposed_start:
+        send_whatsapp_message(
+            sender,
+            "Error: No booking context found. Please check availability first."
+        )
+        return
+
+    if not user.id:
+        debug_log("Error: User ID is None in confirm_internal_booking")
+        send_whatsapp_message(sender, "Error: Unable to create booking. Please try again.")
+        return
 
     start_time = user.last_proposed_start
     duration = user.last_proposed_duration or 30
     end_time = start_time + timedelta(minutes=duration)
 
-    appt = Appointment(
-        customer_id=user.id,
-        start_time=start_time,
-        end_time=end_time,
-        duration_minutes=duration,
-        status="scheduled",
-        calendly_uuid=f"link-booking-{start_time.strftime('%Y%m%d%H%M')}",
-        reminder_sent=False,
-    )
-    db.add(appt)
-    db.commit()
+    try:
+        appt = Appointment(
+            customer_id=user.id,
+            start_time=start_time,
+            end_time=end_time,
+            duration_minutes=duration,
+            status="scheduled",
+            calendly_uuid=f"link-booking-{start_time.strftime('%Y%m%d%H%M')}",
+            reminder_sent=False,
+        )
+        db.add(appt)
+        db.commit()
+        db.refresh(appt)
 
-    user.last_proposed_start = None
-    db.add(user)
-    db.commit()
+        user.last_proposed_start = None
+        db.add(user)
+        db.commit()
 
-    send_whatsapp_message(
-        sender,
-        f"Thank you! we have noted Appointment ID {appt.id} for {start_time}.\nPlease make payment via FPS to ID: 123456 to finalize.",
-    )
+        send_whatsapp_message(
+            sender,
+            (
+                f"Thank you! we have noted Appointment ID {appt.id} for {start_time}.\n"
+                "Please make payment via FPS to ID: 123456 to finalize."
+            ),
+        )
+    except Exception as e:
+        db.rollback()
+        debug_log(f"Error creating appointment: {e}")
+        send_whatsapp_message(
+            sender,
+            "Error creating appointment. Please try again later."
+        )
 
 
-def notify_admin_of_payment(user, payment, appt) -> None:
+def notify_admin_of_payment(user: User, payment: Payment, appt: Appointment) -> None:
     if not ADMIN_PHONE:
         print("ERROR: No ADMIN_PHONE configured")
         return
@@ -233,9 +339,7 @@ def notify_admin_of_payment(user, payment, appt) -> None:
     send_whatsapp_message(ADMIN_PHONE, msg, media_url=media_urls)
 
 
-async def handle_note_input(user, body, sender, db: Session):
-    from datetime import datetime
-
+async def handle_note_input(user: User, body: str, sender: str, db: Session) -> None:
     if body.strip().lower() == "done":
         user.conversation_state = "idle"
         db.add(user)
@@ -250,7 +354,11 @@ async def handle_note_input(user, body, sender, db: Session):
 
         send_whatsapp_message(
             sender,
-            f"✅ Note-taking completed!\n\nTotal notes saved: {len(notes)}\n\nYou can continue with the session or type 'add notes' again to add more notes.",
+            (
+                f"✅ Note-taking completed!\n\nTotal notes saved: {len(notes)}\n\n"
+                "You can continue with the session or type 'add notes' again to "
+                "add more notes."
+            ),
         )
         return
 
@@ -258,23 +366,38 @@ async def handle_note_input(user, body, sender, db: Session):
         note = SessionNote(
             appointment_id=user.active_appointment_id,
             note_text=body,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             created_by="physio",
         )
         db.add(note)
         db.commit()
 
         timestamp_str = note.created_at.strftime("%H:%M:%S")
-        send_whatsapp_message(sender, f"📝 Note saved at {timestamp_str}\n\nContinue adding notes or type 'done' to finish.")
+        send_whatsapp_message(
+            sender,
+            (
+                f"📝 Note saved at {timestamp_str}\n\n"
+                "Continue adding notes or type 'done' to finish."
+            ),
+        )
         return
 
     user.conversation_state = "idle"
     db.add(user)
     db.commit()
-    send_whatsapp_message(sender, "Error: No active session found. Exiting note-taking mode.")
+    send_whatsapp_message(
+        sender,
+        "Error: No active session found. Exiting note-taking mode.",
+    )
 
 
-async def handle_physio_message(user, body, original_body, sender, db: Session):
+async def handle_physio_message(
+    user: User,
+    body: str,
+    original_body: str,
+    sender: str,
+    db: Session,
+) -> None:
     if user.conversation_state == "awaiting_payment_status":
         await handle_payment_status_response(user, body, sender, db)
         return
@@ -294,11 +417,19 @@ async def handle_physio_message(user, body, original_body, sender, db: Session):
                 db.commit()
                 send_whatsapp_message(
                     sender,
-                    f"📝 Note-taking mode activated for Session {appt.id}.\n\nType your notes (one message per note). Each note will be timestamped.\n\nType 'done' when finished adding notes.",
+                    (
+                        f"📝 Note-taking mode activated for Session {appt.id}.\n\n"
+                        "Type your notes (one message per note). Each note will be "
+                        "timestamped.\n\n"
+                        "Type 'done' when finished adding notes."
+                    ),
                 )
                 return
 
-        send_whatsapp_message(sender, "No active session found. Please start a session first with 'start <id>'")
+        send_whatsapp_message(
+            sender,
+            "No active session found. Please start a session first with 'start <id>'",
+        )
         return
 
     if "view notes" in body:
@@ -307,7 +438,11 @@ async def handle_physio_message(user, body, original_body, sender, db: Session):
             appt = db.get(Appointment, appt_id)
 
             if appt:
-                statement = select(SessionNote).where(SessionNote.appointment_id == appt_id).order_by(SessionNote.created_at)
+                statement = (
+                    select(SessionNote)
+                    .where(SessionNote.appointment_id == appt_id)
+                    .order_by(SessionNote.created_at)
+                )
                 notes = db.exec(statement).all()
 
                 if notes:
@@ -327,15 +462,17 @@ async def handle_physio_message(user, body, original_body, sender, db: Session):
         return
 
     if "start" in body:
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
         try:
             appt_id = int(body.split()[1])
             appt = db.get(Appointment, appt_id)
             if appt:
                 appt.status = "started"
-                appt.start_time = datetime.utcnow()
-                appt.end_time = datetime.utcnow() + timedelta(minutes=appt.duration_minutes)
+                appt.start_time = datetime.now(timezone.utc)
+                appt.end_time = datetime.now(timezone.utc) + timedelta(
+                    minutes=appt.duration_minutes
+                )
                 db.add(appt)
 
                 user.active_appointment_id = appt.id
@@ -351,18 +488,25 @@ async def handle_physio_message(user, body, original_body, sender, db: Session):
                     pay_status = payment.status.capitalize()
                     pay_mode = payment.payment_method.capitalize()
 
+                end_time_str = appt.end_time.strftime("%H:%M:%S")
                 msg = (
-                    f"Session {appt_id} started.\nPayment Status: {pay_status}\nMode: {pay_mode}\n\n"
-                    f"Session will auto-complete at {appt.end_time.strftime('%H:%M:%S')} UTC ({appt.duration_minutes} min).\n\n"
-                    "💡 You can type 'add notes' during the session to record notes about the client."
+                    f"Session {appt_id} started.\nPayment Status: {pay_status}\n"
+                    f"Mode: {pay_mode}\n\n"
+                    f"Session will auto-complete at {end_time_str} "
+                    f"UTC ({appt.duration_minutes} min).\n\n"
+                    "💡 You can type 'add notes' during the session to record notes "
+                    "about the client."
                 )
             else:
                 msg = "Appointment not found."
-        except Exception:
+        except (IndexError, ValueError) as e:
+            debug_log(f"Error parsing appointment ID: {e}")
             msg = (
                 "Please specify appointment ID, e.g., 'start 1'\n\nPhysio Interface:\n"
-                "• 'start <id>' - Begin a session\n• 'add notes' - Add notes during session\n"
-                "• 'view notes <id>' - View notes for a session\n• 'cancel' - Cancel session"
+                "• 'start <id>' - Begin a session\n"
+                "• 'add notes' - Add notes during session\n"
+                "• 'view notes <id>' - View notes for a session\n"
+                "• 'cancel' - Cancel session"
             )
 
         send_whatsapp_message(sender, msg)
@@ -377,11 +521,16 @@ async def handle_physio_message(user, body, original_body, sender, db: Session):
 
     send_whatsapp_message(
         sender,
-        "Physio Interface:\n• 'start <id>' - Begin a session\n• 'add notes' - Add notes during session\n• 'view notes <id>' - View notes for a session\n• 'cancel' - Cancel session",
+        (
+            "Physio Interface:\n• 'start <id>' - Begin a session\n"
+            "• 'add notes' - Add notes during session\n"
+            "• 'view notes <id>' - View notes for a session\n"
+            "• 'cancel' - Cancel session"
+        ),
     )
 
 
-async def handle_payment_status_response(user, body, sender, db: Session):
+async def handle_payment_status_response(user: User, body: str, sender: str, db: Session) -> None:
     appt_id = user.active_appointment_id
     appt = db.get(Appointment, appt_id)
 
@@ -390,14 +539,20 @@ async def handle_payment_status_response(user, body, sender, db: Session):
         user.active_appointment_id = None
         db.add(user)
         db.commit()
-        send_whatsapp_message(sender, "Error: Could not find the appointment. Please try again.")
+        send_whatsapp_message(
+            sender,
+            "Error: Could not find the appointment. Please try again.",
+        )
         return
 
     if "payment received" in body or body == "1" or ("1" in body and "payment" in body):
         user.conversation_state = "awaiting_payment_method"
         db.add(user)
         db.commit()
-        send_whatsapp_message(sender, "Great! What payment method was used?\nReply with 'cash' or 'card'")
+        send_whatsapp_message(
+            sender,
+            "Great! What payment method was used?\nReply with 'cash' or 'card'",
+        )
         return
 
     if "fps" in body or body == "2":
@@ -421,13 +576,24 @@ async def handle_payment_status_response(user, body, sender, db: Session):
         user.active_appointment_id = None
         db.add(user)
         db.commit()
-        send_whatsapp_message(sender, "Recorded: Consolidating with other session. Session completed!")
+        send_whatsapp_message(
+            sender,
+            "Recorded: Consolidating with other session. Session completed!",
+        )
         return
 
-    send_whatsapp_message(sender, "Please reply with one of the options:\n1️⃣ Payment received\n2️⃣ FPS\n3️⃣ Consolidating with other session")
+    send_whatsapp_message(
+        sender,
+        (
+            "Please reply with one of the options:\n"
+            "1️⃣ Payment received\n"
+            "2️⃣ FPS\n"
+            "3️⃣ Consolidating with other session"
+        ),
+    )
 
 
-async def handle_payment_method_response(user, body, sender, db: Session):
+async def handle_payment_method_response(user: User, body: str, sender: str, db: Session) -> None:
     appt_id = user.active_appointment_id
     appt = db.get(Appointment, appt_id)
 
@@ -436,7 +602,10 @@ async def handle_payment_method_response(user, body, sender, db: Session):
         user.active_appointment_id = None
         db.add(user)
         db.commit()
-        send_whatsapp_message(sender, "Error: Could not find the appointment. Please try again.")
+        send_whatsapp_message(
+            sender,
+            "Error: Could not find the appointment. Please try again.",
+        )
         return
 
     if "cash" in body:
@@ -465,10 +634,13 @@ async def handle_payment_method_response(user, body, sender, db: Session):
         send_whatsapp_message(sender, "Card payment received. Session completed!")
         return
 
-    send_whatsapp_message(sender, "Please reply with one of the options: 'cash' or 'card'")
+    send_whatsapp_message(
+        sender,
+        "Please reply with one of the options: 'cash' or 'card'",
+    )
 
 
-async def handle_admin_message(user, body, sender, db: Session):
+async def handle_admin_message(user: User, body: str, sender: str, db: Session) -> None:
     if "approve" in body:
         try:
             parts = body.split()
@@ -476,7 +648,11 @@ async def handle_admin_message(user, body, sender, db: Session):
                 payment_id = int(parts[1])
                 payment = db.get(Payment, payment_id)
             else:
-                statement = select(Payment).where(Payment.status == "pending").order_by(Payment.created_at.desc())
+                statement = (
+                    select(Payment)
+                    .where(Payment.status == "pending")
+                    .order_by(desc(col(Payment.created_at)))
+                )
                 payment = db.exec(statement).first()
 
             if payment:
@@ -488,12 +664,25 @@ async def handle_admin_message(user, body, sender, db: Session):
 
                 appt = db.get(Appointment, payment.appointment_id)
                 customer = db.get(User, appt.customer_id)
-                send_whatsapp_message(customer.phone_number, f"✅ Payment Confirmed!\nYour appointment for {appt.start_time} is fully secured.")
+                send_whatsapp_message(
+                    customer.phone_number,
+                    (
+                        "✅ Payment Confirmed!\n"
+                        f"Your appointment for {appt.start_time} is fully secured."
+                    ),
+                )
                 return
 
             send_whatsapp_message(sender, "No pending payment found to approve.")
+        except (IndexError, ValueError) as e:
+            debug_log(f"Error parsing payment ID: {e}")
+            send_whatsapp_message(sender, "Error approving payment. Please provide a valid payment ID.")
         except Exception as e:
-            send_whatsapp_message(sender, f"Error approving payment: {e}")
+            debug_log(f"Unexpected error approving payment: {e}")
+            send_whatsapp_message(sender, "An unexpected error occurred. Please try again.")
         return
 
-    send_whatsapp_message(sender, "Admin Interface: Reply 'approve <payment_id>' to confirm payments.")
+    send_whatsapp_message(
+        sender,
+        "Admin Interface: Reply 'approve <payment_id>' to confirm payments.",
+    )
