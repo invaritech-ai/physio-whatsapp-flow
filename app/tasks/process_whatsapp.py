@@ -6,28 +6,13 @@ def process_whatsapp_message(self, form_data: dict) -> dict:
     """
     Process an inbound WhatsApp message.
 
+    STUB: This will be implemented in Phase 2 (WhatsApp Bot Rewrite).
+
     Args:
         form_data: Dictionary containing Twilio form data (From, Body, NumMedia, etc.)
 
     Returns:
         Dictionary with processing status
     """
-    try:
-        # Deferred imports to avoid circular dependencies
-        from app.bot_logic import process_message
-        from app.db.session import Session, engine
-
-        with Session(engine) as session:
-            process_message(form_data, session)
-
-        return {"status": "success"}
-    except Exception as exc:
-        import traceback
-        error_msg = f"Error processing WhatsApp message: {str(exc)}\n{traceback.format_exc()}"
-        print(error_msg)
-
-        # Retry on transient failures
-        try:
-            self.retry(countdown=5, exc=exc)
-        except self.MaxRetriesExceededError:
-            return {"status": "failed", "error": str(exc)}
+    # Phase 1: Return stub to avoid crashes
+    return {"status": "stub", "message": "Bot logic not implemented yet (Phase 2)"}

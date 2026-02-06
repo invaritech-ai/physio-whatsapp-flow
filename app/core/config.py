@@ -14,8 +14,12 @@ class Settings(BaseSettings):
 
     calendly_api_token: str | None = None
 
-    admin_phone_number: str | None = None
-    physio_phone_number: str | None = None
+    # Webhook security
+    twilio_webhook_secret: str | None = None
+    calendly_webhook_secret: str | None = None
+
+    # Currency
+    default_currency: str = "HKD"
 
     neon_auth_url: str | None = None
     neon_jwks_url: str | None = None
