@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -183,12 +184,18 @@ def handle_customer_message(
         )
         return
 
-    if "min" in body:
+    duration = None
+    duration_match = re.search(r"\b(30|45|60)\s*(?:min|mins|minutes)?\b", body)
+    if duration_match:
+        duration = int(duration_match.group(1))
+    elif re.search(r"\b1\b", body):
         duration = 30
-        if "45" in body:
-            duration = 45
-        elif "60" in body:
-            duration = 60
+    elif re.search(r"\b2\b", body):
+        duration = 45
+    elif re.search(r"\b3\b", body):
+        duration = 60
+
+    if duration:
 
         try:
             available_slots = check_availability(duration)
@@ -252,6 +259,19 @@ def handle_customer_message(
             return
 
         confirm_internal_booking(user, sender, db)
+        return
+
+    # Check for greetings
+    if any(keyword in body for keyword in ["hello", "hi", "hey", "start", "help"]):
+        send_whatsapp_message(
+            sender,
+            "Hello. Welcome to Harry Physiotherapy Booking.\n\n"
+            "To book an appointment, choose a session length:\n"
+            "1 - 30 minutes\n"
+            "2 - 45 minutes\n"
+            "3 - 60 minutes\n\n"
+            "You can reply with 1, 2, 3 or 30, 45, 60 (with or without 'min')."
+        )
         return
 
     send_whatsapp_message(
@@ -365,6 +385,7 @@ def handle_note_input(user: User, body: str, sender: str, db: Session) -> None:
     if active_appt_id:
         note = SessionNote(
             appointment_id=active_appt_id,
+            physio_id=user.id,
             note_text=body,
             created_at=datetime.now(timezone.utc),
             created_by="physio",
