@@ -37,7 +37,7 @@ async def whatsapp_webhook(request: Request):
         import traceback
 
         print(f"Error enqueueing WhatsApp message: {str(e)}\n{traceback.format_exc()}")
-        return JSONResponse(status_code=500, content={"message": str(e), "traceback": traceback.format_exc()})
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 
 @router.post("/whatsapp/test")
@@ -72,4 +72,4 @@ async def whatsapp_test_endpoint(message: WhatsAppTestMessage):
         import traceback
 
         print(f"Error enqueueing test message: {str(e)}\n{traceback.format_exc()}")
-        return JSONResponse(status_code=500, content={"message": str(e), "traceback": traceback.format_exc()})
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
