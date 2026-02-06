@@ -5,11 +5,11 @@ from datetime import datetime, timedelta
 import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
-from app.bot_logic import process_message
+from app.api.router import api_router
 from app.core.config import settings
 from app.db.session import create_db_and_tables, engine
 from app.models import Appointment, User
@@ -110,7 +110,7 @@ def send_scheduled_reminders() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
+    # create_db_and_tables()
     scheduler.add_job(send_scheduled_reminders, "interval", minutes=5)
     scheduler.start()
     yield
@@ -119,21 +119,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Allow browser clients to call the API during dev.
+# TODO: tighten origins for production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.post("/whatsapp")
-async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
-    try:
-        form_data = await request.form()
-        with Session(engine) as session:
-            await process_message(dict(form_data), session)
-        return {"status": "success"}
-    except Exception as e:
-        import traceback
-
-        print(f"Error: {str(e)}\n{traceback.format_exc()}")
-        return JSONResponse(status_code=500, content={"message": str(e), "traceback": traceback.format_exc()})
-
-
-@app.get("/")
-def read_root():
-    return {"message": "Physio Bot API is running"}
+app.include_router(api_router)

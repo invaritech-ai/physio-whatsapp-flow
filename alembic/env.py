@@ -8,6 +8,8 @@ from sqlalchemy import engine_from_config, pool
 from app.core.config import settings
 from sqlmodel import SQLModel
 
+import app.models  # noqa: F401
+
 
 config = context.config
 
