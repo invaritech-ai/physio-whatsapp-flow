@@ -222,7 +222,9 @@ class TestHandleAwaitingSpecialty:
 
         assert next_state == states.AWAITING_TIME_BAND
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("specialty_id") == sample_specialties[0].id
+        # Choice 1 should be the first specialty alphabetically
+        sorted_specialties = sorted(sample_specialties, key=lambda s: s.name)
+        assert conv_data.get("specialty_id") == sorted_specialties[0].id
 
     def test_invalid_specialty_choice_rejects(self, db_session, sample_specialties):
         """Invalid choice should be rejected."""
@@ -456,3 +458,49 @@ class TestHandleRescheduleRequest:
 
         assert next_state == states.IDLE
         assert "appointment" in response.lower()
+
+
+class TestSpecialtyOrderingConsistency:
+    """Test that specialty ordering is consistent between menu and validation."""
+
+    def test_specialties_ordered_alphabetically(self, db_session):
+        """Specialties should be ordered by name consistently."""
+        # Create specialties in non-alphabetical order
+        specialties = [
+            TherapistSpecialty(name="Orthopedic", is_active=True),
+            TherapistSpecialty(name="Sports Rehab", is_active=True),
+            TherapistSpecialty(name="Neurological", is_active=True),
+        ]
+        for spec in specialties:
+            db_session.add(spec)
+        db_session.commit()
+
+        # Start flow
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_DURATION,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        # Get menu
+        next_state, menu_text = handle_awaiting_duration(client, "1", db_session)
+        assert next_state == states.AWAITING_SPECIALTY
+
+        # Menu should show alphabetically: 1=Neurological, 2=Orthopedic, 3=Sports Rehab
+        assert "Neurological" in menu_text
+        assert "Orthopedic" in menu_text
+        assert "Sports Rehab" in menu_text
+
+        # Choose option 1 (should be Neurological, first alphabetically)
+        next_state, response = handle_awaiting_specialty(client, "1", db_session)
+        assert next_state == states.AWAITING_TIME_BAND
+
+        # Verify correct specialty was saved
+        conv_data = json.loads(client.conversation_data or "{}")
+        saved_specialty_id = conv_data.get("specialty_id")
+
+        # Should be Neurological (first alphabetically)
+        saved_specialty = db_session.get(TherapistSpecialty, saved_specialty_id)
+        assert saved_specialty.name == "Neurological"

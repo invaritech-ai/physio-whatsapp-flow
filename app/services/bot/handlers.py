@@ -98,9 +98,11 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
     db.add(client)
     db.commit()
 
-    # Get active specialties
+    # Get active specialties (ordered consistently by name)
     specialties = db.exec(
-        select(TherapistSpecialty).where(TherapistSpecialty.is_active == True)  # noqa: E712
+        select(TherapistSpecialty)
+        .where(TherapistSpecialty.is_active == True)  # noqa: E712
+        .order_by(TherapistSpecialty.name)
     ).all()
 
     if not specialties:
@@ -116,9 +118,11 @@ def handle_awaiting_specialty(client, body: str, db: Session) -> tuple[str, str]
 
     Validates choice against active specialties in database.
     """
-    # Get active specialties
+    # Get active specialties (ordered consistently by name)
     specialties = db.exec(
-        select(TherapistSpecialty).where(TherapistSpecialty.is_active == True)  # noqa: E712
+        select(TherapistSpecialty)
+        .where(TherapistSpecialty.is_active == True)  # noqa: E712
+        .order_by(TherapistSpecialty.name)
     ).all()
     specialty_list = list(specialties)
 
