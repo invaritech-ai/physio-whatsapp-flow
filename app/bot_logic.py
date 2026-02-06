@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import desc
@@ -54,7 +54,7 @@ def get_or_create_user(session: Session, phone: str, name: str | None = None) ->
     return user
 
 
-async def process_message(form_data: dict[str, Any], db: Session):
+def process_message(form_data: dict[str, Any], db: Session) -> None:
     sender = form_data.get("From")
     if not sender:
         debug_log("Missing sender in inbound payload.")
@@ -101,7 +101,7 @@ async def process_message(form_data: dict[str, Any], db: Session):
             return
 
     if user.role == "customer":
-        await handle_customer_message(
+        handle_customer_message(
             user,
             body_normalized,
             num_media,
@@ -110,7 +110,7 @@ async def process_message(form_data: dict[str, Any], db: Session):
             db,
         )
     elif user.role == "physio":
-        await handle_physio_message(
+        handle_physio_message(
             user,
             body_normalized,
             str(form_data.get("Body", "")),
@@ -118,10 +118,10 @@ async def process_message(form_data: dict[str, Any], db: Session):
             db,
         )
     elif user.role == "admin":
-        await handle_admin_message(user, body_normalized, sender_str, db)
+        handle_admin_message(user, body_normalized, sender_str, db)
 
 
-async def handle_customer_message(
+def handle_customer_message(
     user: User,
     body: str,
     num_media: int,
@@ -146,7 +146,7 @@ async def handle_customer_message(
         )
         appt = db.exec(statement).first()
 
-        if appt:
+        if appt and appt.id is not None:
             try:
                 payment = Payment(
                     appointment_id=appt.id,
@@ -251,7 +251,7 @@ async def handle_customer_message(
             )
             return
 
-        await confirm_internal_booking(user, sender, db)
+        confirm_internal_booking(user, sender, db)
         return
 
     send_whatsapp_message(
@@ -264,9 +264,7 @@ async def handle_customer_message(
     )
 
 
-async def confirm_internal_booking(user: User, sender: str, db: Session) -> None:
-    from datetime import timedelta
-
+def confirm_internal_booking(user: User, sender: str, db: Session) -> None:
     if not user.last_proposed_start:
         send_whatsapp_message(
             sender,
@@ -274,7 +272,8 @@ async def confirm_internal_booking(user: User, sender: str, db: Session) -> None
         )
         return
 
-    if not user.id:
+    user_id = user.id
+    if not user_id:
         debug_log("Error: User ID is None in confirm_internal_booking")
         send_whatsapp_message(sender, "Error: Unable to create booking. Please try again.")
         return
@@ -285,7 +284,7 @@ async def confirm_internal_booking(user: User, sender: str, db: Session) -> None
 
     try:
         appt = Appointment(
-            customer_id=user.id,
+            customer_id=user_id,
             start_time=start_time,
             end_time=end_time,
             duration_minutes=duration,
@@ -339,7 +338,7 @@ def notify_admin_of_payment(user: User, payment: Payment, appt: Appointment) -> 
     send_whatsapp_message(ADMIN_PHONE, msg, media_url=media_urls)
 
 
-async def handle_note_input(user: User, body: str, sender: str, db: Session) -> None:
+def handle_note_input(user: User, body: str, sender: str, db: Session) -> None:
     if body.strip().lower() == "done":
         user.conversation_state = "idle"
         db.add(user)
@@ -348,7 +347,7 @@ async def handle_note_input(user: User, body: str, sender: str, db: Session) -> 
         statement = (
             select(SessionNote)
             .where(SessionNote.appointment_id == user.active_appointment_id)
-            .order_by(SessionNote.created_at)
+            .order_by(col(SessionNote.created_at))
         )
         notes = db.exec(statement).all()
 
@@ -362,9 +361,10 @@ async def handle_note_input(user: User, body: str, sender: str, db: Session) -> 
         )
         return
 
-    if user.active_appointment_id:
+    active_appt_id = user.active_appointment_id
+    if active_appt_id:
         note = SessionNote(
-            appointment_id=user.active_appointment_id,
+            appointment_id=active_appt_id,
             note_text=body,
             created_at=datetime.now(timezone.utc),
             created_by="physio",
@@ -391,7 +391,7 @@ async def handle_note_input(user: User, body: str, sender: str, db: Session) -> 
     )
 
 
-async def handle_physio_message(
+def handle_physio_message(
     user: User,
     body: str,
     original_body: str,
@@ -399,13 +399,13 @@ async def handle_physio_message(
     db: Session,
 ) -> None:
     if user.conversation_state == "awaiting_payment_status":
-        await handle_payment_status_response(user, body, sender, db)
+        handle_payment_status_response(user, body, sender, db)
         return
     if user.conversation_state == "awaiting_payment_method":
-        await handle_payment_method_response(user, body, sender, db)
+        handle_payment_method_response(user, body, sender, db)
         return
     if user.conversation_state == "adding_notes":
-        await handle_note_input(user, original_body, sender, db)
+        handle_note_input(user, original_body, sender, db)
         return
 
     if "add notes" in body or "add note" in body:
@@ -441,7 +441,7 @@ async def handle_physio_message(
                 statement = (
                     select(SessionNote)
                     .where(SessionNote.appointment_id == appt_id)
-                    .order_by(SessionNote.created_at)
+                    .order_by(col(SessionNote.created_at))
                 )
                 notes = db.exec(statement).all()
 
@@ -462,8 +462,6 @@ async def handle_physio_message(
         return
 
     if "start" in body:
-        from datetime import timedelta
-
         try:
             appt_id = int(body.split()[1])
             appt = db.get(Appointment, appt_id)
@@ -530,9 +528,9 @@ async def handle_physio_message(
     )
 
 
-async def handle_payment_status_response(user: User, body: str, sender: str, db: Session) -> None:
+def handle_payment_status_response(user: User, body: str, sender: str, db: Session) -> None:
     appt_id = user.active_appointment_id
-    appt = db.get(Appointment, appt_id)
+    appt = db.get(Appointment, appt_id) if appt_id else None
 
     if not appt:
         user.conversation_state = "idle"
@@ -593,9 +591,9 @@ async def handle_payment_status_response(user: User, body: str, sender: str, db:
     )
 
 
-async def handle_payment_method_response(user: User, body: str, sender: str, db: Session) -> None:
+def handle_payment_method_response(user: User, body: str, sender: str, db: Session) -> None:
     appt_id = user.active_appointment_id
-    appt = db.get(Appointment, appt_id)
+    appt = db.get(Appointment, appt_id) if appt_id else None
 
     if not appt:
         user.conversation_state = "idle"
@@ -640,7 +638,7 @@ async def handle_payment_method_response(user: User, body: str, sender: str, db:
     )
 
 
-async def handle_admin_message(user: User, body: str, sender: str, db: Session) -> None:
+def handle_admin_message(user: User, body: str, sender: str, db: Session) -> None:
     if "approve" in body:
         try:
             parts = body.split()
@@ -663,14 +661,16 @@ async def handle_admin_message(user: User, body: str, sender: str, db: Session) 
                 send_whatsapp_message(sender, f"Payment {payment.id} approved.")
 
                 appt = db.get(Appointment, payment.appointment_id)
-                customer = db.get(User, appt.customer_id)
-                send_whatsapp_message(
-                    customer.phone_number,
-                    (
-                        "✅ Payment Confirmed!\n"
-                        f"Your appointment for {appt.start_time} is fully secured."
-                    ),
-                )
+                if appt:
+                    customer = db.get(User, appt.customer_id)
+                    if customer:
+                        send_whatsapp_message(
+                            customer.phone_number,
+                            (
+                                "✅ Payment Confirmed!\n"
+                                f"Your appointment for {appt.start_time} is fully secured."
+                            ),
+                        )
                 return
 
             send_whatsapp_message(sender, "No pending payment found to approve.")

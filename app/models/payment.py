@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import partial
 
 from sqlmodel import Field, SQLModel
 
@@ -12,4 +13,4 @@ class Payment(SQLModel, table=True):
     status: str = Field(default="pending")  # pending, approved, rejected
     payment_method: str  # credit_card, fps
     proof_url: str | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))

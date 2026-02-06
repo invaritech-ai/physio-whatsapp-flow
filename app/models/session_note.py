@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import partial
 
 import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
@@ -10,5 +11,5 @@ class SessionNote(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     appointment_id: int = Field(foreign_key="appointment.id")
     note_text: str = Field(sa_column=sa.Column(sa.Text(), nullable=False))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))
     created_by: str = Field(default="physio")
