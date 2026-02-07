@@ -8,6 +8,7 @@ python-dotenv
 apscheduler
 python-multipart
 pydantic-settings
+email-validator
 psycopg[binary]
 PyJWT[crypto]
 celery[redis]
