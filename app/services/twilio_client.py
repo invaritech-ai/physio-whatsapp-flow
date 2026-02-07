@@ -1,4 +1,6 @@
 import os
+import uuid
+from typing import NotRequired, TypedDict
 
 from twilio.rest import Client
 
@@ -12,7 +14,18 @@ DEBUG_MODE = settings.debug_mode
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
-def send_whatsapp_message(to: str, body: str, media_url: list | None = None):
+class MessageCreateArgs(TypedDict):
+    from_: str
+    body: str
+    to: str
+    media_url: NotRequired[list[str]]
+
+
+def send_whatsapp_message(
+    to: str,
+    body: str,
+    media_url: list[str] | None = None,
+):
     """
     Send a WhatsApp message.
     'to' should be in the format 'whatsapp:+1234567890'.
@@ -21,16 +34,21 @@ def send_whatsapp_message(to: str, body: str, media_url: list | None = None):
     """
     if DEBUG_MODE:
         print(f"\n[PHYSIO BOT] Would send to {to}: {body}\n")
-        return "debug-mode-sid"
+        # Return a unique SID to avoid collisions in message_log
+        return f"debug-{uuid.uuid4().hex}"
 
-    message_args = {"from_": TWILIO_WHATSAPP_NUMBER, "body": body, "to": to}
+    message_args: MessageCreateArgs = {
+        "from_": TWILIO_WHATSAPP_NUMBER,
+        "body": body,
+        "to": to,
+    }
 
     intercept_nums = ["whatsapp:+1111111111", "whatsapp:+0987654321"]
     if to in intercept_nums:
         print(f"\n[TEST MODE] Would send to {to}: {body}\n")
         return "test-sid-intercepted"
 
-    if media_url:
+    if media_url is not None:
         message_args["media_url"] = media_url
 
     message = client.messages.create(**message_args)

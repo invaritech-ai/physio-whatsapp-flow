@@ -108,7 +108,7 @@ def send_and_log(
     phone_e164: str,
     body: str,
     client_id: int,
-    media_url: list | None = None,
+    media_url: list[str] | None = None,
 ) -> str | None:
     """
     Send WhatsApp message and log to MessageLog.

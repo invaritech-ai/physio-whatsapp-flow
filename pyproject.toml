@@ -1,0 +1,26 @@
+[project]
+name = "physio-whatsapp-flow"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sqlmodel",
+    "alembic",
+    "twilio",
+    "requests",
+    "python-dotenv",
+    "apscheduler",
+    "python-multipart",
+    "pydantic-settings",
+    "psycopg[binary]",
+    "PyJWT[crypto]",
+    "celery[redis]",
+    "redis",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+]
