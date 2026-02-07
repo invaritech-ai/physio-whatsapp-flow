@@ -12,3 +12,5 @@ psycopg[binary]
 PyJWT[crypto]
 celery[redis]
 redis
+pytest
+httpx
