@@ -2,11 +2,12 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.routes.admin import specialties
+from app.api.v1.routes.admin import specialties, therapists
 
 router = APIRouter()
 
-# Register specialty routes
+# Register admin routes
 router.include_router(specialties.router)
+router.include_router(therapists.router)
 
 __all__ = ["router"]

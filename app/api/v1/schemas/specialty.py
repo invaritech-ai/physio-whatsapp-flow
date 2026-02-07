@@ -1,21 +1,22 @@
 """Pydantic schemas for TherapistSpecialty endpoints."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SpecialtyCreate(BaseModel):
     """Request schema for creating specialty."""
 
-    name: str = Field(..., min_length=1, max_length=100)
-    description: str | None = Field(None, max_length=500)
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "name": "Sports Rehabilitation",
                 "description": "Treatment for sports injuries and athletic performance",
             }
         }
+    )
+
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=500)
 
 
 class SpecialtyUpdate(BaseModel):
@@ -29,10 +30,9 @@ class SpecialtyUpdate(BaseModel):
 class SpecialtyResponse(BaseModel):
     """Response schema for specialty."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     description: str | None
     is_active: bool
-
-    class Config:
-        from_attributes = True
