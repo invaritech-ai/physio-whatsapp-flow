@@ -101,7 +101,7 @@ def build_match_confirmation_menu(
     }
     time_str = time_map.get(time_band, time_band)
 
-    message = f"Great! We've found a therapist for you:\n\n"
+    message = "Great! We've found a therapist for you:\n\n"
     message += f"👨‍⚕️ Therapist: {therapist_name}\n"
     message += f"📋 Specialty: {specialty}\n"
     message += f"⏱️ Duration: {duration} minutes\n"
@@ -109,7 +109,9 @@ def build_match_confirmation_menu(
     message += f"📅 Preferred days: {days_str}\n"
 
     if fallback_level > 0:
-        message += f"\n⚠️ Note: This match used relaxed criteria (level {fallback_level}).\n"
+        message += (
+            f"\n⚠️ Note: This match used relaxed criteria (level {fallback_level}).\n"
+        )
 
     message += "\nWould you like to proceed with booking?\n\n"
     message += "1️⃣ Yes, book with this therapist\n"
@@ -122,10 +124,7 @@ def build_match_confirmation_menu(
 def build_invalid_input_message(valid_options: list[str]) -> str:
     """Build error message for invalid input."""
     options_str = ", ".join(valid_options)
-    return (
-        f"Sorry, I didn't understand that. 😕\n\n"
-        f"Please reply with: {options_str}"
-    )
+    return f"Sorry, I didn't understand that. 😕\n\nPlease reply with: {options_str}"
 
 
 def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:

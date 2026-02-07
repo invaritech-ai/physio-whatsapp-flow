@@ -30,7 +30,10 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
     # Check if returning client with preferred therapist
     if client.name and client.preferred_therapist_id:
         therapist = db.exec(
-            select(Therapist).where(Therapist.id == client.preferred_therapist_id)
+            select(Therapist).where(
+                Therapist.id == client.preferred_therapist_id,
+                Therapist.is_active == True,  # noqa: E712
+            )
         ).first()
 
         if therapist:
@@ -205,6 +208,7 @@ def handle_awaiting_days(client, body: str, db: Session) -> tuple[str, str]:
     db.commit()
 
     # Check if user is rebooking with their preferred therapist
+    matched_therapist = None
     is_rebooking = conv_data.get("rebooking", False)
     if is_rebooking and client.preferred_therapist_id:
         # Use the preferred therapist for rebook shortcut
