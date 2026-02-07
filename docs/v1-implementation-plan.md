@@ -44,12 +44,15 @@ This plan is broken into 6 phases, each producing a working (if incomplete) syst
 ```
 Phase 1 (Models + DB)
   ├──→ Phase 2 (Bot + Logging)
-  │      ├──→ Phase 3 (Matching + Calendly Webhooks)
-  │      │      └──→ Phase 4 (Scheduler)
-  │      └──→ Phase 5 (Web APIs) ← can start after Phase 1, parallel with 3-4
-  └──→ Phase 5 (Web APIs)
-              └──→ Phase 6 (Security + Polish)
+  │      └──→ Phase 2.5 (Admin APIs - Minimal CRUD)
+  │             └──→ Phase 3 (Matching + Calendly Webhooks)
+  │                    └──→ Phase 4 (Scheduler)
+  │                           └──→ Phase 5 (Web APIs - Complete)
+  │                                  └──→ Phase 6 (Security + Auth)
+  └──→ Phase 2.5 (can also start after Phase 1, parallel with Phase 2)
 ```
+
+**Rationale for Phase 2.5**: Cannot test Phase 2 bot or build Phase 3 matching without therapist/specialty data in DB. Phase 2.5 provides minimal CRUD APIs to enable both.
 
 ---
 
@@ -229,6 +232,151 @@ Rewrite the WhatsApp bot as a customer-only IVR. Log all messages. Strip all phy
 - "reschedule" / "cancel" shows links
 - All messages logged in `message_log` table
 - No physio/admin handling anywhere in the bot
+
+---
+
+## Phase 2.5: Admin APIs (Therapist & Specialty Management)
+
+**Branch**: `v1/phase-2.5-admin-apis`
+
+### Goal
+Build minimal CRUD APIs for therapists and specialties to enable:
+- Testing Phase 2 bot flow with real data
+- Setting up Calendly links for Phase 3 integration
+- Frontend therapist registration and management
+
+**Note**: Auth middleware is intentionally deferred to Phase 6. Frontend sends JWT tokens, but endpoints remain open for now to prioritize feature delivery.
+
+### Admin Endpoints (`app/api/v1/routes/admin/`)
+
+#### Therapist Management
+
+| Endpoint | Purpose | Request Body |
+|----------|---------|--------------|
+| `GET /admin/therapists` | List all therapists with specialties | — |
+| `POST /admin/therapists` | Create therapist + user | `{neon_auth_sub, email, display_name, calendly_link}` |
+| `GET /admin/therapists/{id}` | Get therapist detail | — |
+| `PATCH /admin/therapists/{id}` | Update therapist | `{display_name?, is_active?, calendly_link?}` |
+| `DELETE /admin/therapists/{id}` | Soft-delete (set `is_active=false`) | — |
+
+#### Specialty Management
+
+| Endpoint | Purpose | Request Body |
+|----------|---------|--------------|
+| `GET /admin/specialties` | List all specialties | — |
+| `POST /admin/specialties` | Create specialty | `{name, description}` |
+| `PATCH /admin/specialties/{id}` | Update specialty | `{name?, description?, is_active?}` |
+| `DELETE /admin/specialties/{id}` | Soft-delete (set `is_active=false`) | — |
+
+#### Therapist-Specialty Assignment
+
+| Endpoint | Purpose | Request Body |
+|----------|---------|--------------|
+| `POST /admin/therapists/{id}/specialties` | Assign specialty to therapist | `{specialty_id}` |
+| `DELETE /admin/therapists/{id}/specialties/{sid}` | Remove specialty from therapist | — |
+| `GET /admin/therapists/{id}/specialties` | List therapist's specialties | — |
+
+### Schemas (`app/api/v1/schemas/`)
+
+**`therapist.py`**:
+```python
+class TherapistCreate(BaseModel):
+    neon_auth_sub: str
+    email: str
+    display_name: str
+    calendly_link: str | None = None
+
+class TherapistUpdate(BaseModel):
+    display_name: str | None = None
+    is_active: bool | None = None
+    calendly_link: str | None = None
+
+class TherapistResponse(BaseModel):
+    id: int
+    user_id: int
+    display_name: str
+    is_active: bool
+    calendly_link: str | None
+    specialties: list[SpecialtyResponse]
+    created_at: datetime
+```
+
+**`specialty.py`**:
+```python
+class SpecialtyCreate(BaseModel):
+    name: str
+    description: str | None = None
+
+class SpecialtyUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    is_active: bool | None = None
+
+class SpecialtyResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    is_active: bool
+```
+
+### Implementation Notes
+
+1. **User Creation**: `POST /admin/therapists` creates both `User` and `Therapist` records atomically
+2. **Soft Deletes**: All DELETE endpoints set `is_active=false` instead of actual deletion
+3. **Calendly Link**: Stored on `Therapist` model, validated as URL format (optional)
+4. **Validation**:
+   - Email uniqueness enforced at DB level
+   - Specialty name uniqueness enforced
+   - Cannot assign same specialty twice to therapist
+5. **Response Format**: All endpoints return JSON with standard error handling:
+   ```json
+   {"status": "success", "data": {...}}
+   {"status": "error", "message": "..."}
+   ```
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `app/api/v1/schemas/therapist.py` | Therapist request/response schemas |
+| `app/api/v1/schemas/specialty.py` | Specialty request/response schemas |
+| `app/api/v1/routes/admin/therapists.py` | Therapist CRUD endpoints |
+| `app/api/v1/routes/admin/specialties.py` | Specialty CRUD endpoints |
+| `tests/test_admin_therapists.py` | Therapist API tests |
+| `tests/test_admin_specialties.py` | Specialty API tests |
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `app/api/v1/__init__.py` | Register admin router |
+| `app/main.py` | Include admin routes |
+
+### Verify
+
+- ✅ Can create therapist with Calendly link
+- ✅ Can create and assign specialties
+- ✅ Soft delete works (is_active=false)
+- ✅ GET /admin/therapists returns therapists with specialties
+- ✅ Duplicate email/specialty name blocked
+- ✅ Can test Phase 2 bot flow with real therapists
+- ✅ All endpoints return proper JSON responses
+- ✅ pytest passes for admin API tests
+
+### Auth Implementation (Deferred to Phase 6)
+
+Frontend in `../physio-whatsapp-frontend` handles authentication via Neon Auth and sends JWT tokens with requests. Backend will validate these tokens in Phase 6 using:
+
+```python
+# Phase 6: Add JWT middleware
+from app.core.auth import require_admin
+
+@router.post("/admin/therapists", dependencies=[Depends(require_admin)])
+async def create_therapist(...):
+    ...
+```
+
+For Phase 2.5, endpoints remain open to enable rapid testing and frontend integration.
 
 ---
 

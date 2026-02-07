@@ -3,9 +3,12 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
+from app.db.session import get_session
+from app.main import app
 from app.models import (
     Client,
     Session as TherapySession,
@@ -93,3 +96,16 @@ def sample_therapist_fixture(db_session):
         db_session.commit()
         db_session.refresh(therapist)
         return therapist
+
+
+@pytest.fixture(name="client")
+def client_fixture(db_session):
+    """Create a TestClient with overridden database dependency."""
+
+    def get_session_override():
+        return db_session
+
+    app.dependency_overrides[get_session] = get_session_override
+    client = TestClient(app)
+    yield client
+    app.dependency_overrides.clear()
