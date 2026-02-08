@@ -89,7 +89,8 @@ class TestConversationData:
         """Should serialize dict to JSON string."""
         data = {"duration": 45, "time_band": "morning"}
         set_conversation_data(sample_client, data)
-        assert sample_client.conversation_data == '{"duration": 45, "time_band": "morning"}'
+        import json
+        assert json.loads(sample_client.conversation_data) == data
 
     def test_update_conversation_data_adds_new_keys(self, sample_client):
         """Should add new keys to conversation_data."""

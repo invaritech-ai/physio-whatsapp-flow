@@ -377,6 +377,57 @@ class TestHandleAwaitingTimeBand:
         assert conv_data.get("time_band") == states.TIME_BAND_EVENING
 
 
+class TestHandleAwaitingTimeBandInvalid:
+    """Tests for handle_awaiting_time_band — invalid input."""
+
+    def test_invalid_choice_4_rejects(self, db_session):
+        """Out-of-range choice should be rejected with re-prompt."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_TIME_BAND,
+        )
+        update_conversation_data(client, duration=30, specialty_id=1)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_time_band(client, "4", db_session)
+
+        assert next_state == states.AWAITING_TIME_BAND
+        assert "1" in response and "2" in response and "3" in response
+
+    def test_invalid_choice_0_rejects(self, db_session):
+        """Zero should be rejected."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_TIME_BAND,
+        )
+        update_conversation_data(client, duration=30, specialty_id=1)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_time_band(client, "0", db_session)
+
+        assert next_state == states.AWAITING_TIME_BAND
+
+    def test_invalid_text_rejects(self, db_session):
+        """Non-numeric text should be rejected."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_TIME_BAND,
+        )
+        update_conversation_data(client, duration=30, specialty_id=1)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_time_band(client, "help", db_session)
+
+        assert next_state == states.AWAITING_TIME_BAND
+        assert "didn't understand" in response.lower()
+
+
 class TestHandleAwaitingDays:
     """Tests for handle_awaiting_days function."""
 
@@ -481,6 +532,52 @@ class TestHandleAwaitingMatchConfirm:
 
         assert next_state == states.AWAITING_DURATION
         assert client.conversation_data is None  # Reset
+
+
+class TestHandleAwaitingMatchConfirmInvalid:
+    """Tests for handle_awaiting_match_confirm — invalid input."""
+
+    def test_invalid_choice_3_rejects(self, db_session, sample_therapist):
+        """Out-of-range choice should be rejected with re-prompt."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_MATCH_CONFIRM,
+        )
+        update_conversation_data(
+            client,
+            duration=30,
+            specialty_id=1,
+            matched_therapist_id=sample_therapist.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_match_confirm(client, "3", db_session)
+
+        assert next_state == states.AWAITING_MATCH_CONFIRM
+        assert "1" in response and "2" in response
+
+    def test_invalid_text_rejects(self, db_session, sample_therapist):
+        """Non-numeric text should be rejected."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_MATCH_CONFIRM,
+        )
+        update_conversation_data(
+            client,
+            duration=30,
+            specialty_id=1,
+            matched_therapist_id=sample_therapist.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_match_confirm(client, "help", db_session)
+
+        assert next_state == states.AWAITING_MATCH_CONFIRM
+        assert "didn't understand" in response.lower()
 
 
 class TestCheckGlobalKeywords:
@@ -656,6 +753,66 @@ class TestHandleRescheduleRequest:
 
         assert next_state == states.IDLE
         assert "appointment" in response.lower()
+
+
+class TestNoSpecialtiesAvailable:
+    """Tests for edge case when no active specialties exist."""
+
+    def test_duration_handler_resets_when_no_specialties(self, db_session):
+        """Duration handler should reset to IDLE when no specialties exist."""
+        # No specialties seeded
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_DURATION,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_duration(client, "1", db_session)
+
+        assert next_state == states.IDLE
+        assert "wrong" in response.lower() or "error" in response.lower()
+
+    def test_specialty_handler_resets_when_no_specialties(self, db_session):
+        """Specialty handler should reset to IDLE when no specialties exist."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_SPECIALTY,
+        )
+        update_conversation_data(client, duration=30)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_specialty(client, "1", db_session)
+
+        assert next_state == states.IDLE
+        assert "wrong" in response.lower() or "error" in response.lower()
+
+
+class TestNoTherapistMatch:
+    """Tests for edge case when no therapists match."""
+
+    def test_days_handler_resets_when_no_therapists(self, db_session):
+        """Days handler should reset to IDLE when no active therapists exist."""
+        # No therapists seeded
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_DAYS,
+        )
+        update_conversation_data(
+            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_MORNING
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_days(client, "1", db_session)
+
+        assert next_state == states.IDLE
+        assert "no therapists" in response.lower()
+        assert client.conversation_data is None
 
 
 class TestSpecialtyOrderingConsistency:
