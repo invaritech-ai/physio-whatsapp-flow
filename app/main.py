@@ -35,7 +35,11 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="movement-whatsapp-automation-api",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 # Allow browser clients to call the API during dev.
 # TODO: tighten origins for production.

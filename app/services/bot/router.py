@@ -2,7 +2,7 @@
 
 from sqlmodel import Session
 
-from app.services.bot.handlers import HANDLER_MAP, handle_idle
+from app.services.bot.handlers import HANDLER_MAP, check_global_keywords, handle_idle
 from app.services.bot.helpers import get_or_create_client, send_and_log
 from app.services.message_logger import log_inbound
 
@@ -79,12 +79,17 @@ def process_message(form_data: dict, db: Session) -> dict:
                 "note": "Empty body or media-only message",
             }
 
-        # Get handler for current state
-        current_state = client.conversation_state
-        handler = HANDLER_MAP.get(current_state, handle_idle)
+        # Check for global keywords first (work from any state)
+        body_lower = body.lower()
+        keyword_result = check_global_keywords(client, body_lower, db)
 
-        # Execute handler
-        next_state, response_text = handler(client, body.lower(), db)
+        if keyword_result is not None:
+            next_state, response_text = keyword_result
+        else:
+            # Normal state handler dispatch
+            current_state = client.conversation_state
+            handler = HANDLER_MAP.get(current_state, handle_idle)
+            next_state, response_text = handler(client, body_lower, db)
 
         # Update client state
         client.conversation_state = next_state

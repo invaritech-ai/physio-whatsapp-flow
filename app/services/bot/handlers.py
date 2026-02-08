@@ -13,38 +13,89 @@ from app.services.bot.helpers import (
 )
 
 
-def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
-    """
-    Handle IDLE state - entry point for all conversations.
+GREETING_KEYWORDS = {"hi", "hello", "hey", "menu", "reset", "start"}
 
-    Checks for:
-    1. Reschedule/cancel keywords
-    2. Returning client with preferred therapist (offer rebook shortcut)
-    3. Returning client without preferred therapist (skip name collection)
-    4. New client (ask for name)
+
+def _get_preferred_therapist_name(client, db: Session) -> str | None:
+    """Get display name of client's preferred therapist, or None."""
+    if not client.preferred_therapist_id:
+        return None
+    therapist = db.get(Therapist, client.preferred_therapist_id)
+    return therapist.display_name if therapist else None
+
+
+def check_global_keywords(
+    client, body: str, db: Session
+) -> tuple[str, str] | None:
     """
-    # Check for reschedule/cancel keywords
+    Check for global keywords that work from any conversation state.
+
+    Returns (next_state, response_text) if a keyword matched, or None.
+    """
+    body_stripped = body.strip()
+
+    # Greetings / menu reset
+    if body_stripped in GREETING_KEYWORDS:
+        client.conversation_data = None
+        therapist_name = _get_preferred_therapist_name(client, db)
+        return (states.IDLE, menus.build_main_menu(client.name, therapist_name))
+
+    # Book keyword
+    if body_stripped == "book":
+        client.conversation_data = None
+        if client.name:
+            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
+        return (states.AWAITING_NAME, menus.build_welcome_menu())
+
+    # Reschedule / cancel keywords (substring match)
     if any(keyword in body for keyword in ["reschedule", "cancel"]):
+        client.conversation_data = None
         return handle_reschedule_request(client, body, db)
 
-    # Check if returning client with preferred therapist
-    if client.name and client.preferred_therapist_id:
-        therapist = db.exec(
-            select(Therapist).where(Therapist.id == client.preferred_therapist_id)
-        ).first()
+    return None
 
-        if therapist:
-            return (
-                states.AWAITING_REBOOK_CHOICE,
-                menus.build_rebook_menu(client.name, therapist.display_name),
-            )
 
-    # Check if returning client without preferred therapist
-    if client.name:
-        return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
+def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
+    """
+    Handle IDLE state — process main menu numbered choices.
 
-    # New client - ask for name
-    return (states.AWAITING_NAME, menus.build_welcome_menu())
+    Menu varies by client type:
+    - New client (no name): any input → ask for name
+    - Returning client (has name): 1=Book, 2=Reschedule
+    - Returning client with preferred therapist: 1=Rebook, 2=Different, 3=Reschedule
+    """
+    has_preferred = client.name and client.preferred_therapist_id
+    has_name = client.name
+
+    if has_preferred:
+        # 3-option menu: Rebook / Different / Reschedule
+        choice = validate_numbered_choice(body, [1, 2, 3])
+        if choice == 1:
+            update_conversation_data(client, rebooking=True)
+            db.add(client)
+            db.commit()
+            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
+        elif choice == 2:
+            client.preferred_therapist_id = None
+            db.add(client)
+            db.commit()
+            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
+        elif choice == 3:
+            return handle_reschedule_request(client, body, db)
+    elif has_name:
+        # 2-option menu: Book / Reschedule
+        choice = validate_numbered_choice(body, [1, 2])
+        if choice == 1:
+            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
+        elif choice == 2:
+            return handle_reschedule_request(client, body, db)
+    else:
+        # New client — treat input as name directly
+        return handle_awaiting_name(client, body, db)
+
+    # Invalid choice — re-show main menu
+    therapist_name = _get_preferred_therapist_name(client, db)
+    return (states.IDLE, menus.build_main_menu(client.name, therapist_name))
 
 
 def handle_awaiting_name(client, body: str, db: Session) -> tuple[str, str]:
@@ -318,38 +369,6 @@ def handle_awaiting_match_confirm(client, body: str, db: Session) -> tuple[str, 
     )
 
 
-def handle_awaiting_rebook_choice(client, body: str, db: Session) -> tuple[str, str]:
-    """
-    Handle AWAITING_REBOOK_CHOICE state - rebook with same or different therapist.
-
-    Valid choices:
-    1 - Book again with same therapist (shortcut)
-    2 - Try a different therapist (full flow)
-    """
-    choice = validate_numbered_choice(body, [1, 2])
-
-    if choice is None:
-        return (
-            states.AWAITING_REBOOK_CHOICE,
-            menus.build_invalid_input_message(["1", "2"]),
-        )
-
-    # Choice 2: Different therapist - go through full flow
-    if choice == 2:
-        # Clear preferred therapist and start from duration selection
-        client.preferred_therapist_id = None
-        db.add(client)
-        db.commit()
-        return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
-
-    # Choice 1: Same therapist - mark as rebooking and continue
-    update_conversation_data(client, rebooking=True)
-    db.add(client)
-    db.commit()
-
-    return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
-
-
 def handle_reschedule_request(client, body: str, db: Session) -> tuple[str, str]:
     """
     Handle reschedule/cancel request - show upcoming sessions with links.
@@ -372,5 +391,4 @@ HANDLER_MAP = {
     states.AWAITING_TIME_BAND: handle_awaiting_time_band,
     states.AWAITING_DAYS: handle_awaiting_days,
     states.AWAITING_MATCH_CONFIRM: handle_awaiting_match_confirm,
-    states.AWAITING_REBOOK_CHOICE: handle_awaiting_rebook_choice,
 }

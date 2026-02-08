@@ -90,7 +90,7 @@ class TestLogInbound:
         )
 
         # Query database to verify
-        messages = db_session.exec(select(MessageLog)).all()
+        messages = db_session.exec(select(MessageLog).order_by(MessageLog.id)).all()
         assert len(messages) == 1
         assert messages[0].direction == "inbound"
 
@@ -145,7 +145,7 @@ class TestLogOutbound:
         )
 
         # Query database to verify
-        messages = db_session.exec(select(MessageLog)).all()
+        messages = db_session.exec(select(MessageLog).order_by(MessageLog.id)).all()
         assert len(messages) == 1
         assert messages[0].direction == "outbound"
 
@@ -191,11 +191,13 @@ class TestMessageLoggingIntegration:
             client_id=sample_client.id,
         )
 
-        # Verify all 4 messages logged
-        messages = db_session.exec(select(MessageLog)).all()
+        # Verify all 4 messages logged (ordered by id for deterministic assertions)
+        messages = db_session.exec(
+            select(MessageLog).order_by(MessageLog.id)
+        ).all()
         assert len(messages) == 4
 
-        # Verify order (should be chronological)
+        # Verify order (should be chronological by insertion)
         assert messages[0].direction == "inbound"
         assert messages[0].body == "Hi"
         assert messages[1].direction == "outbound"

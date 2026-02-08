@@ -4,12 +4,35 @@ from app.models import TherapistSpecialty
 from app.services.bot.states import DAYS_MAP
 
 
+def build_main_menu(client_name: str | None, therapist_name: str | None) -> str:
+    """Build main menu based on client type."""
+    if client_name and therapist_name:
+        return (
+            f"Welcome back, {client_name}! 👋\n\n"
+            "How can we help you today?\n\n"
+            f"1️⃣ Book again with {therapist_name}\n"
+            "2️⃣ Book with a different therapist\n"
+            "3️⃣ Reschedule or cancel\n\n"
+            "Reply with a number, or type 'book' anytime."
+        )
+    elif client_name:
+        return (
+            f"Welcome back, {client_name}! 👋\n\n"
+            "How can we help you today?\n\n"
+            "1️⃣ Book a session\n"
+            "2️⃣ Reschedule or cancel\n\n"
+            "Reply with a number, or type 'book' anytime."
+        )
+    else:
+        return (
+            "Welcome to Movement Clinic! 👋\n\n"
+            "To get started, please tell us your name."
+        )
+
+
 def build_welcome_menu() -> str:
     """Build welcome message asking for user's name."""
-    return (
-        "Welcome to our Physiotherapy Clinic! 👋\n\n"
-        "To help you book an appointment, what's your name?"
-    )
+    return "Welcome to Movement Clinic! 👋\n\nTo get started, please tell us your name."
 
 
 def build_duration_menu(name: str) -> str:
@@ -20,7 +43,7 @@ def build_duration_menu(name: str) -> str:
         "1️⃣ 30 minutes\n"
         "2️⃣ 45 minutes\n"
         "3️⃣ 60 minutes\n\n"
-        "Please reply with 1, 2, or 3."
+        "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
     )
 
 
@@ -37,7 +60,7 @@ def build_specialty_menu(specialties: list[TherapistSpecialty]) -> str:
         if specialty.description:
             lines.append(f"   {specialty.description}")
 
-    lines.append(f"\nPlease reply with a number (1-{len(specialties)}).")
+    lines.append(f"\nPlease reply with a number (1-{len(specialties)}). `Menu` to go back to main menu.")
 
     return "\n".join(lines)
 
@@ -49,7 +72,7 @@ def build_time_band_menu() -> str:
         "1️⃣ Morning (8:00 AM - 11:00 AM)\n"
         "2️⃣ Afternoon (11:00 AM - 4:00 PM)\n"
         "3️⃣ Evening (4:00 PM - 8:00 PM)\n\n"
-        "Please reply with 1, 2, or 3."
+        "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
     )
 
 
@@ -65,7 +88,8 @@ def build_days_menu() -> str:
         "6️⃣ Saturday\n"
         "7️⃣ Sunday\n\n"
         "You can select multiple days by separating them with commas.\n"
-        "Example: 1,3,5 for Monday, Wednesday, Friday"
+        "Example: 1,3,5 for Monday, Wednesday, Friday\n\n"
+        "`Menu` to go back to main menu."
     )
 
 
@@ -109,12 +133,14 @@ def build_match_confirmation_menu(
     message += f"📅 Preferred days: {days_str}\n"
 
     if fallback_level > 0:
-        message += f"\n⚠️ Note: This match used relaxed criteria (level {fallback_level}).\n"
+        message += (
+            f"\n⚠️ Note: This match used relaxed criteria (level {fallback_level}).\n"
+        )
 
     message += "\nWould you like to proceed with booking?\n\n"
     message += "1️⃣ Yes, book with this therapist\n"
     message += "2️⃣ No, start over with different preferences\n\n"
-    message += "Please reply with 1 or 2."
+    message += "Please reply with 1 or 2. `Menu` to go back to main menu."
 
     return message
 
@@ -122,10 +148,7 @@ def build_match_confirmation_menu(
 def build_invalid_input_message(valid_options: list[str]) -> str:
     """Build error message for invalid input."""
     options_str = ", ".join(valid_options)
-    return (
-        f"Sorry, I didn't understand that. 😕\n\n"
-        f"Please reply with: {options_str}"
-    )
+    return f"Sorry, I didn't understand that. 😕\n\nPlease reply with: {options_str}"
 
 
 def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:
@@ -133,7 +156,7 @@ def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:
     if not upcoming_sessions:
         return (
             "You don't have any upcoming appointments. 📅\n\n"
-            "To book a new appointment, just send 'hi' or 'hello'!"
+            "To book a new appointment, just send 'menu' to return to the main menu!"
         )
 
     lines = ["Here are your upcoming appointments:\n"]
@@ -156,7 +179,7 @@ def build_booking_complete_message(calendly_link: str, therapist_name: str) -> s
         f"Click the link below to choose your preferred time with {therapist_name}:\n\n"
         f"{calendly_link}\n\n"
         f"You'll receive a confirmation once your appointment is booked.\n\n"
-        f"Need help? Just send 'reschedule' to manage your appointments."
+        f"Need help? Send 'menu' for options or 'reschedule' to manage appointments."
     )
 
 
