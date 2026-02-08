@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from app.models import Session as TherapySession
+from app.models import Therapist
 
 
 def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list[dict]:
@@ -37,9 +38,8 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
     result = []
     for session in sessions:
         # Get therapist name
-        therapist_name = (
-            session.therapist.display_name if session.therapist else "Unknown"
-        )
+        therapist = db.get(Therapist, session.therapist_id)
+        therapist_name = therapist.display_name if therapist else "Unknown"
 
         # Format start time
         start_time_str = session.start_time.strftime("%A, %B %d at %I:%M %p")
