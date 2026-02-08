@@ -17,7 +17,7 @@ class TestNewClientFlow:
         self, db_session, sample_specialties, sample_therapist, mock_send_whatsapp
     ):
         """Test full conversation flow from greeting to booking link."""
-        # Message 1: Initial greeting
+        # Message 1: Initial greeting → main menu (asks for name)
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "Hi",
@@ -27,16 +27,16 @@ class TestNewClientFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_NAME
+        assert result["next_state"] == states.IDLE
 
         # Verify client created
         client = db_session.exec(
             select(Client).where(Client.phone_e164 == "+85212345678")
         ).first()
         assert client is not None
-        assert client.conversation_state == states.AWAITING_NAME
+        assert client.conversation_state == states.IDLE
 
-        # Message 2: Provide name
+        # Message 2: Provide name → proceeds to duration
         form_data["Body"] = "John Smith"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
@@ -141,7 +141,7 @@ class TestReturningClientFlow:
     def test_returning_client_with_preferred_therapist(
         self, db_session, sample_therapist, mock_send_whatsapp
     ):
-        """Returning client with preferred therapist gets rebook shortcut."""
+        """Returning client with preferred therapist sees main menu with rebook option."""
         # Create existing client with preferred therapist
         client = Client(
             phone_e164="+85212345678",
@@ -152,22 +152,30 @@ class TestReturningClientFlow:
         db_session.add(client)
         db_session.commit()
 
-        # Message: Greeting
+        # Message 1: Greeting → main menu with rebook options
         form_data = {
             "From": "whatsapp:+85212345678",
-            "Body": "Hi again",
+            "Body": "Hi",
             "MessageSid": "SM001",
             "NumMedia": "0",
         }
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_REBOOK_CHOICE
+        assert result["next_state"] == states.IDLE
+
+        # Message 2: Choose option 1 (rebook with same therapist)
+        form_data["Body"] = "1"
+        form_data["MessageSid"] = "SM002"
+        result = process_message(form_data, db_session)
+
+        assert result["status"] == "success"
+        assert result["next_state"] == states.AWAITING_DURATION
 
     def test_returning_client_without_preferred_therapist(
         self, db_session, mock_send_whatsapp
     ):
-        """Returning client without preferred therapist skips name collection."""
+        """Returning client without preferred therapist sees main menu."""
         # Create existing client without preferred therapist
         client = Client(
             phone_e164="+85212345678",
@@ -177,13 +185,21 @@ class TestReturningClientFlow:
         db_session.add(client)
         db_session.commit()
 
-        # Message: Greeting
+        # Message 1: Greeting → main menu
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "Hello",
             "MessageSid": "SM001",
             "NumMedia": "0",
         }
+        result = process_message(form_data, db_session)
+
+        assert result["status"] == "success"
+        assert result["next_state"] == states.IDLE
+
+        # Message 2: Choose option 1 (book session)
+        form_data["Body"] = "1"
+        form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
@@ -196,7 +212,7 @@ class TestRebookFlow:
     def test_rebook_with_same_therapist(
         self, db_session, sample_specialties, sample_therapist, mock_send_whatsapp
     ):
-        """Test rebooking with same therapist."""
+        """Test rebooking with same therapist via main menu."""
         # Create client with preferred therapist
         client = Client(
             phone_e164="+85212345678",
@@ -207,7 +223,7 @@ class TestRebookFlow:
         db_session.add(client)
         db_session.commit()
 
-        # Message 1: Greeting (gets rebook menu)
+        # Message 1: Greeting → main menu
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "Hi",
@@ -215,9 +231,9 @@ class TestRebookFlow:
             "NumMedia": "0",
         }
         result = process_message(form_data, db_session)
-        assert result["next_state"] == states.AWAITING_REBOOK_CHOICE
+        assert result["next_state"] == states.IDLE
 
-        # Message 2: Choose same therapist
+        # Message 2: Choose option 1 (rebook same therapist)
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
@@ -230,7 +246,7 @@ class TestRebookFlow:
     def test_rebook_with_different_therapist(
         self, db_session, sample_specialties, sample_therapist, mock_send_whatsapp
     ):
-        """Test choosing different therapist."""
+        """Test choosing different therapist via main menu."""
         # Create client with preferred therapist
         client = Client(
             phone_e164="+85212345678",
@@ -241,7 +257,7 @@ class TestRebookFlow:
         db_session.add(client)
         db_session.commit()
 
-        # Message 1: Greeting
+        # Message 1: Greeting → main menu
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "Hello",
@@ -249,9 +265,9 @@ class TestRebookFlow:
             "NumMedia": "0",
         }
         result = process_message(form_data, db_session)
-        assert result["next_state"] == states.AWAITING_REBOOK_CHOICE
+        assert result["next_state"] == states.IDLE
 
-        # Message 2: Choose different therapist
+        # Message 2: Choose option 2 (different therapist)
         form_data["Body"] = "2"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
@@ -303,6 +319,85 @@ class TestRescheduleFlow:
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "I want to cancel",
+            "MessageSid": "SM001",
+            "NumMedia": "0",
+        }
+        result = process_message(form_data, db_session)
+
+        assert result["status"] == "success"
+        assert result["next_state"] == states.IDLE
+
+
+class TestGlobalKeywordMidFlow:
+    """Test global keywords interrupt mid-flow and reset to menu."""
+
+    def test_menu_keyword_resets_from_mid_flow(
+        self, db_session, mock_send_whatsapp
+    ):
+        """Typing 'menu' mid-booking resets to main menu."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_SPECIALTY,
+        )
+        client.conversation_data = '{"duration": 30}'
+        db_session.add(client)
+        db_session.commit()
+
+        form_data = {
+            "From": "whatsapp:+85212345678",
+            "Body": "menu",
+            "MessageSid": "SM001",
+            "NumMedia": "0",
+        }
+        result = process_message(form_data, db_session)
+
+        assert result["status"] == "success"
+        assert result["next_state"] == states.IDLE
+
+        # Verify conversation data was reset
+        db_session.refresh(client)
+        assert client.conversation_data is None
+
+    def test_book_keyword_from_mid_flow(
+        self, db_session, mock_send_whatsapp
+    ):
+        """Typing 'book' mid-flow jumps straight to booking."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_SPECIALTY,
+        )
+        client.conversation_data = '{"duration": 30}'
+        db_session.add(client)
+        db_session.commit()
+
+        form_data = {
+            "From": "whatsapp:+85212345678",
+            "Body": "book",
+            "MessageSid": "SM001",
+            "NumMedia": "0",
+        }
+        result = process_message(form_data, db_session)
+
+        assert result["status"] == "success"
+        assert result["next_state"] == states.AWAITING_DURATION
+
+    def test_reschedule_keyword_from_mid_flow(
+        self, db_session, mock_send_whatsapp
+    ):
+        """Typing 'reschedule' mid-flow shows reschedule menu."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_DURATION,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        form_data = {
+            "From": "whatsapp:+85212345678",
+            "Body": "reschedule",
             "MessageSid": "SM001",
             "NumMedia": "0",
         }
@@ -496,7 +591,7 @@ class TestMediaAndEmptyMessages:
         db_session.add(client)
         db_session.commit()
 
-        # Start rebook flow
+        # Start rebook flow: greeting → main menu
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "Hi",
@@ -504,9 +599,9 @@ class TestMediaAndEmptyMessages:
             "NumMedia": "0",
         }
         result = process_message(form_data, db_session)
-        assert result["next_state"] == states.AWAITING_REBOOK_CHOICE
+        assert result["next_state"] == states.IDLE
 
-        # Choose same therapist (option 1)
+        # Choose option 1 (rebook same therapist)
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)

@@ -7,11 +7,11 @@ import pytest
 from app.models import Client, Therapist, TherapistSpecialty, User
 from app.services.bot import states
 from app.services.bot.handlers import (
+    check_global_keywords,
     handle_awaiting_days,
     handle_awaiting_duration,
     handle_awaiting_match_confirm,
     handle_awaiting_name,
-    handle_awaiting_rebook_choice,
     handle_awaiting_specialty,
     handle_awaiting_time_band,
     handle_idle,
@@ -21,21 +21,32 @@ from app.services.bot.helpers import update_conversation_data
 
 
 class TestHandleIdle:
-    """Tests for handle_idle function."""
+    """Tests for handle_idle — processes main menu numbered choices."""
 
-    def test_new_client_asks_for_name(self, db_session):
-        """New client without name should be asked for name."""
+    def test_new_client_valid_name_saves_and_proceeds(self, db_session):
+        """New client input is treated as name — valid name proceeds to duration."""
         client = Client(phone_e164="+85212345678", conversation_state=states.IDLE)
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_idle(client, "hi", db_session)
+        next_state, response = handle_idle(client, "john smith", db_session)
+
+        assert next_state == states.AWAITING_DURATION
+        assert client.name == "John Smith"
+
+    def test_new_client_invalid_name_stays_for_name(self, db_session):
+        """New client input is treated as name — invalid name re-prompts."""
+        client = Client(phone_e164="+85212345678", conversation_state=states.IDLE)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "j", db_session)
 
         assert next_state == states.AWAITING_NAME
         assert "name" in response.lower()
 
-    def test_returning_client_without_preferred_therapist(self, db_session):
-        """Returning client without preferred therapist goes to duration."""
+    def test_returning_client_choice_1_books_session(self, db_session):
+        """Returning client (no preferred therapist) choice 1 starts booking."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -44,15 +55,45 @@ class TestHandleIdle:
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_idle(client, "hello", db_session)
+        next_state, response = handle_idle(client, "1", db_session)
 
         assert next_state == states.AWAITING_DURATION
         assert "John" in response
 
-    def test_returning_client_with_preferred_therapist(
+    def test_returning_client_choice_2_reschedules(self, db_session):
+        """Returning client (no preferred therapist) choice 2 shows reschedule."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "2", db_session)
+
+        assert next_state == states.IDLE
+        assert "appointment" in response.lower()
+
+    def test_returning_client_invalid_choice_reshows_menu(self, db_session):
+        """Returning client with invalid choice re-shows main menu."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "9", db_session)
+
+        assert next_state == states.IDLE
+        assert "book" in response.lower()
+
+    def test_preferred_therapist_choice_1_rebooks(
         self, db_session, sample_therapist
     ):
-        """Returning client with preferred therapist gets rebook menu."""
+        """Client with preferred therapist choice 1 rebooks with same therapist."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -62,27 +103,66 @@ class TestHandleIdle:
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_idle(client, "hi", db_session)
+        next_state, response = handle_idle(client, "1", db_session)
 
-        assert next_state == states.AWAITING_REBOOK_CHOICE
-        assert "John" in response
-        assert sample_therapist.display_name in response
+        assert next_state == states.AWAITING_DURATION
+        assert client.preferred_therapist_id == sample_therapist.id
+        conv_data = json.loads(client.conversation_data or "{}")
+        assert conv_data.get("rebooking") is True
 
-    def test_reschedule_keyword_triggers_reschedule_flow(self, db_session):
-        """Reschedule keyword should trigger reschedule handler."""
+    def test_preferred_therapist_choice_2_clears_and_books(
+        self, db_session, sample_therapist
+    ):
+        """Client with preferred therapist choice 2 clears preference and books."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
             conversation_state=states.IDLE,
+            preferred_therapist_id=sample_therapist.id,
         )
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_idle(client, "reschedule", db_session)
+        next_state, response = handle_idle(client, "2", db_session)
+
+        assert next_state == states.AWAITING_DURATION
+        assert client.preferred_therapist_id is None
+
+    def test_preferred_therapist_choice_3_reschedules(
+        self, db_session, sample_therapist
+    ):
+        """Client with preferred therapist choice 3 shows reschedule."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+            preferred_therapist_id=sample_therapist.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "3", db_session)
 
         assert next_state == states.IDLE
-        # Should show upcoming appointments (even if empty)
         assert "appointment" in response.lower()
+
+    def test_preferred_therapist_invalid_choice_reshows_menu(
+        self, db_session, sample_therapist
+    ):
+        """Client with preferred therapist and invalid choice re-shows menu."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+            preferred_therapist_id=sample_therapist.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "9", db_session)
+
+        assert next_state == states.IDLE
+        assert sample_therapist.display_name in response
 
 
 class TestHandleAwaitingName:
@@ -403,42 +483,160 @@ class TestHandleAwaitingMatchConfirm:
         assert client.conversation_data is None  # Reset
 
 
-class TestHandleAwaitingRebookChoice:
-    """Tests for handle_awaiting_rebook_choice function."""
+class TestCheckGlobalKeywords:
+    """Tests for check_global_keywords — works from any conversation state."""
 
-    def test_choice_1_rebooks_with_same_therapist(self, db_session, sample_therapist):
-        """Choice 1 should rebook with same therapist."""
+    def test_greeting_from_idle_shows_main_menu(self, db_session):
+        """Greeting keyword from IDLE shows main menu."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
-            conversation_state=states.AWAITING_REBOOK_CHOICE,
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "hi", db_session)
+
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.IDLE
+        assert "John" in response
+        assert "book" in response.lower()
+
+    def test_greeting_from_mid_flow_resets_to_menu(self, db_session):
+        """Greeting keyword mid-flow resets conversation and shows menu."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_data='{"duration": 30}',
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "menu", db_session)
+
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.IDLE
+        assert client.conversation_data is None
+
+    def test_all_greeting_keywords_recognized(self, db_session):
+        """All greeting keywords should be recognized."""
+        for keyword in ["hi", "hello", "hey", "menu", "reset", "start"]:
+            client = Client(
+                phone_e164=f"+8521234{keyword}",
+                name="John",
+                conversation_state=states.AWAITING_DURATION,
+            )
+            db_session.add(client)
+            db_session.commit()
+
+            result = check_global_keywords(client, keyword, db_session)
+            assert result is not None, f"Keyword '{keyword}' not recognized"
+            assert result[0] == states.IDLE
+
+    def test_book_keyword_with_name_starts_booking(self, db_session):
+        """'book' keyword for named client goes to duration selection."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "book", db_session)
+
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.AWAITING_DURATION
+        assert "John" in response
+
+    def test_book_keyword_without_name_asks_for_name(self, db_session):
+        """'book' keyword for new client goes to name collection."""
+        client = Client(
+            phone_e164="+85212345678",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "book", db_session)
+
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.AWAITING_NAME
+        assert "name" in response.lower()
+
+    def test_reschedule_keyword_from_any_state(self, db_session):
+        """'reschedule' keyword should work from any state."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_TIME_BAND,
+            conversation_data='{"duration": 30}',
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "reschedule", db_session)
+
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.IDLE
+        assert "appointment" in response.lower()
+
+    def test_cancel_keyword_triggers_reschedule(self, db_session):
+        """'cancel' keyword should trigger reschedule flow."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "cancel", db_session)
+
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.IDLE
+        assert "appointment" in response.lower()
+
+    def test_non_keyword_returns_none(self, db_session):
+        """Non-keyword input should return None for normal handler dispatch."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        result = check_global_keywords(client, "1", db_session)
+        assert result is None
+
+    def test_greeting_shows_preferred_therapist_in_menu(
+        self, db_session, sample_therapist
+    ):
+        """Greeting for client with preferred therapist shows therapist name in menu."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
             preferred_therapist_id=sample_therapist.id,
         )
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_awaiting_rebook_choice(client, "1", db_session)
+        result = check_global_keywords(client, "hello", db_session)
 
-        assert next_state == states.AWAITING_DURATION
-        assert client.preferred_therapist_id == sample_therapist.id  # Preserved
-        conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("rebooking") is True
-
-    def test_choice_2_clears_preferred_therapist(self, db_session, sample_therapist):
-        """Choice 2 should clear preferred therapist."""
-        client = Client(
-            phone_e164="+85212345678",
-            name="John",
-            conversation_state=states.AWAITING_REBOOK_CHOICE,
-            preferred_therapist_id=sample_therapist.id,
-        )
-        db_session.add(client)
-        db_session.commit()
-
-        next_state, response = handle_awaiting_rebook_choice(client, "2", db_session)
-
-        assert next_state == states.AWAITING_DURATION
-        assert client.preferred_therapist_id is None  # Cleared
+        assert result is not None
+        next_state, response = result
+        assert next_state == states.IDLE
+        assert sample_therapist.display_name in response
 
 
 class TestHandleRescheduleRequest:
