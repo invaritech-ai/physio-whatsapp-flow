@@ -3,6 +3,75 @@
 ## Overview
 This application is a WhatsApp Bot designed to streamline the physiotherapy appointment process. It handles customer inquiries, booking via Calendly, payment verification via FPS, and physiotherapist session management.
 
+---
+
+## 🚀 Quick Start
+
+**📖 [Follow the Setup Guide](docs/00-setup-guide.md)** - Complete numbered documentation
+
+### **Essential Setup Steps:**
+
+1. **Generate Encryption Key** (REQUIRED)
+   ```bash
+   python scripts/generate_encryption_key.py
+   ```
+
+2. **Configure Environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your keys (see .env.example for all options)
+   ```
+
+3. **Setup Database**
+   ```bash
+   alembic upgrade head
+   ```
+
+4. **Start Services**
+   ```bash
+   # Terminal 1: Redis
+   redis-server
+
+   # Terminal 2: Celery
+   celery -A app.celery.worker.celery_app worker --loglevel=info
+
+   # Terminal 3: FastAPI
+   uvicorn app.main:app --reload
+   ```
+
+5. **Verify**
+   ```bash
+   curl http://localhost:8000/health
+   ```
+
+### **📚 Documentation Index**
+
+- **[00-setup-guide.md](docs/00-setup-guide.md)** ← START HERE
+- [03-encryption-setup.md](docs/03-encryption-setup.md) - Encryption key setup (CRITICAL)
+- [09-therapist-onboarding.md](docs/09-therapist-onboarding.md) - Onboard therapists
+- [12-therapist-self-service-api.md](docs/12-therapist-self-service-api.md) - API reference
+- [v1-matching-spec.md](docs/v1-matching-spec.md) - Matching algorithm
+- [encrypted-pat-storage.md](docs/encrypted-pat-storage.md) - Security details
+
+### **⚙️ Key Environment Variables**
+
+All variables are configurable via `.env` (see [.env.example](.env.example)):
+
+**Required:**
+- `DATABASE_URL` - PostgreSQL connection string
+- `ENCRYPTION_KEY` - For encrypting therapist Calendly PATs
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` - WhatsApp bot
+- `CALENDLY_API_TOKEN` - Organization token (optional fallback)
+- `NEON_JWKS_URL`, `NEON_JWT_ISSUER` - Web UI authentication
+
+**Optional:**
+- `PUBLIC_BASE_URL` - For webhooks
+- `DEFAULT_CURRENCY` - Defaults to HKD
+- `DEBUG_MODE` - Enable debug logging
+- `CELERY_BROKER_URL` - Redis URL for background tasks
+
+---
+
 ## Bot Logic & Flows
 
 ### 1. Customer Flow

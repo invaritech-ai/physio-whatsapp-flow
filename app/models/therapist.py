@@ -14,4 +14,5 @@ class Therapist(SQLModel, table=True):
     display_name: str
     is_active: bool = Field(default=True)
     calendly_user_uri: str | None = None  # e.g., "https://api.calendly.com/users/XXXXX"
+    calendly_pat_encrypted: str | None = None  # Encrypted Calendly Personal Access Token
     created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))

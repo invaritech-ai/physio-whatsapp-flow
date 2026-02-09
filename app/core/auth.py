@@ -9,8 +9,11 @@ import jwt
 from fastapi import Depends, Header, HTTPException, status
 from jwt import PyJWKClient
 from jwt.types import Options
+from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.db.session import get_session
+from app.models import Therapist, User
 
 
 _JWK_CLIENT: dict[str, Any] = {"url": None, "client": None}
@@ -115,3 +118,53 @@ def get_current_user(token: str = Depends(_get_bearer_token)) -> dict[str, Any]:
         "user_id": claims.get("sub"),
         "email": claims.get("email"),
     }
+
+
+def get_current_therapist(
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> Therapist:
+    """Get current therapist from JWT claims.
+
+    Validates that the authenticated user is a therapist and returns their full profile.
+
+    Raises:
+        HTTPException 401: User not found in database
+        HTTPException 403: User is not a therapist or therapist account is inactive
+        HTTPException 404: Therapist profile not found
+    """
+    # Lookup user by neon_auth_sub (which matches JWT "sub" claim)
+    user = db.exec(
+        select(User).where(User.neon_auth_sub == current_user["user_id"])
+    ).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    if user.role != "therapist":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: therapist role required",
+        )
+
+    # Get therapist profile
+    therapist = db.exec(
+        select(Therapist).where(Therapist.user_id == user.id)
+    ).first()
+
+    if not therapist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Therapist profile not found",
+        )
+
+    if not therapist.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Therapist account is inactive",
+        )
+
+    return therapist

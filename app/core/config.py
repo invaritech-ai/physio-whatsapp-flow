@@ -14,6 +14,9 @@ class Settings(BaseSettings):
 
     calendly_api_token: str | None = None
 
+    # Encryption key for sensitive data (Fernet key - must be 32 url-safe base64-encoded bytes)
+    encryption_key: str | None = None
+
     # Webhook security
     twilio_webhook_secret: str | None = None
     calendly_webhook_secret: str | None = None
