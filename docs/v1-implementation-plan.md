@@ -1,6 +1,6 @@
 # V1 Implementation Plan — Physio Booking System
 
-Version: 1.0 | Date: 2026-02-06 | Status: Pending approval
+Version: 1.1 | Date: 2026-02-09 | Status: In progress
 
 ## Context
 
@@ -42,23 +42,26 @@ This plan is broken into 6 phases, each producing a working (if incomplete) syst
 ## Phase Dependency Graph
 
 ```
-Phase 1 (Models + DB)
-  ├──→ Phase 2 (Bot + Logging)
-  │      └──→ Phase 2.5 (Admin APIs - Minimal CRUD)
-  │             └──→ Phase 3 (Matching + Calendly Webhooks)
-  │                    └──→ Phase 4 (Scheduler)
-  │                           └──→ Phase 5 (Web APIs - Complete)
-  │                                  └──→ Phase 6 (Security + Auth)
+Phase 1 (Models + DB)                           ✅ PR #26
+  ├──→ Phase 2 (Bot + Logging)                   ✅ PR #27
+  │      └──→ Phase 2.5 (Admin APIs)             ✅ PR #28
+  │             └──→ Phase 3.1 (Matching Engine)  ✅ PR pending
+  │                    └──→ Phase 3.2 (Calendly Webhooks)  ← YOU ARE HERE
+  │                           └──→ Phase 4 (Scheduler)
+  │                                  └──→ Phase 5 (Web APIs - Complete)
+  │                                         └──→ Phase 6 (Security + Auth)
   └──→ Phase 2.5 (can also start after Phase 1, parallel with Phase 2)
 ```
 
 **Rationale for Phase 2.5**: Cannot test Phase 2 bot or build Phase 3 matching without therapist/specialty data in DB. Phase 2.5 provides minimal CRUD APIs to enable both.
 
+**Rationale for Phase 3 split**: Matching engine (3.1) is not blocked by Calendly account setup. Calendly webhooks (3.2) require a Standard plan ($10/seat/mo) with Scheduling API + webhooks. Time-band scoring in the matching engine is deferred until 3.2 provides Calendly event type data.
+
 ---
 
-## Phase 1: Data Model Foundation + Clean Slate DB
+## Phase 1: Data Model Foundation + Clean Slate DB ✅
 
-**Branch**: `v1/phase-1-data-models`
+**Branch**: `v1/phase-1-data-models` | **PR**: #26 (merged to dev)
 
 ### Goal
 Replace all 4 existing models with the V1 schema. Wipe Alembic history. Produce a single fresh migration.
@@ -155,9 +158,9 @@ MessageLog: id, direction (inbound|outbound), phone_e164 (indexed), body, media_
 
 ---
 
-## Phase 2: Message Logging + WhatsApp Bot Rewrite (IVR)
+## Phase 2: Message Logging + WhatsApp Bot Rewrite (IVR) ✅
 
-**Branch**: `v1/phase-2-whatsapp-bot`
+**Branch**: `v1/phase-2-whatsapp-bot` | **PR**: #27 (merged to dev)
 
 ### Goal
 Rewrite the WhatsApp bot as a customer-only IVR. Log all messages. Strip all physio/admin handlers.
@@ -235,9 +238,9 @@ Rewrite the WhatsApp bot as a customer-only IVR. Log all messages. Strip all phy
 
 ---
 
-## Phase 2.5: Admin APIs (Therapist & Specialty Management)
+## Phase 2.5: Admin APIs (Therapist & Specialty Management) ✅
 
-**Branch**: `v1/phase-2.5-admin-apis`
+**Branch**: `v1/phase-2.5-admin-apis` | **PR**: #28 (merged to dev)
 
 ### Goal
 Build minimal CRUD APIs for therapists and specialties to enable:
@@ -382,30 +385,70 @@ For Phase 2.5, endpoints remain open to enable rapid testing and frontend integr
 
 ## Phase 3: Matching Engine + Calendly Webhooks
 
-**Branch**: `v1/phase-3-matching-calendly`
+Split into two sub-phases since Calendly webhooks require account setup.
 
-### Goal
-Implement the 4-factor scoring matching engine. Add Calendly webhook receiver. Connect matching to the bot.
+### Phase 3.1: Matching Engine ✅
 
-### Matching Engine (`app/services/matching.py`)
+**Branch**: `v1/phase-3-matching` | **PR**: pending
 
-**Scoring (higher is better)**:
-1. **Specialty match** — therapist has requested specialty
-2. **Continuity bonus** — therapist was client's previous therapist
-3. **Time-band match** — therapist has Calendly event types in the requested time band
-4. **Lower load** — fewer sessions in next 7 days (tie-breaker)
+#### Goal
+Implement the 4-factor scoring matching engine. Connect matching to the bot. Replaces the stub that picked the first active therapist.
 
-**Fallback cascade** (per spec):
-- Level 0: full match (all criteria)
-- Level 1: ignore time preference, keep specialty
-- Level 2: ignore specialty, keep time preference
-- Level 3: any therapist (lowest load)
+#### Matching Engine (`app/services/matching.py`)
 
-**Audit**: Every match persists a `MatchingDecision` row with scoring breakdown, rationale, and fallback level.
+**Scoring weights (higher is better)**:
+1. **Specialty match** (100 pts) — therapist has requested specialty
+2. **Continuity bonus** (30 pts) — therapist is client's `preferred_therapist_id`
+3. **Time-band match** (10 pts) — deferred until Calendly integration (always scores 0, shows `time_band_match: null` in breakdown)
+4. **Lower load** (0-9 pts) — fewer sessions in next 7 days (tie-breaker)
 
-**Output**: `MatchResult` dataclass → `therapist`, `rationale`, `fallback_level`, `scoring`
+Weight separations ensure priority: specialty (100) always beats continuity+time+load (30+10+9=49).
 
-### Calendly Webhook (`app/api/v1/routes/calendly_webhook.py`)
+**Fallback cascade**:
+- Level 0: specialty + time-band match (collapses with Level 1 while time-band deferred)
+- Level 1: specialty only
+- Level 2: time-band only (collapses with Level 3 while time-band deferred)
+- Level 3: any active therapist (lowest load wins)
+
+**Deterministic tie-breaking**: lower therapist ID wins when scores are equal.
+
+**Exclude therapist**: `exclude_therapist_id` parameter filters a therapist from the candidate pool entirely. Used when client picks "Book with a different therapist" — the preferred therapist is excluded (not just ignored), while `preferred_therapist_id` is preserved for future bookings.
+
+**Audit**: Every `match_therapist()` call persists a `MatchingDecision` row with full per-therapist scoring breakdown, rationale, and fallback level — even when no match is found.
+
+**Output**: `MatchResult` dataclass → `therapist`, `rationale`, `fallback_level`, `scoring_breakdown`
+
+#### Bot Connection
+- `handle_awaiting_days` calls `match_therapist()` with specialty, duration, days, preferred/excluded therapist
+- "Rebook with same therapist" (choice 1) → bypasses matching, uses `preferred_therapist_id` directly
+- "Book with different therapist" (choice 2) → stores `exclude_therapist_id` in conversation_data, runs matching with preferred therapist excluded
+- "Book" keyword → runs matching normally, preferred therapist gets continuity bonus
+
+#### New Files
+
+| File | Purpose |
+|------|---------|
+| `app/services/matching.py` | 4-factor scoring engine with fallback cascade |
+| `tests/test_matching.py` | 34 tests: scoring, fallback, audit trail, exclude, determinism |
+
+#### Verify
+- ✅ Matching returns correct therapist for various input combinations
+- ✅ Fallback cascade works (levels 0-3, collapsing while time-band deferred)
+- ✅ `matching_decision` rows appear in DB with per-therapist scoring breakdown
+- ✅ Continuity bonus applied when client has `preferred_therapist_id`
+- ✅ Excluded therapist never matched or shown in breakdown
+- ✅ 181 tests passing (34 matching + 147 existing)
+
+---
+
+### Phase 3.2: Calendly Webhooks
+
+**Branch**: `v1/phase-3.2-calendly-webhooks` (planned)
+
+#### Goal
+Add Calendly webhook receiver and scheduling URL generation. Requires Calendly Standard plan account setup.
+
+#### Calendly Webhook (`app/api/v1/routes/calendly_webhook.py`)
 
 `POST /api/v1/webhooks/calendly` handles:
 - **invitee.created** → create Session (link to Client by invitee info, link to Therapist by event_type_uri → TherapistEventType)
@@ -414,7 +457,7 @@ Implement the 4-factor scoring matching engine. Add Calendly webhook receiver. C
 - Idempotency via unique `calendly_event_uri`
 - No signature verification yet (Phase 6)
 
-### Calendly Service Changes (`app/services/calendly.py`)
+#### Calendly Service Changes (`app/services/calendly.py`)
 
 | Keep | Remove | Add |
 |------|--------|-----|
@@ -422,26 +465,22 @@ Implement the 4-factor scoring matching engine. Add Calendly webhook receiver. C
 | `get_event_link()` | (polling logic) | `parse_webhook_payload(payload) → CalendlyEvent` |
 | | | `get_calendly_headers(therapist)` — supports org or per-therapist tokens |
 
-### Bot Connection
-- `handle_awaiting_days` calls `match_therapist()` → sends rationale + "Reply 1 to book"
+#### Bot Connection
 - `handle_awaiting_match_confirm` calls `get_scheduling_url()` → sends Calendly link
 - Bot never creates Session records — Calendly webhook does that
+- Time-band scoring (10 pts) can be enabled once Calendly event types are queryable
 
-### New Files
+#### New Files
 
 | File | Purpose |
 |------|---------|
-| `app/services/matching.py` | 4-factor scoring engine |
 | `app/api/v1/routes/calendly_webhook.py` | Webhook receiver |
-| `tests/test_matching.py` | Scoring, fallback, audit trail tests |
 | `tests/test_calendly_webhook.py` | Webhook create/reschedule/cancel tests |
 
-### Verify
-- Matching returns correct therapist for various input combinations
-- Fallback cascade works (3 levels)
-- `matching_decision` rows appear in DB with scoring
+#### Verify
 - Calendly webhook creates/updates/cancels Sessions
-- Full bot flow uses real matching and sends real Calendly links
+- Full bot flow sends real Calendly scheduling links
+- Time-band scoring enabled (if Calendly data available)
 
 ---
 
