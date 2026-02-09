@@ -13,6 +13,7 @@ router = APIRouter()
 
 class WhatsAppTestMessage(BaseModel):
     """Schema for manual WhatsApp message testing"""
+
     From: str
     Body: str
     NumMedia: int = 0
@@ -66,7 +67,7 @@ async def whatsapp_test_endpoint(message: WhatsAppTestMessage):
             "status": "queued",
             "task_id": task.id,
             "debug_mode": settings.debug_mode,
-            "note": "Check Celery worker logs for processing output. No Twilio sends if DEBUG_MODE=true"
+            "note": "Check Celery worker logs for processing output. No Twilio sends if DEBUG_MODE=true",
         }
     except Exception as e:
         import traceback

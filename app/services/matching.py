@@ -1,0 +1,333 @@
+"""Therapist matching engine with 4-factor scoring and fallback cascade."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+from sqlmodel import Session, func, select
+
+from app.models import (
+    MatchingDecision,
+    Session as TherapySession,
+    Therapist,
+    TherapistSpecialty,
+    TherapistSpecialtyMap,
+)
+
+# Scoring weights — well-separated so higher-priority factors always dominate
+WEIGHT_SPECIALTY = 100
+WEIGHT_CONTINUITY = 30
+WEIGHT_TIME_BAND = 10  # unused until Calendly availability cache
+WEIGHT_LOAD_MAX = 9  # max load bonus (0 sessions = 9 points)
+
+# Fallback cascade configuration
+FALLBACK_LEVELS = [
+    {"specialty_required": True, "time_band_required": True},  # Level 0
+    {"specialty_required": True, "time_band_required": False},  # Level 1
+    {"specialty_required": False, "time_band_required": True},  # Level 2
+    {"specialty_required": False, "time_band_required": False},  # Level 3
+]
+
+
+@dataclass
+class MatchResult:
+    """Result of the matching engine."""
+
+    therapist: Therapist
+    fallback_level: int
+    rationale: str
+    scoring_breakdown: list[dict]
+
+
+def match_therapist(
+    db: Session,
+    client_id: int,
+    specialty_id: int | None,
+    duration: int,
+    time_band: str | None,
+    preferred_days: list[int] | None,
+    preferred_therapist_id: int | None = None,
+    exclude_therapist_id: int | None = None,
+) -> MatchResult | None:
+    """
+    Run 4-factor scoring engine with fallback cascade.
+
+    Returns MatchResult or None if no active therapists exist.
+    Persists a MatchingDecision audit row for every call.
+    """
+    # Get all active therapists
+    therapists = list(
+        db.exec(
+            select(Therapist)
+            .where(Therapist.is_active == True)  # noqa: E712
+            .order_by(Therapist.id)
+        ).all()
+    )
+
+    # Remove excluded therapist (e.g. "different therapist" flow)
+    if exclude_therapist_id is not None:
+        therapists = [t for t in therapists if t.id != exclude_therapist_id]
+
+    # Resolve specialty name for audit
+    specialty_name = None
+    if specialty_id is not None:
+        specialty = db.exec(
+            select(TherapistSpecialty).where(TherapistSpecialty.id == specialty_id)
+        ).first()
+        specialty_name = specialty.name if specialty else None
+
+    # No active therapists — persist audit and return None
+    if not therapists:
+        _persist_audit(
+            db=db,
+            client_id=client_id,
+            duration=duration,
+            specialty_name=specialty_name,
+            time_band=time_band,
+            days=preferred_days,
+            selected_therapist_id=None,
+            scoring_breakdown=[],
+            rationale="No active therapists available.",
+            fallback_level=3,
+        )
+        return None
+
+    # Get specialty therapist IDs
+    specialty_therapist_ids = _get_specialty_therapist_ids(db, specialty_id)
+
+    # Get load for all active therapists
+    therapist_ids = [t.id for t in therapists]
+    load_map = _get_therapist_load(db, therapist_ids)
+
+    # Score all therapists (for the full breakdown)
+    all_scores = []
+    for t in therapists:
+        score = _score_therapist(
+            therapist=t,
+            specialty_therapist_ids=specialty_therapist_ids,
+            preferred_therapist_id=preferred_therapist_id,
+            load=load_map.get(t.id, 0),
+        )
+        all_scores.append(score)
+
+    # Run fallback cascade
+    for level, criteria in enumerate(FALLBACK_LEVELS):
+        candidates = _filter_candidates(
+            therapists=therapists,
+            scores=all_scores,
+            specialty_therapist_ids=specialty_therapist_ids,
+            specialty_id=specialty_id,
+            specialty_required=criteria["specialty_required"],
+            time_band_required=criteria["time_band_required"],
+        )
+
+        if candidates:
+            # Sort by total_score descending, then by therapist ID ascending for determinism
+            candidates.sort(key=lambda c: (-c[1]["total_score"], c[0].id))
+            winner, winner_score = candidates[0]
+
+            # Mark the selected therapist in breakdown
+            breakdown = _mark_selected(all_scores, winner.id)
+
+            rationale = _build_rationale(
+                therapist=winner,
+                specialty_name=specialty_name,
+                fallback_level=level,
+                has_continuity=winner_score["continuity_match"],
+            )
+
+            _persist_audit(
+                db=db,
+                client_id=client_id,
+                duration=duration,
+                specialty_name=specialty_name,
+                time_band=time_band,
+                days=preferred_days,
+                selected_therapist_id=winner.id,
+                scoring_breakdown=breakdown,
+                rationale=rationale,
+                fallback_level=level,
+            )
+
+            return MatchResult(
+                therapist=winner,
+                fallback_level=level,
+                rationale=rationale,
+                scoring_breakdown=breakdown,
+            )
+
+    # Should not reach here (level 3 has no filters), but handle gracefully
+    _persist_audit(
+        db=db,
+        client_id=client_id,
+        duration=duration,
+        specialty_name=specialty_name,
+        time_band=time_band,
+        days=preferred_days,
+        selected_therapist_id=None,
+        scoring_breakdown=_mark_selected(all_scores, None),
+        rationale="No therapists matched after exhausting all fallback levels.",
+        fallback_level=3,
+    )
+    return None
+
+
+def _get_specialty_therapist_ids(db: Session, specialty_id: int | None) -> set[int]:
+    """Get IDs of therapists who have the given specialty."""
+    if specialty_id is None:
+        return set()
+
+    rows = db.exec(
+        select(TherapistSpecialtyMap.therapist_id).where(
+            TherapistSpecialtyMap.specialty_id == specialty_id
+        )
+    ).all()
+    return set(rows)
+
+
+def _get_therapist_load(db: Session, therapist_ids: list[int]) -> dict[int, int]:
+    """Count non-cancelled sessions in the next 7 days per therapist."""
+    if not therapist_ids:
+        return {}
+
+    now = datetime.now(timezone.utc)
+    week_later = now + timedelta(days=7)
+
+    rows = db.exec(
+        select(TherapySession.therapist_id, func.count(TherapySession.id))
+        .where(
+            TherapySession.therapist_id.in_(therapist_ids),  # type: ignore[union-attr]
+            TherapySession.status != "cancelled",
+            TherapySession.start_time >= now,
+            TherapySession.start_time < week_later,
+        )
+        .group_by(TherapySession.therapist_id)
+    ).all()
+
+    return {therapist_id: count for therapist_id, count in rows}
+
+
+def _score_therapist(
+    therapist: Therapist,
+    specialty_therapist_ids: set[int],
+    preferred_therapist_id: int | None,
+    load: int,
+) -> dict:
+    """Compute per-therapist score breakdown."""
+    has_specialty = therapist.id in specialty_therapist_ids
+    has_continuity = preferred_therapist_id is not None and therapist.id == preferred_therapist_id
+
+    specialty_score = WEIGHT_SPECIALTY if has_specialty else 0
+    continuity_score = WEIGHT_CONTINUITY if has_continuity else 0
+    time_band_score = 0  # Deferred until Calendly integration
+    load_score = max(0, WEIGHT_LOAD_MAX - load)
+
+    total = specialty_score + continuity_score + time_band_score + load_score
+
+    return {
+        "therapist_id": therapist.id,
+        "therapist_name": therapist.display_name,
+        "total_score": total,
+        "specialty_match": has_specialty,
+        "specialty_score": specialty_score,
+        "continuity_match": has_continuity,
+        "continuity_score": continuity_score,
+        "time_band_match": None,  # None = not evaluated (deferred)
+        "time_band_score": time_band_score,
+        "upcoming_sessions": load,
+        "load_score": load_score,
+        "selected": False,  # Will be set later by _mark_selected
+    }
+
+
+def _filter_candidates(
+    therapists: list[Therapist],
+    scores: list[dict],
+    specialty_therapist_ids: set[int],
+    specialty_id: int | None,
+    specialty_required: bool,
+    time_band_required: bool,
+) -> list[tuple[Therapist, dict]]:
+    """Filter therapists based on fallback level criteria."""
+    candidates = []
+    for therapist, score in zip(therapists, scores):
+        # Specialty filter
+        if specialty_required and specialty_id is not None:
+            if therapist.id not in specialty_therapist_ids:
+                continue
+
+        # Time-band filter — deferred, always passes
+        # if time_band_required:
+        #     pass  # Will check availability cache when Calendly is integrated
+
+        candidates.append((therapist, score))
+    return candidates
+
+
+def _mark_selected(scores: list[dict], winner_id: int | None) -> list[dict]:
+    """Return a copy of scores with selected=True on the winner."""
+    result = []
+    for score in scores:
+        entry = dict(score)
+        entry["selected"] = entry["therapist_id"] == winner_id
+        result.append(entry)
+    return result
+
+
+def _build_rationale(
+    therapist: Therapist,
+    specialty_name: str | None,
+    fallback_level: int,
+    has_continuity: bool,
+) -> str:
+    """Build a one-line rationale string."""
+    name = therapist.display_name
+
+    if fallback_level <= 1 and specialty_name:
+        parts = [f"Matched {specialty_name} specialist {name}"]
+        extras = []
+        if has_continuity:
+            extras.append("continuity bonus")
+        extras.append("low load")
+        if fallback_level == 1:
+            extras.append("time preference relaxed")
+        parts.append(f" ({', '.join(extras)}).")
+        return "".join(parts)
+
+    if fallback_level == 2:
+        return f"Matched {name} (specialty relaxed, low load)."
+
+    # Level 3 or no specialty
+    return f"Matched {name} (any available therapist, lowest load)."
+
+
+def _persist_audit(
+    db: Session,
+    client_id: int,
+    duration: int,
+    specialty_name: str | None,
+    time_band: str | None,
+    days: list[int] | None,
+    selected_therapist_id: int | None,
+    scoring_breakdown: list[dict],
+    rationale: str,
+    fallback_level: int,
+) -> MatchingDecision:
+    """Create and persist a MatchingDecision audit row."""
+    decision = MatchingDecision(
+        client_id=client_id,
+        requested_duration=duration,
+        requested_specialty=specialty_name,
+        requested_time_band=time_band,
+        requested_days=json.dumps(days) if days is not None else None,
+        selected_therapist_id=selected_therapist_id,
+        scoring_breakdown=json.dumps(scoring_breakdown),
+        rationale=rationale,
+        fallback_level=fallback_level,
+    )
+    db.add(decision)
+    db.commit()
+    db.refresh(decision)
+    return decision

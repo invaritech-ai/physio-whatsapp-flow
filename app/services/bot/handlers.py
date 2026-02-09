@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 
 from app.models import Therapist, TherapistSpecialty
 from app.services.bot import menus, states
+from app.services.matching import match_therapist
 from app.services.bot.helpers import (
     get_conversation_data,
     reset_conversation,
@@ -76,7 +77,9 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             db.commit()
             return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
         elif choice == 2:
-            client.preferred_therapist_id = None
+            update_conversation_data(
+                client, exclude_therapist_id=client.preferred_therapist_id
+            )
             db.add(client)
             db.commit()
             return (states.AWAITING_DURATION, menus.build_duration_menu(client.name))
@@ -237,7 +240,7 @@ def handle_awaiting_days(client, body: str, db: Session) -> tuple[str, str]:
     Handle AWAITING_DAYS state - validate day selections and match therapist.
 
     Valid choices: 1-7 (Monday-Sunday), can be comma-separated
-    After collecting days, performs therapist matching (stubbed in Phase 2).
+    After collecting days, runs the matching engine (4-factor scoring with fallback).
     """
     # Validate day choices
     valid_days = [1, 2, 3, 4, 5, 6, 7]
@@ -271,23 +274,33 @@ def handle_awaiting_days(client, body: str, db: Session) -> tuple[str, str]:
         if not matched_therapist:
             is_rebooking = False
 
-    # STUB: Matching logic (Phase 3 will replace this)
+    # Use matching engine for non-rebook cases
+    fallback_level = 0
     if not is_rebooking or not matched_therapist:
-        # For now, just get the first active therapist
-        matched_therapist = db.exec(
-            select(Therapist).where(Therapist.is_active == True)  # noqa: E712
-        ).first()
-
-    if not matched_therapist:
-        reset_conversation(client, db)
-        return (
-            states.IDLE,
-            "Sorry, no therapists are currently available. Please try again later.",
+        result = match_therapist(
+            db=db,
+            client_id=client.id,
+            specialty_id=conv_data.get("specialty_id"),
+            duration=conv_data.get("duration", 30),
+            time_band=conv_data.get("time_band"),
+            preferred_days=days,
+            preferred_therapist_id=client.preferred_therapist_id,
+            exclude_therapist_id=conv_data.get("exclude_therapist_id"),
         )
+
+        if result is None:
+            reset_conversation(client, db)
+            return (
+                states.IDLE,
+                "Sorry, no therapists are currently available. Please try again later.",
+            )
+
+        matched_therapist = result.therapist
+        fallback_level = result.fallback_level
 
     # Save matched therapist to conversation data
     update_conversation_data(
-        client, matched_therapist_id=matched_therapist.id, fallback_level=0
+        client, matched_therapist_id=matched_therapist.id, fallback_level=fallback_level
     )
     db.add(client)
     db.commit()
@@ -306,7 +319,7 @@ def handle_awaiting_days(client, body: str, db: Session) -> tuple[str, str]:
         specialty=specialty_name,
         time_band=conv_data["time_band"],
         days=days,
-        fallback_level=0,
+        fallback_level=fallback_level,
     )
 
     return (states.AWAITING_MATCH_CONFIRM, confirmation_menu)
