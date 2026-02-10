@@ -231,7 +231,7 @@ def update_specialties(
     """
     try:
         specialties, errors = update_therapist_specialties(
-            db, therapist, data.specialty_ids
+            db, therapist, data.specialty_ids, data.new_specialties
         )
 
         if errors:

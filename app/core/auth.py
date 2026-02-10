@@ -263,3 +263,41 @@ def get_current_therapist_allow_inactive(
 
     # Allow inactive therapists for onboarding
     return therapist
+
+
+def get_current_admin(
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> User:
+    """Get current admin user from JWT claims.
+
+    Validates that the authenticated user has admin role.
+
+    Raises:
+        HTTPException 403: User not found, not an admin, or inactive
+    """
+    neon_auth_sub = current_user["user_id"]
+
+    user = db.exec(
+        select(User).where(User.neon_auth_sub == neon_auth_sub)
+    ).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: admin role required",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive",
+        )
+
+    return user

@@ -154,28 +154,60 @@ def update_therapist_specialties(
     db: Session,
     therapist: Therapist,
     specialty_ids: list[int],
+    new_specialties: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Update therapist's specialty assignments.
 
     Args:
         db: Database session
         therapist: Therapist model instance
-        specialty_ids: List of specialty IDs to assign
+        specialty_ids: List of existing specialty IDs to assign
+        new_specialties: List of new specialty names to create and assign
 
     Returns:
         Tuple of (specialties, errors)
         - specialties: List of assigned specialty data
         - errors: List of error messages (empty if successful)
     """
-    # Validate all specialty IDs exist
-    specialties = db.exec(
-        select(TherapistSpecialty).where(TherapistSpecialty.id.in_(specialty_ids))  # type: ignore
-    ).all()
+    all_specialties: list[TherapistSpecialty] = []
 
-    if len(specialties) != len(specialty_ids):
-        found_ids = {s.id for s in specialties}
-        invalid_ids = set(specialty_ids) - found_ids
-        return [], [f"Invalid specialty IDs: {', '.join(map(str, invalid_ids))}"]
+    # Validate existing specialty IDs
+    if specialty_ids:
+        existing = db.exec(
+            select(TherapistSpecialty).where(TherapistSpecialty.id.in_(specialty_ids))  # type: ignore
+        ).all()
+
+        if len(existing) != len(specialty_ids):
+            found_ids = {s.id for s in existing}
+            invalid_ids = set(specialty_ids) - found_ids
+            return [], [f"Invalid specialty IDs: {', '.join(map(str, invalid_ids))}"]
+
+        all_specialties.extend(existing)
+
+    # Create or find new specialties by name
+    if new_specialties:
+        for name in new_specialties:
+            name = name.strip()
+            if not name:
+                continue
+            # Check if specialty with this name already exists (case-insensitive)
+            existing_by_name = db.exec(
+                select(TherapistSpecialty).where(
+                    TherapistSpecialty.name.ilike(name)  # type: ignore
+                )
+            ).first()
+            if existing_by_name:
+                # Reuse existing specialty (avoid duplicates)
+                if existing_by_name not in all_specialties:
+                    all_specialties.append(existing_by_name)
+            else:
+                new_specialty = TherapistSpecialty(name=name)
+                db.add(new_specialty)
+                db.flush()  # Get the ID assigned
+                all_specialties.append(new_specialty)
+
+    if not all_specialties:
+        return [], ["At least one specialty is required"]
 
     # Delete existing specialty mappings
     existing_mappings = db.exec(
@@ -187,17 +219,17 @@ def update_therapist_specialties(
         db.delete(mapping)
 
     # Create new mappings
-    for specialty_id in specialty_ids:
+    for specialty in all_specialties:
         mapping = TherapistSpecialtyMap(
             therapist_id=therapist.id,
-            specialty_id=specialty_id,
+            specialty_id=specialty.id,
         )
         db.add(mapping)
 
     # Note: Do NOT commit here - let the route control the transaction
 
     # Return specialty info
-    specialty_data = [{"id": s.id, "name": s.name} for s in specialties]
+    specialty_data = [{"id": s.id, "name": s.name} for s in all_specialties]
     return specialty_data, []
 
 

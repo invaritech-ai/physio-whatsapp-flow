@@ -9,8 +9,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.db.session import engine
 
 
@@ -41,14 +45,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow browser clients to call the API during dev.
-# TODO: tighten origins for production.
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS configuration
+def _get_cors_origins() -> list[str]:
+    if settings.app_env == "development":
+        return ["*"]
+    origins: list[str] = []
+    if settings.web_base_url:
+        origins.append(settings.web_base_url)
+    return origins or ["*"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_get_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(api_router)

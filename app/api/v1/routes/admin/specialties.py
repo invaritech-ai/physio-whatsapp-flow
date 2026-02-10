@@ -3,8 +3,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.core.auth import get_current_admin
 from app.db.session import get_session
-from app.models import TherapistSpecialty
+from app.models import TherapistSpecialty, User
 from app.api.v1.schemas.specialty import (
     SpecialtyCreate,
     SpecialtyUpdate,
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/admin/specialties", tags=["Admin - Specialties"])
 
 
 @router.post("", response_model=SpecialtyResponse, status_code=201)
-def create_specialty(data: SpecialtyCreate, db: Session = Depends(get_session)):
+def create_specialty(data: SpecialtyCreate, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """Create a new specialty."""
     # Check if name already exists
     existing = db.exec(
@@ -42,7 +43,7 @@ def create_specialty(data: SpecialtyCreate, db: Session = Depends(get_session)):
 
 
 @router.get("", response_model=list[SpecialtyResponse])
-def list_specialties(active_only: bool = False, db: Session = Depends(get_session)):
+def list_specialties(active_only: bool = False, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """List all specialties (optionally filter to active only)."""
     stmt = select(TherapistSpecialty).order_by(TherapistSpecialty.name)
 
@@ -60,7 +61,7 @@ def list_specialties(active_only: bool = False, db: Session = Depends(get_sessio
 
 
 @router.get("/{specialty_id}", response_model=SpecialtyResponse)
-def get_specialty(specialty_id: int, db: Session = Depends(get_session)):
+def get_specialty(specialty_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """Get specialty detail."""
     specialty = db.get(TherapistSpecialty, specialty_id)
     if not specialty:
@@ -76,7 +77,7 @@ def get_specialty(specialty_id: int, db: Session = Depends(get_session)):
 
 @router.patch("/{specialty_id}", response_model=SpecialtyResponse)
 def update_specialty(
-    specialty_id: int, data: SpecialtyUpdate, db: Session = Depends(get_session)
+    specialty_id: int, data: SpecialtyUpdate, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)
 ):
     """Update specialty details."""
     specialty = db.get(TherapistSpecialty, specialty_id)
@@ -115,7 +116,7 @@ def update_specialty(
 
 
 @router.delete("/{specialty_id}", status_code=204)
-def delete_specialty(specialty_id: int, db: Session = Depends(get_session)):
+def delete_specialty(specialty_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """Soft-delete specialty (set is_active=false)."""
     specialty = db.get(TherapistSpecialty, specialty_id)
     if not specialty:

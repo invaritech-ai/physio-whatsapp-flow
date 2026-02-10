@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.core.auth import get_current_admin
 from app.db.session import get_session
 from app.models import AccessRequest, Therapist, User
 from app.api.v1.schemas.access_request import (
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/admin/access-requests", tags=["Admin - Access Reques
 @router.get("", response_model=list[AccessRequestListResponse])
 def list_access_requests(
     status: str | None = None,
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
     """
@@ -54,6 +56,7 @@ def list_access_requests(
 def approve_access_request(
     request_id: int,
     data: AccessRequestApprove,
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
     """
@@ -104,6 +107,7 @@ def approve_access_request(
     # Mark access request as approved
     access_request.status = "approved"
     access_request.reviewed_at = datetime.now(timezone.utc)
+    access_request.reviewed_by = admin.id
     db.add(access_request)
 
     db.commit()
@@ -125,6 +129,7 @@ def approve_access_request(
 @router.post("/{request_id}/reject", status_code=204)
 def reject_access_request(
     request_id: int,
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
     """
@@ -145,6 +150,7 @@ def reject_access_request(
     # Mark as rejected
     access_request.status = "rejected"
     access_request.reviewed_at = datetime.now(timezone.utc)
+    access_request.reviewed_by = admin.id
     db.add(access_request)
     db.commit()
 

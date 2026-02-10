@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # Nested schemas
@@ -94,19 +94,33 @@ class UpdateProfileRequest(BaseModel):
 
 
 class UpdateSpecialtiesRequest(BaseModel):
-    """Request to update therapist specialties."""
+    """Request to update therapist specialties.
+
+    Accepts existing specialty IDs and/or new specialty names.
+    New names are auto-created as specialties. At least one must be provided.
+    """
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "specialty_ids": [1, 3, 5],
+                "specialty_ids": [1, 3],
+                "new_specialties": ["Sports Rehab", "Neurological"],
             }
         }
     )
 
     specialty_ids: list[int] = Field(
-        ..., min_length=1, description="List of specialty IDs to assign"
+        default=[], description="List of existing specialty IDs to assign"
     )
+    new_specialties: list[str] = Field(
+        default=[], description="List of new specialty names to create and assign"
+    )
+
+    @model_validator(mode="after")
+    def at_least_one_specialty(self) -> "UpdateSpecialtiesRequest":
+        if not self.specialty_ids and not self.new_specialties:
+            raise ValueError("At least one specialty_id or new_specialty name is required")
+        return self
 
 
 class SaveCalendlyRequest(BaseModel):
