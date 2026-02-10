@@ -146,6 +146,40 @@ def get_user_info_with_pat(calendly_pat: str) -> dict[str, Any] | None:
     return None
 
 
+def get_scheduled_event_with_pat(
+    event_uri: str, calendly_pat: str
+) -> dict[str, Any] | None:
+    """Fetch full scheduled event details using provided Personal Access Token.
+
+    Args:
+        event_uri: Full Calendly scheduled event URI
+                   (e.g., "https://api.calendly.com/scheduled_events/XXXXX")
+        calendly_pat: Therapist's Calendly Personal Access Token
+
+    Returns:
+        Dictionary with start_time, end_time, event_type (URI), status — or None on failure
+    """
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(event_uri, headers=pat_headers, timeout=20)
+        if response.status_code == 200:
+            resource = response.json()["resource"]
+            return {
+                "start_time": resource["start_time"],
+                "end_time": resource["end_time"],
+                "event_type": resource["event_type"],
+                "status": resource.get("status", "active"),
+            }
+    except Exception:
+        pass
+
+    return None
+
+
 def get_event_types_with_pat(user_uri: str, calendly_pat: str) -> list[dict[str, Any]]:
     """Fetch event types using provided Personal Access Token.
 

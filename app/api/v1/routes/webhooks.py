@@ -9,8 +9,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.core.encryption import decrypt_string
 from app.db.session import get_session
 from app.models import Client, Session as TherapySession, Therapist, TherapistEventType
+from app.services.calendly import get_scheduled_event_with_pat
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -106,9 +108,11 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             "uri": "https://api.calendly.com/scheduled_events/XXXXX/invitees/YYYYY",
             "email": "patient@example.com",
             "name": "John Doe",
-            "created_at": "2026-02-09T10:00:00.000000Z",
             ...
         },
+        "event_memberships": [
+            {"user": "https://api.calendly.com/users/XXXXX"}
+        ],
         "questions_and_answers": [
             {"question": "Phone Number", "answer": "+85212345678"}
         ]
@@ -118,9 +122,58 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
         # Extract data from payload
         event_uri = payload.get("event")
         invitee = payload.get("invitee", {})
-        invitee_email = invitee.get("email")
+        invitee_uri = invitee.get("uri")
         invitee_name = invitee.get("name")
         questions_and_answers = payload.get("questions_and_answers", [])
+
+        # Extract therapist's Calendly user URI from event memberships
+        event_memberships = payload.get("event_memberships", [])
+        if not event_memberships:
+            logger.error("No event_memberships in webhook payload")
+            return {"status": "error", "message": "Missing event memberships"}
+
+        therapist_calendly_uri = event_memberships[0].get("user")
+
+        # Look up therapist by Calendly user URI
+        therapist = db.exec(
+            select(Therapist).where(Therapist.calendly_user_uri == therapist_calendly_uri)
+        ).first()
+
+        if not therapist:
+            logger.error(f"No therapist found for Calendly user: {therapist_calendly_uri}")
+            return {"status": "error", "message": "Therapist not found"}
+
+        # Fetch scheduled event details via therapist's PAT
+        if not therapist.calendly_pat_encrypted:
+            logger.error(f"Therapist {therapist.id} has no Calendly PAT")
+            return {"status": "error", "message": "Therapist PAT not configured"}
+
+        pat = decrypt_string(therapist.calendly_pat_encrypted)
+        event_details = get_scheduled_event_with_pat(event_uri, pat)
+
+        if not event_details:
+            logger.error(f"Failed to fetch scheduled event details: {event_uri}")
+            return {"status": "error", "message": "Could not fetch event details"}
+
+        # Parse start/end times
+        start_time = datetime.fromisoformat(
+            event_details["start_time"].replace("Z", "+00:00")
+        )
+        end_time = datetime.fromisoformat(
+            event_details["end_time"].replace("Z", "+00:00")
+        )
+
+        # Look up TherapistEventType by the event_type URI from the scheduled event
+        event_type_uri = event_details["event_type"]
+        therapist_event_type = db.exec(
+            select(TherapistEventType).where(
+                TherapistEventType.calendly_event_type_uri == event_type_uri
+            )
+        ).first()
+
+        if not therapist_event_type:
+            logger.error(f"No TherapistEventType found for event type URI: {event_type_uri}")
+            return {"status": "error", "message": "Event type not found"}
 
         # Extract phone number from custom questions
         phone_number = None
@@ -140,50 +193,34 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             phone_e164 = f"+{phone_e164}"
 
         # Find or create client by phone number
-        stmt = select(Client).where(Client.phone_e164 == phone_e164)
-        client = db.exec(stmt).first()
+        client = db.exec(
+            select(Client).where(Client.phone_e164 == phone_e164)
+        ).first()
 
         if not client:
-            # Create new client
             client = Client(
                 phone_e164=phone_e164,
                 name=invitee_name or "Unknown",
                 conversation_state="IDLE",
             )
             db.add(client)
-            db.flush()  # Get client.id without committing
+            db.flush()
             logger.info(f"Created new client: {client.id} ({phone_e164})")
         else:
-            # Update name if not set
             if not client.name and invitee_name:
                 client.name = invitee_name
                 db.add(client)
             logger.info(f"Found existing client: {client.id} ({phone_e164})")
 
-        # Find therapist by event URI
-        # The event URI contains the event type, which links to TherapistEventType
-        stmt = select(TherapistEventType).where(
-            TherapistEventType.calendly_event_type_uri.contains(event_uri)  # type: ignore
-        )
-        therapist_event_type = db.exec(stmt).first()
-
-        if not therapist_event_type:
-            logger.error(f"No therapist event type found for event URI: {event_uri}")
-            return {"status": "error", "message": "Event type not found"}
-
-        therapist_id = therapist_event_type.therapist_id
-
-        # Parse scheduled time from event (would need to fetch from Calendly API)
-        # For now, create session without scheduled_at (will be updated later)
-        # TODO: Fetch full event details from Calendly API to get start_time
-
         # Create therapy session record
         session = TherapySession(
             client_id=client.id,
-            therapist_id=therapist_id,
+            therapist_id=therapist.id,
+            start_time=start_time,
+            end_time=end_time,
             duration_minutes=therapist_event_type.duration_minutes,
-            amount_cents=0,  # Will be set later based on pricing
             calendly_event_uri=event_uri,
+            calendly_invitee_uri=invitee_uri,
             source="calendly",
             status="scheduled",
         )
@@ -193,14 +230,14 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
 
         logger.info(
             f"Created session {session.id} for client {client.id} "
-            f"with therapist {therapist_id} (duration: {session.duration_minutes}min)"
+            f"with therapist {therapist.id} (duration: {session.duration_minutes}min)"
         )
 
         return {
             "status": "success",
             "session_id": session.id,
             "client_id": client.id,
-            "therapist_id": therapist_id,
+            "therapist_id": therapist.id,
         }
 
     except Exception as e:
@@ -226,11 +263,11 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
             return {"status": "not_found", "message": "Session not found"}
 
         # Update session status
-        session.status = "canceled"
+        session.status = "cancelled"
         db.add(session)
         db.commit()
 
-        logger.info(f"Marked session {session.id} as canceled")
+        logger.info(f"Marked session {session.id} as cancelled")
 
         return {
             "status": "success",

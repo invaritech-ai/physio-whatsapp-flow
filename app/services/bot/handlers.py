@@ -2,7 +2,7 @@
 
 from sqlmodel import Session, select
 
-from app.models import Therapist, TherapistSpecialty
+from app.models import Therapist, TherapistEventType, TherapistSpecialty
 from app.services.bot import menus, states
 from app.services.matching import match_therapist
 from app.services.bot.helpers import (
@@ -364,9 +364,24 @@ def handle_awaiting_match_confirm(client, body: str, db: Session) -> tuple[str, 
         reset_conversation(client, db)
         return (states.IDLE, menus.build_error_message())
 
-    # STUB: Generate Calendly link (Phase 3 will replace this)
-    # In Phase 3, this will call the Calendly service to get a real scheduling URL
-    calendly_link = f"https://calendly.com/stub-therapist-{therapist.id}-{duration}min"
+    # Look up real Calendly scheduling URL for this therapist + duration
+    event_type = db.exec(
+        select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist.id,
+            TherapistEventType.duration_minutes == duration,
+            TherapistEventType.is_active == True,  # noqa: E712
+        )
+    ).first()
+
+    if not event_type:
+        reset_conversation(client, db)
+        return (
+            states.IDLE,
+            "Sorry, this therapist doesn't have a booking link for that duration. "
+            "Please try again or choose a different option.",
+        )
+
+    calendly_link = event_type.scheduling_url
 
     # Save preferred therapist for future rebookings
     client.preferred_therapist_id = matched_therapist_id
