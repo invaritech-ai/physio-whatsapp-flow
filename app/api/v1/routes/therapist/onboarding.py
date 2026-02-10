@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from app.core.auth import get_current_therapist
+from app.core.auth import get_current_therapist_allow_inactive
 from app.db.session import get_session
 from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
 from app.api.v1.schemas.therapist_onboarding import (
@@ -13,8 +13,12 @@ from app.api.v1.schemas.therapist_onboarding import (
     ValidateCalendlyRequest,
     ValidateCalendlyResponse,
     EventTypeSyncResponse,
+    UpdateProfileRequest,
+    UpdateProfileResponse,
     UpdateSpecialtiesRequest,
     UpdateSpecialtiesResponse,
+    SaveCalendlyRequest,
+    SaveCalendlyResponse,
     TherapistProfileResponse,
     EventTypeInfo,
     EventTypeDetail,
@@ -33,7 +37,7 @@ router = APIRouter(prefix="/therapist", tags=["Therapist - Onboarding"])
 @router.post("/onboarding/complete", response_model=CompleteOnboardingResponse, status_code=201)
 def complete_onboarding(
     data: CompleteOnboardingRequest,
-    therapist: Therapist = Depends(get_current_therapist),
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
     db: Session = Depends(get_session),
 ):
     """
@@ -76,7 +80,7 @@ def complete_onboarding(
 
 @router.get("/onboarding/status", response_model=OnboardingStatusResponse)
 def get_onboarding_status(
-    therapist: Therapist = Depends(get_current_therapist),
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
     db: Session = Depends(get_session),
 ):
     """
@@ -134,7 +138,7 @@ def get_onboarding_status(
 @router.post("/onboarding/validate-calendly", response_model=ValidateCalendlyResponse)
 def validate_calendly_token(
     data: ValidateCalendlyRequest,
-    therapist: Therapist = Depends(get_current_therapist),
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
 ):
     """
     Validate Calendly PAT and preview what will be synced (dry-run).
@@ -167,7 +171,7 @@ def validate_calendly_token(
 
 @router.post("/sync-event-types", response_model=EventTypeSyncResponse)
 def resync_event_types(
-    therapist: Therapist = Depends(get_current_therapist),
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
     db: Session = Depends(get_session),
 ):
     """
@@ -214,7 +218,7 @@ def resync_event_types(
 @router.patch("/specialties", response_model=UpdateSpecialtiesResponse)
 def update_specialties(
     data: UpdateSpecialtiesRequest,
-    therapist: Therapist = Depends(get_current_therapist),
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
     db: Session = Depends(get_session),
 ):
     """
@@ -250,9 +254,102 @@ def update_specialties(
         raise HTTPException(status_code=500, detail=f"Specialty update failed: {str(e)}")
 
 
+@router.patch("/onboarding/profile", response_model=UpdateProfileResponse)
+def update_profile(
+    data: UpdateProfileRequest,
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+    db: Session = Depends(get_session),
+):
+    """
+    Update therapist profile (display name).
+
+    Step 1 of onboarding: Save therapist's display name.
+    """
+    # Update therapist display_name
+    therapist.display_name = data.display_name
+
+    # Also update user display_name
+    user = db.get(User, therapist.user_id)
+    if user:
+        user.display_name = data.display_name
+
+    db.add(therapist)
+    if user:
+        db.add(user)
+    db.commit()
+    db.refresh(therapist)
+
+    return UpdateProfileResponse(display_name=therapist.display_name)
+
+
+@router.post("/onboarding/calendly", response_model=SaveCalendlyResponse)
+def save_calendly(
+    data: SaveCalendlyRequest,
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+    db: Session = Depends(get_session),
+):
+    """
+    Save Calendly PAT and activate therapist account.
+
+    Step 3 of onboarding: Connect Calendly account, sync event types, and activate.
+
+    This endpoint:
+    1. Validates and encrypts the Calendly PAT
+    2. Syncs event types from Calendly
+    3. Activates the therapist account
+    """
+    from app.services.therapist_onboarding import validate_calendly_pat, sync_event_types
+    from app.core.encryption import encrypt_string
+
+    # Validate PAT
+    success, validation_data, errors = validate_calendly_pat(data.calendly_pat)
+    if not success:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly PAT")
+
+    # Encrypt and save PAT
+    encrypted_pat = encrypt_string(data.calendly_pat)
+    therapist.calendly_pat_encrypted = encrypted_pat
+    therapist.calendly_user_uri = validation_data["user_uri"]
+
+    # Sync event types
+    _, sync_errors = sync_event_types(db, therapist, data.calendly_pat)
+    if sync_errors:
+        raise HTTPException(status_code=400, detail=sync_errors[0])
+
+    # Activate therapist
+    therapist.is_active = True
+
+    db.add(therapist)
+    db.commit()
+    db.refresh(therapist)
+
+    # Get event types for response
+    event_type_objs = db.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist.id)
+    ).all()
+
+    # calendly_user_uri should always be set after validation
+    if not therapist.calendly_user_uri:
+        raise HTTPException(status_code=500, detail="Failed to set Calendly user URI")
+
+    return SaveCalendlyResponse(
+        calendly_user_uri=therapist.calendly_user_uri,
+        event_types_synced=len(event_type_objs),
+        event_types=[
+            EventTypeInfo(
+                duration_minutes=et.duration_minutes,
+                name=None,
+                scheduling_url=et.scheduling_url,
+            )
+            for et in event_type_objs
+        ],
+        is_active=therapist.is_active,
+    )
+
+
 @router.get("/me", response_model=TherapistProfileResponse)
 def get_therapist_profile(
-    therapist: Therapist = Depends(get_current_therapist),
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
     db: Session = Depends(get_session),
 ):
     """

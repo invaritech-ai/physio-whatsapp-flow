@@ -1,3 +1,4 @@
+from app.models.access_request import AccessRequest
 from app.models.client import Client
 from app.models.event_type import TherapistEventType
 from app.models.matching import MatchingDecision
@@ -10,6 +11,7 @@ from app.models.therapist import Therapist
 from app.models.user import User
 
 __all__ = [
+    "AccessRequest",
     "User",
     "Client",
     "Therapist",

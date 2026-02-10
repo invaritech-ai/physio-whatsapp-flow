@@ -23,7 +23,7 @@ class EventTypeDetail(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: int | None
     duration_minutes: int
     scheduling_url: str
     is_active: bool
@@ -34,7 +34,7 @@ class SpecialtyInfo(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: int | None
     name: str
 
 
@@ -53,8 +53,12 @@ class CompleteOnboardingRequest(BaseModel):
         }
     )
 
-    calendly_pat: str = Field(..., min_length=1, description="Calendly Personal Access Token")
-    specialty_ids: list[int] = Field(..., min_length=1, description="List of specialty IDs to assign")
+    calendly_pat: str = Field(
+        ..., min_length=1, description="Calendly Personal Access Token"
+    )
+    specialty_ids: list[int] = Field(
+        ..., min_length=1, description="List of specialty IDs to assign"
+    )
 
 
 class ValidateCalendlyRequest(BaseModel):
@@ -68,7 +72,25 @@ class ValidateCalendlyRequest(BaseModel):
         }
     )
 
-    calendly_pat: str = Field(..., min_length=1, description="Calendly Personal Access Token")
+    calendly_pat: str = Field(
+        ..., min_length=1, description="Calendly Personal Access Token"
+    )
+
+
+class UpdateProfileRequest(BaseModel):
+    """Request to update therapist profile (name)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "display_name": "Dr. Sarah Smith",
+            }
+        }
+    )
+
+    display_name: str = Field(
+        ..., min_length=1, max_length=100, description="Therapist display name"
+    )
 
 
 class UpdateSpecialtiesRequest(BaseModel):
@@ -82,7 +104,25 @@ class UpdateSpecialtiesRequest(BaseModel):
         }
     )
 
-    specialty_ids: list[int] = Field(..., min_length=1, description="List of specialty IDs to assign")
+    specialty_ids: list[int] = Field(
+        ..., min_length=1, description="List of specialty IDs to assign"
+    )
+
+
+class SaveCalendlyRequest(BaseModel):
+    """Request to save Calendly PAT and activate account."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "calendly_pat": "eyJraWQiOiIxY2UxZTEzNj...",
+            }
+        }
+    )
+
+    calendly_pat: str = Field(
+        ..., min_length=1, description="Calendly Personal Access Token"
+    )
 
 
 # Response schemas
@@ -132,10 +172,28 @@ class EventTypeSyncResponse(BaseModel):
     event_types: list[EventTypeInfo]
 
 
+class UpdateProfileResponse(BaseModel):
+    """Response after updating profile."""
+
+    display_name: str
+    message: str = "Profile updated successfully"
+
+
 class UpdateSpecialtiesResponse(BaseModel):
     """Response after updating specialties."""
 
     specialties: list[SpecialtyInfo]
+    message: str = "Specialties updated successfully"
+
+
+class SaveCalendlyResponse(BaseModel):
+    """Response after saving Calendly PAT."""
+
+    calendly_user_uri: str
+    event_types_synced: int
+    event_types: list[EventTypeInfo]
+    is_active: bool
+    message: str = "Calendly connected and account activated"
 
 
 class TherapistProfileResponse(BaseModel):
@@ -143,7 +201,7 @@ class TherapistProfileResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: int | None
     user_id: int
     display_name: str
     email: str | None = None
