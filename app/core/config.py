@@ -14,6 +14,9 @@ class Settings(BaseSettings):
 
     calendly_api_token: str | None = None
 
+    # Encryption key for sensitive data (Fernet key - must be 32 url-safe base64-encoded bytes)
+    encryption_key: str | None = None
+
     # Webhook security
     twilio_webhook_secret: str | None = None
     calendly_webhook_secret: str | None = None
@@ -26,8 +29,10 @@ class Settings(BaseSettings):
     neon_jwt_issuer: str | None = None
     neon_jwt_audience: str | None = None
 
+    app_env: str = "development"
     debug_mode: bool = False
     public_base_url: str | None = None
+    web_base_url: str | None = None
 
     # Celery + Redis
     celery_broker_url: str = "redis://localhost:6379/0"

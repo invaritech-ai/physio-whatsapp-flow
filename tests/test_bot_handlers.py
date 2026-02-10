@@ -126,7 +126,10 @@ class TestHandleIdle:
         next_state, response = handle_idle(client, "2", db_session)
 
         assert next_state == states.AWAITING_DURATION
-        assert client.preferred_therapist_id is None
+        # preferred_therapist_id kept; excluded via conversation_data
+        assert client.preferred_therapist_id == sample_therapist.id
+        conv_data = json.loads(client.conversation_data)
+        assert conv_data["exclude_therapist_id"] == sample_therapist.id
 
     def test_preferred_therapist_choice_3_reschedules(
         self, db_session, sample_therapist

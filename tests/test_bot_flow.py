@@ -273,9 +273,11 @@ class TestRebookFlow:
         result = process_message(form_data, db_session)
         assert result["next_state"] == states.AWAITING_DURATION
 
-        # Verify preferred therapist cleared
+        # Verify preferred therapist kept, but excluded via conversation_data
         db_session.refresh(client)
-        assert client.preferred_therapist_id is None
+        assert client.preferred_therapist_id == sample_therapist.id
+        conv_data = json.loads(client.conversation_data)
+        assert conv_data["exclude_therapist_id"] == sample_therapist.id
 
 
 class TestRescheduleFlow:

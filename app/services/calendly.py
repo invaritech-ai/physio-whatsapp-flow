@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import requests
 
@@ -110,3 +111,62 @@ def get_event_link(duration_minutes: int):
         return target_event.get("scheduling_url")
 
     return "https://calendly.com"
+
+
+# PAT-parameterized functions for therapist self-service onboarding
+
+
+def get_user_info_with_pat(calendly_pat: str) -> dict[str, Any] | None:
+    """Fetch Calendly user info using provided Personal Access Token.
+
+    Args:
+        calendly_pat: Therapist's Calendly Personal Access Token
+
+    Returns:
+        Dictionary with user info (uri, name, email) or None if request fails
+    """
+    url = f"{BASE_URL}/users/me"
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(url, headers=pat_headers, timeout=20)
+        if response.status_code == 200:
+            resource = response.json()["resource"]
+            return {
+                "uri": resource["uri"],
+                "name": resource.get("name", ""),
+                "email": resource.get("email", ""),
+            }
+    except Exception:
+        pass
+
+    return None
+
+
+def get_event_types_with_pat(user_uri: str, calendly_pat: str) -> list[dict[str, Any]]:
+    """Fetch event types using provided Personal Access Token.
+
+    Args:
+        user_uri: Calendly user URI (e.g., "https://api.calendly.com/users/XXXXX")
+        calendly_pat: Therapist's Calendly Personal Access Token
+
+    Returns:
+        List of event type dictionaries from Calendly API
+    """
+    url = f"{BASE_URL}/event_types?user={user_uri}&active=true"
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(url, headers=pat_headers, timeout=20)
+        if response.status_code == 200:
+            return response.json().get("collection", [])
+    except Exception:
+        pass
+
+    return []

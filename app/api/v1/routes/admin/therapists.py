@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.core.auth import get_current_admin
 from app.db.session import get_session
 from app.models import Therapist, TherapistSpecialty, TherapistSpecialtyMap, User
 from app.api.v1.schemas.therapist import (
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/admin/therapists", tags=["Admin - Therapists"])
 
 
 @router.post("", response_model=TherapistResponse, status_code=201)
-def create_therapist(data: TherapistCreate, db: Session = Depends(get_session)):
+def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """
     Create a new therapist (with associated User record).
 
@@ -64,7 +65,7 @@ def create_therapist(data: TherapistCreate, db: Session = Depends(get_session)):
 
 
 @router.get("", response_model=list[TherapistListResponse])
-def list_therapists(db: Session = Depends(get_session)):
+def list_therapists(admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """List all therapists with basic info."""
     stmt = select(Therapist, User).join(User).order_by(Therapist.created_at.desc())
     results = db.exec(stmt).all()
@@ -94,7 +95,7 @@ def list_therapists(db: Session = Depends(get_session)):
 
 
 @router.get("/{therapist_id}", response_model=TherapistResponse)
-def get_therapist(therapist_id: int, db: Session = Depends(get_session)):
+def get_therapist(therapist_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """Get therapist detail with specialties."""
     therapist = db.get(Therapist, therapist_id)
     if not therapist:
@@ -126,7 +127,7 @@ def get_therapist(therapist_id: int, db: Session = Depends(get_session)):
 
 @router.patch("/{therapist_id}", response_model=TherapistResponse)
 def update_therapist(
-    therapist_id: int, data: TherapistUpdate, db: Session = Depends(get_session)
+    therapist_id: int, data: TherapistUpdate, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)
 ):
     """Update therapist details."""
     therapist = db.get(Therapist, therapist_id)
@@ -150,7 +151,7 @@ def update_therapist(
 
 
 @router.delete("/{therapist_id}", status_code=204)
-def delete_therapist(therapist_id: int, db: Session = Depends(get_session)):
+def delete_therapist(therapist_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """Soft-delete therapist (set is_active=false)."""
     therapist = db.get(Therapist, therapist_id)
     if not therapist:
@@ -167,7 +168,7 @@ def delete_therapist(therapist_id: int, db: Session = Depends(get_session)):
 
 @router.post("/{therapist_id}/specialties", status_code=201)
 def assign_specialty(
-    therapist_id: int, data: SpecialtyAssignment, db: Session = Depends(get_session)
+    therapist_id: int, data: SpecialtyAssignment, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)
 ):
     """Assign a specialty to a therapist."""
     # Verify therapist exists
@@ -203,7 +204,7 @@ def assign_specialty(
 
 @router.delete("/{therapist_id}/specialties/{specialty_id}", status_code=204)
 def remove_specialty(
-    therapist_id: int, specialty_id: int, db: Session = Depends(get_session)
+    therapist_id: int, specialty_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)
 ):
     """Remove a specialty from a therapist."""
     assignment = db.exec(
@@ -222,7 +223,7 @@ def remove_specialty(
 
 
 @router.get("/{therapist_id}/specialties", response_model=list[SpecialtyResponse])
-def list_therapist_specialties(therapist_id: int, db: Session = Depends(get_session)):
+def list_therapist_specialties(therapist_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """List all specialties assigned to a therapist."""
     therapist = db.get(Therapist, therapist_id)
     if not therapist:
