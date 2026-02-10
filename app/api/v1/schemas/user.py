@@ -12,7 +12,7 @@ class UserListResponse(BaseModel):
 
     id: int
     email: str
-    display_name: str
+    display_name: str | None
     role: str
     is_active: bool
     has_therapist_profile: bool
