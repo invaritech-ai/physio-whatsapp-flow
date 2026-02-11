@@ -168,6 +168,28 @@ def revoke_user_sessions(
         )
 
 
+def check_token_revocation(
+    user: User,
+    current_user: dict[str, Any],
+    db: Session | None = None,
+) -> None:
+    """Deny access if the user's sessions have been revoked after the token was issued."""
+    if user.revoked_at is None:
+        return
+    token_issued_at = _datetime_from_iat(current_user.get("iat"))
+    revoked_at = user.revoked_at
+    if revoked_at.tzinfo is None:
+        revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+    if token_issued_at is None or token_issued_at < revoked_at:
+        _deny_auth(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_token",
+            db=db,
+            user_id=user.id,
+            reason="token_revoked",
+        )
+
+
 def _get_jwk_client() -> PyJWKClient:
     if not settings.neon_jwks_url:
         raise HTTPException(
@@ -335,19 +357,7 @@ def get_current_approved_user(
             reason="user_inactive",
         )
 
-    if user.revoked_at is not None:
-        token_issued_at = _datetime_from_iat(current_user.get("iat"))
-        revoked_at = user.revoked_at
-        if revoked_at.tzinfo is None:
-            revoked_at = revoked_at.replace(tzinfo=timezone.utc)
-        if token_issued_at is None or token_issued_at < revoked_at:
-            _deny_auth(
-                status.HTTP_401_UNAUTHORIZED,
-                "invalid_token",
-                db=db,
-                user_id=user.id,
-                reason="token_revoked",
-            )
+    check_token_revocation(user, current_user, db)
 
     if user.role != required_role:
         _deny_auth(

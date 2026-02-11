@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from app.core.auth import get_current_user, get_or_create_access_request
+from app.core.auth import check_token_revocation, get_current_user, get_or_create_access_request
 from app.db.session import get_session
 from app.models import User
 
@@ -48,6 +48,7 @@ def read_me(
     ).first()
 
     if user:
+        check_token_revocation(user, current_user, db)
         return MeResponse(
             status="approved",
             role=user.role,

@@ -9,5 +9,8 @@ router = APIRouter()
 # Register therapist routes
 router.include_router(onboarding.router)
 router.include_router(sessions.router)
+# Compatibility mount for frontend contract:
+# /api/v1/therapist/sessions/*
+router.include_router(sessions.router, prefix="/therapist")
 
 __all__ = ["router"]
