@@ -15,5 +15,6 @@ class User(SQLModel, table=True):
     display_name: str | None = None
     role: str  # "admin" or "therapist"
     is_active: bool = Field(default=True)
+    revoked_at: datetime | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))
     updated_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))

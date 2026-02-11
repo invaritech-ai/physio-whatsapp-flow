@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, get_or_create_access_request
 from app.db.session import get_session
-from app.models import AccessRequest, User
+from app.models import User
 
 
 router = APIRouter()
@@ -13,7 +13,7 @@ router = APIRouter()
 class MeResponse(BaseModel):
     """Current user identity and access state."""
 
-    status: str  # "approved" | "pending" | "rejected" | "unknown"
+    status: str  # "approved" | "pending" | "rejected"
     role: str | None = None  # "admin" | "therapist" (only if approved)
     user_id: int | None = None
     email: str | None = None
@@ -30,7 +30,7 @@ def read_me(
     Get current user's identity, role, and access state.
 
     Returns:
-    - status: "approved" (has User record), "pending", "rejected", or "unknown"
+    - status: "approved" (has User record), "pending", or "rejected"
     - role/user_id/display_name: populated only when status is "approved"
 
     The frontend uses this to decide which view to show:
@@ -38,7 +38,7 @@ def read_me(
     - "approved" + role "therapist" → therapist onboarding/dashboard
     - "pending" → waiting screen
     - "rejected" → access denied screen
-    - "unknown" → first-time visitor (access request will be auto-created on next therapist endpoint call)
+    - first-time visitor → auto-creates access request and returns "pending"
     """
     neon_auth_sub = current_user["user_id"]
 
@@ -57,19 +57,12 @@ def read_me(
             is_active=user.is_active,
         )
 
-    # Check access request status
-    access_request = db.exec(
-        select(AccessRequest).where(AccessRequest.neon_auth_sub == neon_auth_sub)
-    ).first()
-
-    if access_request:
-        return MeResponse(
-            status=access_request.status,
-            email=access_request.email,
-        )
-
-    # No user record and no access request — first-time visitor
-    return MeResponse(
-        status="unknown",
+    access_request = get_or_create_access_request(
+        db=db,
+        neon_auth_sub=neon_auth_sub,
         email=current_user.get("email"),
+    )
+    return MeResponse(
+        status=access_request.status,
+        email=access_request.email,
     )

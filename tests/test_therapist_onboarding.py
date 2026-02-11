@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.models import (
+    AccessRequest,
     Therapist,
     TherapistEventType,
     TherapistSpecialty,
@@ -665,7 +666,7 @@ class TestAuthorization:
         """Fail without Authorization header."""
         response = client.get("/api/v1/therapist/me")
         assert response.status_code == 401
-        assert "Authorization" in response.json()["detail"]
+        assert response.json()["detail"] == "invalid_token"
 
     def test_non_therapist_role(self, client, db_session: Session):
         """Fail if user is not a therapist."""
@@ -692,10 +693,58 @@ class TestAuthorization:
             )
 
             assert response.status_code == 403
-            assert "therapist role required" in response.json()["detail"]
+            assert response.json()["detail"] == "access_denied"
+
+    def test_unknown_user_returns_access_pending(self, client, db_session: Session):
+        """Unknown authenticated user gets pending status and access request row is created."""
+        with patch("app.core.auth._verify_neon_token") as mock_verify:
+            mock_verify.return_value = {
+                "sub": "unknown-sub-789",
+                "email": "unknown@test.com",
+            }
+            response = client.get(
+                "/api/v1/therapist/me",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "access_pending"
+
+        access_request = db_session.exec(
+            select(AccessRequest).where(AccessRequest.neon_auth_sub == "unknown-sub-789")
+        ).first()
+        assert access_request is not None
+        assert access_request.status == "pending"
+
+    def test_rejected_access_request_returns_access_denied(
+        self,
+        client,
+        db_session: Session,
+    ):
+        """Rejected access requests are denied on protected endpoints."""
+        access_request = AccessRequest(
+            neon_auth_sub="rejected-sub-789",
+            email="rejected@test.com",
+            status="rejected",
+        )
+        db_session.add(access_request)
+        db_session.commit()
+
+        with patch("app.core.auth._verify_neon_token") as mock_verify:
+            mock_verify.return_value = {
+                "sub": "rejected-sub-789",
+                "email": "rejected@test.com",
+            }
+            response = client.get(
+                "/api/v1/therapist/me",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "access_denied"
 
     def test_inactive_therapist(self, client, db_session: Session, therapist_user: User):
-        """Fail if therapist account is inactive."""
+        """Inactive therapist can access profile endpoint during onboarding."""
         # Create inactive therapist
         therapist = Therapist(
             user_id=therapist_user.id,
@@ -716,5 +765,5 @@ class TestAuthorization:
                 headers={"Authorization": "Bearer test-token"},
             )
 
-            assert response.status_code == 403
-            assert "inactive" in response.json()["detail"]
+            assert response.status_code == 200
+            assert response.json()["is_active"] is False
