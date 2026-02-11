@@ -46,6 +46,12 @@ NEON_JWT_ISSUER=<Issuer from token>
 NEON_JWT_AUDIENCE=<Audience from token>
 ```
 
+**Optional hardening env vars**:
+```
+AUTH_ENFORCE_ACCESS_TTL=true
+AUTH_MAX_ACCESS_TOKEN_TTL_SECONDS=600
+```
+
 **Endpoints**
 - `GET /me` validates the Bearer token and returns basic user info.
 
@@ -77,6 +83,8 @@ NEON_JWT_AUDIENCE=<Audience from token>
 - `/me` returns a 200 with valid token.
 - `/me` returns 401 for invalid or expired token.
 - CORS only allows production frontend.
+- Admin revoke endpoint works: `POST /api/v1/admin/users/{id}/revoke-sessions`.
+- Auth events visible: `GET /api/v1/admin/auth-events`.
 
 ---
 
@@ -84,3 +92,5 @@ NEON_JWT_AUDIENCE=<Audience from token>
 - **401 Unauthorized**: issuer/audience mismatch in backend env.
 - **CORS errors**: missing frontend domain in backend CORS config.
 - **OTP not delivered**: SMTP not configured or mail provider blocked.
+
+See also: [14-security.md](14-security.md) for the full hardening runbook.

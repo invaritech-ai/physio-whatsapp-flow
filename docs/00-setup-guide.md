@@ -70,7 +70,7 @@ Follow these documents in numbered order:
 
 #### [07-seed-data.md](07-seed-data.md)
 - Create specialties
-- Create test therapists (optional)
+- Create first admin user
 - Test data verification
 
 #### [08-deployment.md](08-deployment.md)
@@ -147,7 +147,7 @@ cp .env.example .env
 
 # 4. Setup database
 alembic upgrade head
-python scripts/seed_specialties.py  # Create initial specialties
+PYTHONPATH=. python scripts/seed_db.py --neon-auth-sub "<your-neon-auth-sub>"
 
 # 5. Start services
 # Terminal 1: Redis
@@ -252,7 +252,7 @@ All checks should pass before proceeding to onboard therapists.
 
 ## 🔄 Next Steps After Setup
 
-1. **Create specialties**: `python scripts/seed_specialties.py`
+1. **Seed data**: `PYTHONPATH=. python scripts/seed_db.py --neon-auth-sub "<sub>"`
 2. **Invite therapists**: Add to Calendly, share invitation
 3. **Test bot flow**: Send "hi" to WhatsApp number
 4. **Monitor webhooks**: Watch logs for Calendly events

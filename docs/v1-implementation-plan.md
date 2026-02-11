@@ -46,10 +46,11 @@ Phase 1 (Models + DB)                           ✅ PR #26
   ├──→ Phase 2 (Bot + Logging)                   ✅ PR #27
   │      └──→ Phase 2.5 (Admin APIs)             ✅ PR #28
   │             └──→ Phase 3.1 (Matching Engine)  ✅ PR pending
-  │                    └──→ Phase 3.2 (Calendly Webhooks)  ← YOU ARE HERE
-  │                           └──→ Phase 4 (Scheduler)
-  │                                  └──→ Phase 5 (Web APIs - Complete)
-  │                                         └──→ Phase 6 (Security + Auth)
+  │                    └──→ Phase 3.2 (Calendly Webhooks)  ✅ (on phase-3 branch)
+  │                    └──→ Phase 5 partial (Auth + Admin Users + Therapist Sessions + Onboarding)  ✅ (on phase-3 branch)
+  │                    └──→ Phase 6 partial (Webhook Signatures + CORS + Auth Hardening)  ✅ (on phase-3 branch)
+  │                           └──→ Phase 4 (Scheduler + Session Lifecycle)  ← NEXT
+  │                                  └──→ Phase 5 remainder (Admin Sessions/Payments/Receipts/Clients, Therapist Notes/Payments, Financials)
   └──→ Phase 2.5 (can also start after Phase 1, parallel with Phase 2)
 ```
 
@@ -383,9 +384,11 @@ For Phase 2.5, endpoints remain open to enable rapid testing and frontend integr
 
 ---
 
-## Phase 3: Matching Engine + Calendly Webhooks
+## Phase 3: Matching Engine + Calendly Webhooks ✅
 
 Split into two sub-phases since Calendly webhooks require account setup.
+
+**Note**: The `v1/phase-3-matching` branch also includes substantial Phase 5 (auth, admin users, therapist sessions, onboarding, access requests, auth events) and Phase 6 (webhook signatures, CORS, auth hardening) work that was implemented ahead of schedule.
 
 ### Phase 3.1: Matching Engine ✅
 
@@ -441,9 +444,9 @@ Weight separations ensure priority: specialty (100) always beats continuity+time
 
 ---
 
-### Phase 3.2: Calendly Webhooks
+### Phase 3.2: Calendly Webhooks ✅
 
-**Branch**: `v1/phase-3.2-calendly-webhooks` (planned)
+**Branch**: `v1/phase-3-matching` (implemented on same branch as 3.1)
 
 #### Goal
 Add Calendly webhook receiver and scheduling URL generation. Requires Calendly Standard plan account setup.
@@ -522,12 +525,30 @@ Rewrite APScheduler reminders for the new Session/Client/Therapist models. Handl
 
 ---
 
-## Phase 5: Web UI REST APIs (Admin + Therapist)
+## Phase 5: Web UI REST APIs (Admin + Therapist) ⚠️ Partial
 
-**Branch**: `v1/phase-5-web-api`
+**Branch**: `v1/phase-5-web-api` (remaining endpoints)
 
 ### Goal
 Build authenticated REST APIs for the Web UI. This is the largest phase (~20 endpoints) but follows uniform CRUD patterns.
+
+### Already Implemented (on `v1/phase-3-matching` branch)
+
+**Auth system** (`app/core/auth.py`): `get_current_user`, `get_current_approved_user`, `get_current_therapist`, `get_current_admin`, `check_token_revocation`, `revoke_user_sessions`, token TTL enforcement
+
+**Admin User Management** (`/api/v1/admin/users`): list, role change, status toggle, session revocation, last-admin protection
+
+**Admin Access Requests** (`/api/v1/admin/access-requests`): list, approve (auto-creates User), reject
+
+**Admin Auth Events** (`/api/v1/admin/auth-events`): list with filters
+
+**Therapist Sessions** (`/api/v1/therapist/sessions`): list (upcoming/past/all), summary counts, detail
+
+**Therapist Onboarding** (`/api/v1/therapist/onboarding`): profile status, Calendly PAT verify/authorize, event types, complete onboarding
+
+**`GET /api/v1/me`**: identity + access state (approved/pending/rejected) with revocation check
+
+### Remaining (for this phase branch)
 
 ### Auth Enhancement (`app/core/auth.py`)
 
@@ -607,12 +628,21 @@ One schema file per entity: `therapist.py`, `specialty.py`, `session.py`, `sessi
 
 ---
 
-## Phase 6: Security Hardening + Final Polish
+## Phase 6: Security Hardening + Final Polish ✅ Mostly Complete
 
-**Branch**: `v1/phase-6-security-polish`
+**Branch**: `v1/phase-6-security-polish` (remaining polish only)
 
 ### Goal
 Add webhook signature verification, tighten CORS, clean up debug mode, update docs.
+
+### Already Implemented (on `v1/phase-3-matching` branch)
+- ✅ `verify_twilio_signature()` — applied to `/api/v1/whatsapp`, proxy-safe URL reconstruction
+- ✅ `verify_calendly_signature()` — HMAC-SHA256 on webhooks endpoint
+- ✅ CORS configured via `_get_cors_origins()` respecting `app_env` + `web_base_url`
+- ✅ `/api/v1/whatsapp/test` returns 404 when `debug_mode=False`
+- ✅ Full auth system with JWT validation, role gating, revocation, TTL, audit logging
+
+### Remaining
 
 ### Webhook Security (`app/core/webhook_security.py`)
 

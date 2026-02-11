@@ -13,6 +13,7 @@ class EventTypeInfo(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    calendly_event_type_uri: str
     duration_minutes: int
     name: str | None = None
     scheduling_url: str
@@ -24,6 +25,7 @@ class EventTypeDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int | None
+    calendly_event_type_uri: str
     duration_minutes: int
     scheduling_url: str
     is_active: bool
@@ -36,6 +38,14 @@ class SpecialtyInfo(BaseModel):
 
     id: int | None
     name: str
+
+
+class SlotMappingInfo(BaseModel):
+    """Slot mapping: duration to event type details."""
+
+    duration_minutes: int
+    calendly_event_type_uri: str
+    scheduling_url: str
 
 
 # Request schemas
@@ -124,12 +134,17 @@ class UpdateSpecialtiesRequest(BaseModel):
 
 
 class SaveCalendlyRequest(BaseModel):
-    """Request to save Calendly PAT and activate account."""
+    """Request to save Calendly PAT with explicit slot mapping."""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "calendly_pat": "eyJraWQiOiIxY2UxZTEzNj...",
+                "slot_mapping": {
+                    "30": "https://api.calendly.com/event_types/AAA",
+                    "45": "https://api.calendly.com/event_types/BBB",
+                    "60": "https://api.calendly.com/event_types/CCC",
+                },
             }
         }
     )
@@ -137,6 +152,22 @@ class SaveCalendlyRequest(BaseModel):
     calendly_pat: str = Field(
         ..., min_length=1, description="Calendly Personal Access Token"
     )
+    slot_mapping: dict[str, str] = Field(
+        ...,
+        description="Mapping of duration (minutes) to Calendly event type URI. Required keys: '30', '45', '60'.",
+    )
+
+    @model_validator(mode="after")
+    def validate_slot_mapping(self) -> "SaveCalendlyRequest":
+        required_keys = {"30", "45", "60"}
+        provided_keys = set(self.slot_mapping.keys())
+        missing = required_keys - provided_keys
+        if missing:
+            raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
+        extra = provided_keys - required_keys
+        if extra:
+            raise ValueError(f"Unexpected durations: {', '.join(sorted(extra))}. Only 30, 45, 60 allowed.")
+        return self
 
 
 # Response schemas
@@ -158,11 +189,13 @@ class OnboardingStatusResponse(BaseModel):
     """Response showing onboarding completion status."""
 
     is_onboarded: bool
-    has_calendly_uri: bool
-    has_event_types: bool
-    event_types_count: int
+    has_profile_name: bool
     has_specialties: bool
     specialties_count: int
+    has_calendly_uri: bool
+    has_slot_mapping: bool
+    has_event_types: bool
+    event_types_count: int
     is_active: bool
     missing_steps: list[str]
 
@@ -201,11 +234,10 @@ class UpdateSpecialtiesResponse(BaseModel):
 
 
 class SaveCalendlyResponse(BaseModel):
-    """Response after saving Calendly PAT."""
+    """Response after saving Calendly PAT with slot mapping."""
 
     calendly_user_uri: str
-    event_types_synced: int
-    event_types: list[EventTypeInfo]
+    slot_mapping: list[SlotMappingInfo]
     is_active: bool
     message: str = "Calendly connected and account activated"
 
@@ -217,10 +249,11 @@ class TherapistProfileResponse(BaseModel):
 
     id: int | None
     user_id: int
-    display_name: str
+    display_name: str | None = None
     email: str | None = None
     is_active: bool
     calendly_user_uri: str | None = None
     specialties: list[SpecialtyInfo]
     event_types: list[EventTypeDetail]
+    slot_mapping: list[SlotMappingInfo] = []
     created_at: datetime

@@ -12,8 +12,9 @@ class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     neon_auth_sub: str = Field(unique=True, index=True)  # Neon Auth subject ID
     email: str = Field(unique=True, index=True)
-    display_name: str
+    display_name: str | None = None
     role: str  # "admin" or "therapist"
     is_active: bool = Field(default=True)
+    revoked_at: datetime | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))
     updated_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))

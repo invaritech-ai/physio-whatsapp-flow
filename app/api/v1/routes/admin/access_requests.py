@@ -82,11 +82,16 @@ def approve_access_request(
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
 
+    # Normalize blank/whitespace display_name to None
+    clean_name = data.display_name.strip() if data.display_name else None
+    if clean_name == "":
+        clean_name = None
+
     # Create User record
     user = User(
         neon_auth_sub=access_request.neon_auth_sub,
         email=access_request.email,
-        display_name=data.display_name or access_request.email.split("@")[0],  # Default to email prefix
+        display_name=clean_name,
         role=data.role,
         is_active=True,
     )
@@ -98,7 +103,7 @@ def approve_access_request(
     if data.role == "therapist":
         therapist = Therapist(
             user_id=user.id,
-            display_name=user.display_name,
+            display_name=clean_name,
             is_active=False,  # Will be activated after onboarding
         )
         db.add(therapist)

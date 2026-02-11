@@ -31,7 +31,7 @@ class AccessRequestApprove(BaseModel):
     )
 
     role: str = Field(..., description="User role: 'therapist' or 'admin'")
-    display_name: str | None = Field(None, description="Display name (optional, defaults to email prefix)")
+    display_name: str | None = Field(None, description="Display name (optional, null if not provided)")
 
 
 class AccessRequestApproveResponse(BaseModel):
@@ -41,6 +41,6 @@ class AccessRequestApproveResponse(BaseModel):
     user_id: int
     therapist_id: int | None
     email: str
-    display_name: str
+    display_name: str | None
     role: str
     message: str

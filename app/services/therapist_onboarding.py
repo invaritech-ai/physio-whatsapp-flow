@@ -51,6 +51,7 @@ def validate_calendly_pat(calendly_pat: str) -> tuple[bool, dict[str, Any], list
         "event_types_found": len(event_types),
         "event_types": [
             {
+                "calendly_event_type_uri": et["uri"],
                 "duration_minutes": et["duration"],
                 "name": et.get("name", ""),
                 "scheduling_url": et.get("scheduling_url", ""),
@@ -141,6 +142,7 @@ def sync_event_types(
 
         synced_event_types.append(
             {
+                "calendly_event_type_uri": uri,
                 "duration_minutes": duration,
                 "scheduling_url": scheduling_url,
             }

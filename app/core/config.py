@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     neon_jwks_url: str | None = None
     neon_jwt_issuer: str | None = None
     neon_jwt_audience: str | None = None
+    auth_enforce_access_ttl: bool = False
+    auth_max_access_token_ttl_seconds: int = 600
 
     app_env: str = "development"
     debug_mode: bool = False

@@ -48,7 +48,7 @@ class TherapistResponse(BaseModel):
 
     id: int
     user_id: int
-    display_name: str
+    display_name: str | None
     is_active: bool
     calendly_user_uri: str | None
     specialties: list[SpecialtyResponse]
@@ -61,7 +61,7 @@ class TherapistListResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    display_name: str
+    display_name: str | None
     is_active: bool
     email: str  # From User relation
     specialty_count: int
