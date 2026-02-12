@@ -53,9 +53,10 @@ def update_conversation_data(client: Client, **kwargs) -> dict:
 
 def validate_numbered_choice(body: str, valid_choices: list[int]) -> int | None:
     """
-    Extract a single digit from user input and validate against valid_choices.
+    Extract exactly one numeric choice and validate against valid_choices.
     Returns the choice as int or None if invalid.
-    Examples: "1", "2.", " 3 ", "I choose 2" all return 2
+    Examples: "1", "2.", " 3 ", "I choose 2" all return a valid choice.
+    Inputs with multiple numbers like "1,3" are rejected.
     """
     body = body.strip().lower()
     # Try direct match first
@@ -63,12 +64,14 @@ def validate_numbered_choice(body: str, valid_choices: list[int]) -> int | None:
         if body == str(choice):
             return choice
 
-    # Try to find digit in text
-    match = re.search(r"\b(\d+)\b", body)
-    if match:
-        num = int(match.group(1))
-        if num in valid_choices:
-            return num
+    # Extract all numbers in text and require exactly one numeric intent.
+    matches = re.findall(r"\b(\d+)\b", body)
+    if len(matches) != 1:
+        return None
+
+    num = int(matches[0])
+    if num in valid_choices:
+        return num
 
     return None
 
