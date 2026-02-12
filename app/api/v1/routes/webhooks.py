@@ -44,10 +44,12 @@ def verify_calendly_signature(
         logger.warning("No stored Calendly webhook signing keys found for incoming payload")
         return False
 
-    # Calendly sends signature as: timestamp,signature_value
-    # We compute: HMAC-SHA256(timestamp.payload, secret)
+    # Calendly sends signature as: t=<timestamp>,v1=<signature_hex>
+    # We compute: HMAC-SHA256("<timestamp>.<payload>", secret)
     try:
-        timestamp, sig_value = signature.split(",", 1)
+        t_part, v1_part = signature.split(",", 1)
+        timestamp = t_part.removeprefix("t=")
+        sig_value = v1_part.removeprefix("v1=")
         logger.debug("[DEBUG-SIG] parsed timestamp=%s, sig_value=%s…", timestamp, sig_value[:16])
         signed_payload = f"{timestamp}.{payload.decode()}"
         logger.debug("[DEBUG-SIG] signed_payload length=%d", len(signed_payload))
