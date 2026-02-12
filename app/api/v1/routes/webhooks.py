@@ -76,8 +76,8 @@ async def calendly_webhook(
 
     Supported events:
     - invitee.created: When a patient books an appointment
-    - invitee.rescheduled: When a patient reschedules an appointment
     - invitee.canceled: When a patient cancels an appointment
+    - invitee.rescheduled: Optional legacy/custom event handling (not required for subscription)
 
     Webhook payload contains:
     - event: The event type (e.g., "invitee.created")
@@ -106,6 +106,8 @@ async def calendly_webhook(
     if event_type == "invitee.created":
         return await handle_invitee_created(db, payload)
     elif event_type == "invitee.rescheduled":
+        # Kept as a compatibility fallback. Current subscription setup relies on
+        # invitee.created + invitee.canceled for reschedule flows.
         return await handle_invitee_rescheduled(db, payload)
     elif event_type == "invitee.canceled":
         return await handle_invitee_canceled(db, payload)
@@ -138,6 +140,29 @@ def _payload_uri(payload: dict, *keys: str) -> str | None:
     return None
 
 
+def _find_session_by_refs(
+    db: Session,
+    *,
+    event_uri: str | None = None,
+    invitee_uri: str | None = None,
+) -> TherapySession | None:
+    if event_uri:
+        session = db.exec(
+            select(TherapySession).where(TherapySession.calendly_event_uri == event_uri)
+        ).first()
+        if session:
+            return session
+
+    if invitee_uri:
+        session = db.exec(
+            select(TherapySession).where(TherapySession.calendly_invitee_uri == invitee_uri)
+        ).first()
+        if session:
+            return session
+
+    return None
+
+
 async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """Handle invitee.created event - create Session record when patient books.
 
@@ -160,11 +185,18 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """
     try:
         # Extract data from payload
-        event_uri = payload.get("event")
+        event_uri = _payload_uri(payload, "event", "new_event", "new_event_uri")
         invitee = payload.get("invitee", {})
-        invitee_uri = invitee.get("uri")
+        invitee_uri = _extract_uri(invitee) or _payload_uri(payload, "new_invitee", "new_invitee_uri")
+        old_event_uri = _payload_uri(payload, "old_event", "old_event_uri")
+        old_invitee_uri = _payload_uri(payload, "old_invitee", "old_invitee_uri")
+        is_rescheduled = bool(payload.get("rescheduled")) or bool(old_event_uri or old_invitee_uri)
         invitee_name = invitee.get("name")
         questions_and_answers = payload.get("questions_and_answers", [])
+
+        if not event_uri:
+            logger.error("No event URI found in invitee.created payload")
+            return {"status": "error", "message": "Missing event URI"}
 
         # Extract therapist's Calendly user URI from event memberships
         event_memberships = payload.get("event_memberships", [])
@@ -207,6 +239,7 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
         event_type_uri = event_details["event_type"]
         therapist_event_type = db.exec(
             select(TherapistEventType).where(
+                TherapistEventType.therapist_id == therapist.id,
                 TherapistEventType.calendly_event_type_uri == event_type_uri
             )
         ).first()
@@ -252,26 +285,58 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 db.add(client)
             logger.info(f"Found existing client: {client.id} ({phone_e164})")
 
-        # Create therapy session record
-        session = TherapySession(
-            client_id=client.id,
-            therapist_id=therapist.id,
-            start_time=start_time,
-            end_time=end_time,
-            duration_minutes=therapist_event_type.duration_minutes,
-            calendly_event_uri=event_uri,
-            calendly_invitee_uri=invitee_uri,
-            source="calendly",
-            status="scheduled",
-        )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
+        # Upsert session:
+        # - idempotent on current event/invitee URIs
+        # - for reschedules, migrate old session forward when old refs are present
+        session = _find_session_by_refs(db, event_uri=event_uri, invitee_uri=invitee_uri)
+        if not session and is_rescheduled:
+            session = _find_session_by_refs(
+                db,
+                event_uri=old_event_uri,
+                invitee_uri=old_invitee_uri,
+            )
 
-        logger.info(
-            f"Created session {session.id} for client {client.id} "
-            f"with therapist {therapist.id} (duration: {session.duration_minutes}min)"
-        )
+        if session:
+            session.client_id = client.id
+            session.therapist_id = therapist.id
+            session.start_time = start_time
+            session.end_time = end_time
+            session.duration_minutes = therapist_event_type.duration_minutes
+            session.calendly_event_uri = event_uri
+            if invitee_uri:
+                session.calendly_invitee_uri = invitee_uri
+            session.source = "calendly"
+            session.status = "scheduled"
+            session.updated_at = datetime.now(timezone.utc)
+            db.add(session)
+            db.commit()
+            db.refresh(session)
+
+            logger.info(
+                "Updated existing session %s via invitee.created (rescheduled=%s)",
+                session.id,
+                is_rescheduled,
+            )
+        else:
+            session = TherapySession(
+                client_id=client.id,
+                therapist_id=therapist.id,
+                start_time=start_time,
+                end_time=end_time,
+                duration_minutes=therapist_event_type.duration_minutes,
+                calendly_event_uri=event_uri,
+                calendly_invitee_uri=invitee_uri,
+                source="calendly",
+                status="scheduled",
+            )
+            db.add(session)
+            db.commit()
+            db.refresh(session)
+
+            logger.info(
+                f"Created session {session.id} for client {client.id} "
+                f"with therapist {therapist.id} (duration: {session.duration_minutes}min)"
+            )
 
         return {
             "status": "success",
@@ -292,18 +357,18 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
     Payload contains event URI and invitee details.
     """
     try:
-        event_uri = payload.get("event")
+        event_uri = _payload_uri(payload, "event", "old_event", "old_event_uri")
+        invitee_uri = _payload_uri(payload, "invitee", "old_invitee", "old_invitee_uri")
 
-        # Find session by calendly_event_uri
-        stmt = select(TherapySession).where(TherapySession.calendly_event_uri == event_uri)
-        session = db.exec(stmt).first()
+        session = _find_session_by_refs(db, event_uri=event_uri, invitee_uri=invitee_uri)
 
         if not session:
-            logger.warning(f"No session found for canceled event: {event_uri}")
+            logger.warning(f"No session found for canceled event: {event_uri or invitee_uri}")
             return {"status": "not_found", "message": "Session not found"}
 
         # Update session status
         session.status = "cancelled"
+        session.updated_at = datetime.now(timezone.utc)
         db.add(session)
         db.commit()
 

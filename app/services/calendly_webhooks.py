@@ -9,7 +9,9 @@ import requests
 
 
 BASE_URL = "https://api.calendly.com"
-REQUIRED_EVENTS = {"invitee.created", "invitee.canceled", "invitee.rescheduled"}
+# Calendly webhook subscriptions accept invitee.created/invitee.canceled.
+# Reschedules are inferred from those payloads (old/new linkage).
+REQUIRED_EVENTS = {"invitee.created", "invitee.canceled"}
 
 
 class CalendlyWebhookError(Exception):

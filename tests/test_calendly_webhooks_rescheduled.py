@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from app.api.v1.routes.webhooks import handle_invitee_rescheduled
+from app.api.v1.routes.webhooks import (
+    handle_invitee_canceled,
+    handle_invitee_created,
+    handle_invitee_rescheduled,
+)
 from app.models import Client, Session as TherapySession, Therapist, TherapistEventType, User
 
 
@@ -176,3 +180,98 @@ async def test_rescheduled_returns_not_found_when_session_missing(db_session):
     result = await handle_invitee_rescheduled(db_session, payload)
 
     assert result["status"] == "not_found"
+
+
+@pytest.mark.anyio
+async def test_created_payload_with_reschedule_links_updates_old_session(db_session):
+    therapist, _, old_session, new_event_type = _seed_therapist_client_and_session(db_session)
+
+    payload = {
+        "event": "https://api.calendly.com/scheduled_events/NEW",
+        "invitee": {
+            "uri": "https://api.calendly.com/scheduled_events/NEW/invitees/NEWI",
+            "name": "Test Client",
+        },
+        "old_event": "https://api.calendly.com/scheduled_events/OLD",
+        "old_invitee": {"uri": "https://api.calendly.com/scheduled_events/OLD/invitees/OLDI"},
+        "rescheduled": True,
+        "event_memberships": [{"user": therapist.calendly_user_uri}],
+        "questions_and_answers": [{"question": "Phone Number", "answer": "+85290000001"}],
+    }
+
+    with (
+        patch("app.api.v1.routes.webhooks.decrypt_string") as mock_decrypt,
+        patch("app.api.v1.routes.webhooks.get_scheduled_event_with_pat") as mock_event,
+    ):
+        mock_decrypt.return_value = "plain_pat"
+        mock_event.return_value = {
+            "start_time": "2026-03-03T09:00:00Z",
+            "end_time": "2026-03-03T09:45:00Z",
+            "event_type": new_event_type.calendly_event_type_uri,
+            "status": "active",
+        }
+
+        result = await handle_invitee_created(db_session, payload)
+
+    assert result["status"] == "success"
+    assert result["session_id"] == old_session.id
+
+    db_session.refresh(old_session)
+    assert old_session.calendly_event_uri == "https://api.calendly.com/scheduled_events/NEW"
+    assert old_session.calendly_invitee_uri == "https://api.calendly.com/scheduled_events/NEW/invitees/NEWI"
+    assert old_session.duration_minutes == 45
+    assert old_session.status == "scheduled"
+    assert _as_utc(old_session.start_time) == datetime(2026, 3, 3, 9, 0, tzinfo=timezone.utc)
+    assert _as_utc(old_session.end_time) == datetime(2026, 3, 3, 9, 45, tzinfo=timezone.utc)
+
+
+@pytest.mark.anyio
+async def test_cancel_then_created_reschedule_flow_keeps_single_scheduled_session(db_session):
+    therapist, _, old_session, new_event_type = _seed_therapist_client_and_session(db_session)
+
+    cancel_payload = {
+        "event": "https://api.calendly.com/scheduled_events/OLD",
+        "invitee": {"uri": "https://api.calendly.com/scheduled_events/OLD/invitees/OLDI"},
+        "rescheduled": True,
+    }
+
+    cancel_result = await handle_invitee_canceled(db_session, cancel_payload)
+    assert cancel_result["status"] == "success"
+    db_session.refresh(old_session)
+    assert old_session.status == "cancelled"
+
+    created_payload = {
+        "event": "https://api.calendly.com/scheduled_events/NEW",
+        "invitee": {
+            "uri": "https://api.calendly.com/scheduled_events/NEW/invitees/NEWI",
+            "name": "Test Client",
+        },
+        "old_event": "https://api.calendly.com/scheduled_events/OLD",
+        "old_invitee": {"uri": "https://api.calendly.com/scheduled_events/OLD/invitees/OLDI"},
+        "rescheduled": True,
+        "event_memberships": [{"user": therapist.calendly_user_uri}],
+        "questions_and_answers": [{"question": "Phone Number", "answer": "+85290000001"}],
+    }
+
+    with (
+        patch("app.api.v1.routes.webhooks.decrypt_string") as mock_decrypt,
+        patch("app.api.v1.routes.webhooks.get_scheduled_event_with_pat") as mock_event,
+    ):
+        mock_decrypt.return_value = "plain_pat"
+        mock_event.return_value = {
+            "start_time": "2026-03-04T12:00:00Z",
+            "end_time": "2026-03-04T12:45:00Z",
+            "event_type": new_event_type.calendly_event_type_uri,
+            "status": "active",
+        }
+
+        created_result = await handle_invitee_created(db_session, created_payload)
+
+    assert created_result["status"] == "success"
+    assert created_result["session_id"] == old_session.id
+
+    db_session.refresh(old_session)
+    assert old_session.status == "scheduled"
+    assert old_session.calendly_event_uri == "https://api.calendly.com/scheduled_events/NEW"
+    assert old_session.calendly_invitee_uri == "https://api.calendly.com/scheduled_events/NEW/invitees/NEWI"
+    assert _as_utc(old_session.start_time) == datetime(2026, 3, 4, 12, 0, tzinfo=timezone.utc)
