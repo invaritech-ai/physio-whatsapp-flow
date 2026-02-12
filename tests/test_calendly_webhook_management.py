@@ -6,6 +6,7 @@ from sqlmodel import Session
 
 from app.api.v1.routes.admin import therapists as admin_therapists_route
 from app.api.v1.routes.therapist import onboarding as therapist_onboarding_route
+from app.core.encryption import decrypt_string
 from app.models import Therapist, User
 from app.services.calendly_webhooks import REQUIRED_EVENTS
 
@@ -138,6 +139,52 @@ def test_therapist_register_webhook_uses_stored_pat(client, db_session: Session)
         "stored_pat",
         "https://api.test.local/api/v1/webhooks/calendly",
     )
+
+
+def test_therapist_register_webhook_persists_signing_key(client, db_session: Session):
+    therapist = _create_therapist(db_session, "therapist-webhook-sub-2b", "therapist2b@test.com")
+    therapist.calendly_pat_encrypted = "encrypted_pat_blob"
+    db_session.add(therapist)
+    db_session.commit()
+
+    with (
+        patch("app.core.auth._verify_neon_token") as mock_verify,
+        patch("app.api.v1.routes.therapist.onboarding.decrypt_string") as mock_decrypt,
+        patch("app.api.v1.routes.therapist.onboarding.register_webhook_if_needed") as mock_register,
+        patch.object(therapist_onboarding_route.settings, "public_base_url", "https://api.test.local"),
+    ):
+        mock_verify.return_value = {
+            "sub": "therapist-webhook-sub-2b",
+            "email": "therapist2b@test.com",
+        }
+        mock_decrypt.return_value = "stored_pat"
+        mock_register.return_value = {
+            "user_uri": "https://api.calendly.com/users/U2",
+            "organization_uri": "https://api.calendly.com/organizations/O2",
+            "has_matching_webhook": True,
+            "needs_registration": False,
+            "missing_events": [],
+            "subscriptions": [],
+            "warnings": [],
+            "created": True,
+            "created_webhook_uri": "https://api.calendly.com/webhook_subscriptions/ABC",
+            "signing_key": "new-signing-key",
+        }
+
+        response = client.post(
+            "/api/v1/therapist/onboarding/calendly-webhook/register",
+            json={},
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["created"] is True
+    assert data["signing_key"] is None
+
+    db_session.refresh(therapist)
+    assert therapist.calendly_webhook_signing_key_encrypted is not None
+    assert decrypt_string(therapist.calendly_webhook_signing_key_encrypted) == "new-signing-key"
 
 
 def test_therapist_check_webhook_without_pat_returns_400(client, db_session: Session):
