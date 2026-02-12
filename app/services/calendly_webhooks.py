@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from typing import Any
 
 import requests
@@ -23,6 +24,11 @@ def _headers(calendly_pat: str) -> dict[str, str]:
         "Authorization": f"Bearer {calendly_pat}",
         "Content-Type": "application/json",
     }
+
+
+def _generate_signing_key() -> str:
+    """Generate a strong webhook signing key for Calendly create-subscription API."""
+    return secrets.token_urlsafe(48)
 
 
 def _normalize_url(url: str) -> str:
@@ -200,12 +206,15 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
             "signing_key": None,
         }
 
+    generated_signing_key = _generate_signing_key()
     payload = {
         "url": callback_url,
         "events": sorted(REQUIRED_EVENTS),
         "organization": status["organization_uri"],
         "scope": "user",
         "user": status["user_uri"],
+        # Per Calendly create-subscription contract, provide signing_key explicitly.
+        "signing_key": generated_signing_key,
     }
 
     try:
@@ -236,5 +245,6 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
         **refreshed,
         "created": True,
         "created_webhook_uri": resource.get("uri"),
-        "signing_key": resource.get("signing_key"),
+        # Persist the deterministic key we sent in create payload.
+        "signing_key": generated_signing_key,
     }
