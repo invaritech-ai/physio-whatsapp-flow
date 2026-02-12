@@ -51,8 +51,8 @@ def _create_admin(db_session: Session, sub: str, email: str) -> User:
     return admin
 
 
-def test_required_webhook_events_include_rescheduled():
-    assert {"invitee.created", "invitee.canceled", "invitee.rescheduled"} <= REQUIRED_EVENTS
+def test_required_webhook_events_match_supported_subscription_events():
+    assert REQUIRED_EVENTS == {"invitee.created", "invitee.canceled"}
 
 
 def test_therapist_check_webhook_with_explicit_pat(client, db_session: Session):
