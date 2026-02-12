@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist_allow_inactive
 from app.core.config import settings
-from app.core.encryption import decrypt_string
+from app.core.encryption import decrypt_string, encrypt_string
 from app.db.session import get_session
 from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
 from app.api.v1.schemas.therapist_onboarding import (
@@ -466,6 +466,13 @@ def check_calendly_webhook(
     except CalendlyWebhookError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if status.get("has_matching_webhook") and not therapist.calendly_webhook_signing_key_encrypted:
+        warnings = list(status.get("warnings", []))
+        warnings.append(
+            "Webhook is active but no signing key is stored yet. Re-register webhook to sync signing key."
+        )
+        status["warnings"] = warnings
+
     return CalendlyWebhookCheckResponse(
         endpoint_url=endpoint_url,
         **status,
@@ -476,6 +483,7 @@ def check_calendly_webhook(
 def register_calendly_webhook(
     data: CalendlyWebhookActionRequest,
     therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+    db: Session = Depends(get_session),
 ):
     """
     Register Calendly webhook for this therapist if missing (idempotent).
@@ -489,6 +497,24 @@ def register_calendly_webhook(
         result = register_webhook_if_needed(calendly_pat, endpoint_url)
     except CalendlyWebhookError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    warnings = list(result.get("warnings", []))
+    signing_key = result.get("signing_key")
+
+    # Persist Calendly signing key so webhook verification no longer depends on env config.
+    if signing_key:
+        therapist.calendly_webhook_signing_key_encrypted = encrypt_string(signing_key)
+        db.add(therapist)
+        db.commit()
+        db.refresh(therapist)
+    elif result.get("has_matching_webhook") and not therapist.calendly_webhook_signing_key_encrypted:
+        warnings.append(
+            "Webhook exists but signing key was not returned by Calendly. Recreate webhook to sync signing key."
+        )
+
+    result["warnings"] = warnings
+    # Do not expose raw signing key back to clients after registration.
+    result["signing_key"] = None
 
     return CalendlyWebhookRegisterResponse(
         endpoint_url=endpoint_url,

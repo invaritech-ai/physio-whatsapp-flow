@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlmodel import Session, select
 
-from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.db.session import get_session
 from app.models import Client, Session as TherapySession, Therapist, TherapistEventType
@@ -19,7 +18,11 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 logger = logging.getLogger(__name__)
 
 
-def verify_calendly_signature(payload: bytes, signature: str | None) -> bool:
+def verify_calendly_signature(
+    payload: bytes,
+    signature: str | None,
+    secrets: list[str],
+) -> bool:
     """Verify Calendly webhook signature.
 
     Args:
@@ -29,12 +32,12 @@ def verify_calendly_signature(payload: bytes, signature: str | None) -> bool:
     Returns:
         True if signature is valid, False otherwise
     """
-    if not settings.calendly_webhook_secret:
-        logger.warning("CALENDLY_WEBHOOK_SECRET not set - skipping signature verification")
-        return True  # Allow in development without secret
-
     if not signature:
         logger.warning("No Calendly-Webhook-Signature header provided")
+        return False
+
+    if not secrets:
+        logger.warning("No stored Calendly webhook signing keys found for incoming payload")
         return False
 
     # Calendly sends signature as: timestamp,signature_value
@@ -42,16 +45,7 @@ def verify_calendly_signature(payload: bytes, signature: str | None) -> bool:
     try:
         timestamp, sig_value = signature.split(",", 1)
         signed_payload = f"{timestamp}.{payload.decode()}"
-        secrets = [
-            secret.strip()
-            for secret in settings.calendly_webhook_secret.split(",")
-            if secret.strip()
-        ]
-        if not secrets:
-            logger.warning("CALENDLY_WEBHOOK_SECRET configured but empty after parsing")
-            return True
-
-        for secret in secrets:
+        for secret in (secret.strip() for secret in secrets if secret.strip()):
             expected_sig = hmac.new(
                 secret.encode(),
                 signed_payload.encode(),
@@ -83,23 +77,26 @@ async def calendly_webhook(
     - event: The event type (e.g., "invitee.created")
     - payload: Event data with invitee and event details
     """
-    # Get raw body for signature verification
-    body = await request.body()
-
-    # Verify signature (if secret is set)
-    if not verify_calendly_signature(body, signature):
-        logger.warning("Invalid Calendly webhook signature")
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    # Parse JSON payload
+    # Parse JSON payload before signature verification so we can resolve therapist
+    # specific signing keys stored in database.
     try:
+        body = await request.body()
         data = await request.json()
     except Exception as e:
         logger.error(f"Failed to parse webhook JSON: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
     event_type = data.get("event")
     payload = data.get("payload", {})
+    if not isinstance(payload, dict):
+        payload = {}
+
+    secrets = _resolve_calendly_signing_secrets(db, payload)
+    if not verify_calendly_signature(body, signature, secrets):
+        logger.warning("Invalid Calendly webhook signature")
+        raise HTTPException(status_code=401, detail="Invalid signature")
 
     logger.info(f"Received Calendly webhook: {event_type}")
 
@@ -138,6 +135,81 @@ def _payload_uri(payload: dict, *keys: str) -> str | None:
         if uri:
             return uri
     return None
+
+
+def _therapist_signing_key(therapist: Therapist) -> str | None:
+    if not therapist.calendly_webhook_signing_key_encrypted:
+        return None
+    try:
+        return decrypt_string(therapist.calendly_webhook_signing_key_encrypted)
+    except Exception:
+        logger.exception(
+            "Failed to decrypt Calendly webhook signing key for therapist_id=%s",
+            therapist.id,
+        )
+        return None
+
+
+def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
+    therapist_ids: set[int] = set()
+    secrets: list[str] = []
+
+    # Primary lookup: therapist Calendly user URI in event memberships.
+    memberships = payload.get("event_memberships") or []
+    if isinstance(memberships, list):
+        for membership in memberships:
+            if not isinstance(membership, dict):
+                continue
+            user_uri = _extract_uri(membership.get("user"))
+            if not user_uri:
+                continue
+            therapist = db.exec(
+                select(Therapist).where(Therapist.calendly_user_uri == user_uri)
+            ).first()
+            if therapist and therapist.id:
+                therapist_ids.add(therapist.id)
+                key = _therapist_signing_key(therapist)
+                if key:
+                    secrets.append(key)
+
+    # Fallback lookup: map webhook event/invitee URIs back to existing sessions.
+    event_uris: set[str] = set()
+    invitee_uris: set[str] = set()
+    for key in ("event", "new_event", "new_event_uri", "old_event", "old_event_uri"):
+        uri = _extract_uri(payload.get(key))
+        if uri:
+            event_uris.add(uri)
+    for key in ("invitee", "new_invitee", "new_invitee_uri", "old_invitee", "old_invitee_uri"):
+        uri = _extract_uri(payload.get(key))
+        if uri:
+            invitee_uris.add(uri)
+
+    for event_uri in event_uris:
+        session = db.exec(
+            select(TherapySession).where(TherapySession.calendly_event_uri == event_uri)
+        ).first()
+        if session and session.therapist_id and session.therapist_id not in therapist_ids:
+            therapist = db.get(Therapist, session.therapist_id)
+            if therapist and therapist.id:
+                therapist_ids.add(therapist.id)
+                key = _therapist_signing_key(therapist)
+                if key:
+                    secrets.append(key)
+
+    for invitee_uri in invitee_uris:
+        session = db.exec(
+            select(TherapySession).where(TherapySession.calendly_invitee_uri == invitee_uri)
+        ).first()
+        if session and session.therapist_id and session.therapist_id not in therapist_ids:
+            therapist = db.get(Therapist, session.therapist_id)
+            if therapist and therapist.id:
+                therapist_ids.add(therapist.id)
+                key = _therapist_signing_key(therapist)
+                if key:
+                    secrets.append(key)
+
+    # Preserve order while de-duplicating.
+    return list(dict.fromkeys(secrets))
 
 
 def _find_session_by_refs(
