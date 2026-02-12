@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import logging
 import os
+
+# DEV: enable DEBUG logging for app modules to trace webhook issues
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("app").setLevel(logging.DEBUG)
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI

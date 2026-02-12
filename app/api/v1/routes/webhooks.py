@@ -32,6 +32,10 @@ def verify_calendly_signature(
     Returns:
         True if signature is valid, False otherwise
     """
+    logger.debug("[DEBUG-SIG] verify_calendly_signature called")
+    logger.debug("[DEBUG-SIG] signature header present: %s", signature is not None)
+    logger.debug("[DEBUG-SIG] number of secrets to try: %d", len(secrets))
+
     if not signature:
         logger.warning("No Calendly-Webhook-Signature header provided")
         return False
@@ -44,16 +48,24 @@ def verify_calendly_signature(
     # We compute: HMAC-SHA256(timestamp.payload, secret)
     try:
         timestamp, sig_value = signature.split(",", 1)
+        logger.debug("[DEBUG-SIG] parsed timestamp=%s, sig_value=%s…", timestamp, sig_value[:16])
         signed_payload = f"{timestamp}.{payload.decode()}"
-        for secret in (secret.strip() for secret in secrets if secret.strip()):
+        logger.debug("[DEBUG-SIG] signed_payload length=%d", len(signed_payload))
+        for i, secret in enumerate(secret.strip() for secret in secrets if secret.strip()):
             expected_sig = hmac.new(
                 secret.encode(),
                 signed_payload.encode(),
                 hashlib.sha256,
             ).hexdigest()
+            logger.debug(
+                "[DEBUG-SIG] secret[%d]: key=%s…, expected=%s…, received=%s…, match=%s",
+                i, secret[:8], expected_sig[:16], sig_value[:16],
+                hmac.compare_digest(sig_value, expected_sig),
+            )
             if hmac.compare_digest(sig_value, expected_sig):
                 return True
 
+        logger.debug("[DEBUG-SIG] No secret matched the signature")
         return False
     except Exception as e:
         logger.error(f"Signature verification failed: {e}")
@@ -79,6 +91,8 @@ async def calendly_webhook(
     """
     # Parse JSON payload before signature verification so we can resolve therapist
     # specific signing keys stored in database.
+    logger.debug("[DEBUG-WH] === Incoming Calendly webhook ===")
+    logger.debug("[DEBUG-WH] Calendly-Webhook-Signature header: %s", signature)
     try:
         body = await request.body()
         data = await request.json()
@@ -93,7 +107,13 @@ async def calendly_webhook(
     if not isinstance(payload, dict):
         payload = {}
 
+    logger.debug("[DEBUG-WH] event_type=%s", event_type)
+    logger.debug("[DEBUG-WH] payload keys=%s", list(payload.keys()) if payload else "empty")
+    logger.debug("[DEBUG-WH] event_memberships=%s", payload.get("event_memberships"))
+    logger.debug("[DEBUG-WH] raw body length=%d bytes", len(body))
+
     secrets = _resolve_calendly_signing_secrets(db, payload)
+    logger.debug("[DEBUG-WH] resolved %d signing secrets", len(secrets))
     if not verify_calendly_signature(body, signature, secrets):
         logger.warning("Invalid Calendly webhook signature")
         raise HTTPException(status_code=401, detail="Invalid signature")
@@ -139,9 +159,20 @@ def _payload_uri(payload: dict, *keys: str) -> str | None:
 
 def _therapist_signing_key(therapist: Therapist) -> str | None:
     if not therapist.calendly_webhook_signing_key_encrypted:
+        logger.debug(
+            "[DEBUG-KEY] therapist_id=%s has NO stored signing key (field is NULL)",
+            therapist.id,
+        )
         return None
     try:
-        return decrypt_string(therapist.calendly_webhook_signing_key_encrypted)
+        decrypted = decrypt_string(therapist.calendly_webhook_signing_key_encrypted)
+        logger.debug(
+            "[DEBUG-KEY] therapist_id=%s signing key decrypted OK (key=%s…, encrypted_len=%d)",
+            therapist.id,
+            decrypted[:8] if decrypted else "EMPTY",
+            len(therapist.calendly_webhook_signing_key_encrypted),
+        )
+        return decrypted
     except Exception:
         logger.exception(
             "Failed to decrypt Calendly webhook signing key for therapist_id=%s",
@@ -154,23 +185,43 @@ def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
     therapist_ids: set[int] = set()
     secrets: list[str] = []
 
+    logger.debug("[DEBUG-RESOLVE] === Resolving signing secrets ===")
+
     # Primary lookup: therapist Calendly user URI in event memberships.
     memberships = payload.get("event_memberships") or []
+    logger.debug("[DEBUG-RESOLVE] event_memberships count=%d, raw=%s", len(memberships) if isinstance(memberships, list) else 0, memberships)
     if isinstance(memberships, list):
         for membership in memberships:
             if not isinstance(membership, dict):
+                logger.debug("[DEBUG-RESOLVE] skipping non-dict membership: %s", membership)
                 continue
             user_uri = _extract_uri(membership.get("user"))
+            logger.debug("[DEBUG-RESOLVE] extracted user_uri=%s from membership", user_uri)
             if not user_uri:
                 continue
             therapist = db.exec(
                 select(Therapist).where(Therapist.calendly_user_uri == user_uri)
             ).first()
             if therapist and therapist.id:
+                logger.debug(
+                    "[DEBUG-RESOLVE] MATCHED therapist_id=%s by calendly_user_uri=%s",
+                    therapist.id, user_uri,
+                )
                 therapist_ids.add(therapist.id)
                 key = _therapist_signing_key(therapist)
                 if key:
                     secrets.append(key)
+                else:
+                    logger.debug("[DEBUG-RESOLVE] therapist_id=%s matched but has no signing key", therapist.id)
+            else:
+                # Also log what URIs we DO have in the DB for comparison
+                all_therapists = db.exec(select(Therapist)).all()
+                db_uris = [(t.id, t.calendly_user_uri) for t in all_therapists]
+                logger.debug(
+                    "[DEBUG-RESOLVE] NO therapist found for calendly_user_uri=%s. "
+                    "All therapists in DB: %s",
+                    user_uri, db_uris,
+                )
 
     # Fallback lookup: map webhook event/invitee URIs back to existing sessions.
     event_uris: set[str] = set()
@@ -184,6 +235,8 @@ def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
         if uri:
             invitee_uris.add(uri)
 
+    logger.debug("[DEBUG-RESOLVE] fallback event_uris=%s, invitee_uris=%s", event_uris, invitee_uris)
+
     for event_uri in event_uris:
         session = db.exec(
             select(TherapySession).where(TherapySession.calendly_event_uri == event_uri)
@@ -191,10 +244,13 @@ def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
         if session and session.therapist_id and session.therapist_id not in therapist_ids:
             therapist = db.get(Therapist, session.therapist_id)
             if therapist and therapist.id:
+                logger.debug("[DEBUG-RESOLVE] MATCHED therapist_id=%s via event_uri fallback", therapist.id)
                 therapist_ids.add(therapist.id)
                 key = _therapist_signing_key(therapist)
                 if key:
                     secrets.append(key)
+        else:
+            logger.debug("[DEBUG-RESOLVE] no session found for event_uri=%s", event_uri)
 
     for invitee_uri in invitee_uris:
         session = db.exec(
@@ -203,10 +259,18 @@ def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
         if session and session.therapist_id and session.therapist_id not in therapist_ids:
             therapist = db.get(Therapist, session.therapist_id)
             if therapist and therapist.id:
+                logger.debug("[DEBUG-RESOLVE] MATCHED therapist_id=%s via invitee_uri fallback", therapist.id)
                 therapist_ids.add(therapist.id)
                 key = _therapist_signing_key(therapist)
                 if key:
                     secrets.append(key)
+        else:
+            logger.debug("[DEBUG-RESOLVE] no session found for invitee_uri=%s", invitee_uri)
+
+    logger.debug(
+        "[DEBUG-RESOLVE] FINAL: matched_therapist_ids=%s, secrets_count=%d",
+        therapist_ids, len(secrets),
+    )
 
     # Preserve order while de-duplicating.
     return list(dict.fromkeys(secrets))
