@@ -109,7 +109,9 @@ async def calendly_webhook(
 
     logger.debug("[DEBUG-WH] event_type=%s", event_type)
     logger.debug("[DEBUG-WH] payload keys=%s", list(payload.keys()) if payload else "empty")
-    logger.debug("[DEBUG-WH] event_memberships=%s", payload.get("event_memberships"))
+    scheduled_event = payload.get("scheduled_event", {})
+    logger.debug("[DEBUG-WH] scheduled_event keys=%s", list(scheduled_event.keys()) if isinstance(scheduled_event, dict) else type(scheduled_event))
+    logger.debug("[DEBUG-WH] event_memberships=%s", scheduled_event.get("event_memberships") if isinstance(scheduled_event, dict) else None)
     logger.debug("[DEBUG-WH] raw body length=%d bytes", len(body))
 
     secrets = _resolve_calendly_signing_secrets(db, payload)
@@ -188,7 +190,12 @@ def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
     logger.debug("[DEBUG-RESOLVE] === Resolving signing secrets ===")
 
     # Primary lookup: therapist Calendly user URI in event memberships.
-    memberships = payload.get("event_memberships") or []
+    # Calendly nests event_memberships under payload.scheduled_event, not at the top level.
+    scheduled_event = payload.get("scheduled_event")
+    if isinstance(scheduled_event, dict):
+        memberships = scheduled_event.get("event_memberships") or []
+    else:
+        memberships = payload.get("event_memberships") or []
     logger.debug("[DEBUG-RESOLVE] event_memberships count=%d, raw=%s", len(memberships) if isinstance(memberships, list) else 0, memberships)
     if isinstance(memberships, list):
         for membership in memberships:
@@ -302,21 +309,22 @@ def _find_session_by_refs(
 async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """Handle invitee.created event - create Session record when patient books.
 
-    Payload structure:
+    Calendly webhook payload structure (invitee.created):
     {
-        "event": "https://api.calendly.com/scheduled_events/XXXXX",
-        "invitee": {
-            "uri": "https://api.calendly.com/scheduled_events/XXXXX/invitees/YYYYY",
-            "email": "patient@example.com",
-            "name": "John Doe",
+        "scheduled_event": {
+            "uri": "https://api.calendly.com/scheduled_events/XXXXX",
+            "event_memberships": [
+                {"user": "https://api.calendly.com/users/XXXXX"}
+            ],
             ...
         },
-        "event_memberships": [
-            {"user": "https://api.calendly.com/users/XXXXX"}
-        ],
+        "event": "https://api.calendly.com/scheduled_events/XXXXX",
         "questions_and_answers": [
             {"question": "Phone Number", "answer": "+85212345678"}
-        ]
+        ],
+        "name": "John Doe",
+        "email": "patient@example.com",
+        "uri": "https://api.calendly.com/scheduled_events/XXXXX/invitees/YYYYY"
     }
     """
     try:
@@ -324,10 +332,13 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
         event_uri = _payload_uri(payload, "event", "new_event", "new_event_uri")
         invitee = payload.get("invitee", {})
         invitee_uri = _extract_uri(invitee) or _payload_uri(payload, "new_invitee", "new_invitee_uri")
+        # Also try top-level uri (Calendly puts invitee URI there)
+        if not invitee_uri:
+            invitee_uri = _extract_uri(payload.get("uri"))
         old_event_uri = _payload_uri(payload, "old_event", "old_event_uri")
         old_invitee_uri = _payload_uri(payload, "old_invitee", "old_invitee_uri")
         is_rescheduled = bool(payload.get("rescheduled")) or bool(old_event_uri or old_invitee_uri)
-        invitee_name = invitee.get("name")
+        invitee_name = payload.get("name") or (invitee.get("name") if isinstance(invitee, dict) else None)
         questions_and_answers = payload.get("questions_and_answers", [])
 
         if not event_uri:
@@ -335,7 +346,12 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             return {"status": "error", "message": "Missing event URI"}
 
         # Extract therapist's Calendly user URI from event memberships
-        event_memberships = payload.get("event_memberships", [])
+        # Calendly nests event_memberships under scheduled_event
+        scheduled_event = payload.get("scheduled_event", {})
+        if isinstance(scheduled_event, dict):
+            event_memberships = scheduled_event.get("event_memberships", [])
+        else:
+            event_memberships = payload.get("event_memberships", [])
         if not event_memberships:
             logger.error("No event_memberships in webhook payload")
             return {"status": "error", "message": "Missing event memberships"}
