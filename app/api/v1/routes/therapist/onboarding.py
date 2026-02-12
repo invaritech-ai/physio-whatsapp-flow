@@ -1,6 +1,10 @@
 """Therapist self-service onboarding endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist_allow_inactive
@@ -491,8 +495,17 @@ def register_calendly_webhook(
     Uses user-scope registration so therapists from different Calendly orgs can
     self-provision their own webhook subscription.
     """
+    logger.debug(
+        "[DEBUG-ONBOARD] register_calendly_webhook called for therapist_id=%s, calendly_user_uri=%s",
+        therapist.id, therapist.calendly_user_uri,
+    )
+    logger.debug(
+        "[DEBUG-ONBOARD] therapist has stored signing key: %s",
+        therapist.calendly_webhook_signing_key_encrypted is not None,
+    )
     calendly_pat = _resolve_calendly_pat(therapist, data.calendly_pat)
     endpoint_url = _calendly_webhook_endpoint()
+    logger.debug("[DEBUG-ONBOARD] endpoint_url=%s", endpoint_url)
     try:
         result = register_webhook_if_needed(calendly_pat, endpoint_url)
     except CalendlyWebhookError as exc:
@@ -500,6 +513,10 @@ def register_calendly_webhook(
 
     warnings = list(result.get("warnings", []))
     signing_key = result.get("signing_key")
+    logger.debug(
+        "[DEBUG-ONBOARD] register result: created=%s, signing_key_returned=%s, has_matching=%s",
+        result.get("created"), signing_key is not None, result.get("has_matching_webhook"),
+    )
 
     # Persist Calendly signing key so webhook verification no longer depends on env config.
     if signing_key:
@@ -507,7 +524,9 @@ def register_calendly_webhook(
         db.add(therapist)
         db.commit()
         db.refresh(therapist)
+        logger.debug("[DEBUG-ONBOARD] signing key persisted for therapist_id=%s (key=%s…)", therapist.id, signing_key[:8])
     elif result.get("has_matching_webhook") and not therapist.calendly_webhook_signing_key_encrypted:
+        logger.debug("[DEBUG-ONBOARD] webhook exists but NO signing key stored — orphaned webhook")
         warnings.append(
             "Webhook exists but signing key was not returned by Calendly. Recreate webhook to sync signing key."
         )

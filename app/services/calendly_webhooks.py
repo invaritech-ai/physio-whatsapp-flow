@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from typing import Any
 
 import requests
 
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.calendly.com"
 # Calendly webhook subscriptions accept invitee.created/invitee.canceled.
@@ -144,7 +146,9 @@ def check_webhook_registration(calendly_pat: str, callback_url: str) -> dict[str
     Returns a summary indicating whether a matching active webhook exists for this
     backend callback URL and required event set.
     """
+    logger.debug("[DEBUG-REG] check_webhook_registration called, callback_url=%s", callback_url)
     user_uri, organization_uri = get_user_context(calendly_pat)
+    logger.debug("[DEBUG-REG] user_uri=%s, org_uri=%s", user_uri, organization_uri)
     normalized_callback = _normalize_url(callback_url)
 
     warnings: list[str] = []
@@ -165,11 +169,15 @@ def check_webhook_registration(calendly_pat: str, callback_url: str) -> dict[str
     if org_warning:
         warnings.append(org_warning)
 
+    logger.debug("[DEBUG-REG] user_subs=%d, org_subs=%d", len(user_subs), len(org_subs))
+
     subscriptions = _summarize_subscriptions([*user_subs, *org_subs])
+    logger.debug("[DEBUG-REG] all subscriptions: %s", subscriptions)
 
     matching = [
         sub for sub in subscriptions if _normalize_url(sub["callback_url"]) == normalized_callback
     ]
+    logger.debug("[DEBUG-REG] matching subscriptions (url=%s): %s", normalized_callback, matching)
 
     covered_events: set[str] = set()
     has_matching_active = False
@@ -179,6 +187,10 @@ def check_webhook_registration(calendly_pat: str, callback_url: str) -> dict[str
             has_matching_active = True
 
     missing_events = sorted(REQUIRED_EVENTS - covered_events)
+    logger.debug(
+        "[DEBUG-REG] has_matching_active=%s, covered_events=%s, missing=%s",
+        has_matching_active, covered_events, missing_events,
+    )
 
     return {
         "user_uri": user_uri,
@@ -197,8 +209,10 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
 
     Uses user-scope registration to support therapists across different orgs.
     """
+    logger.debug("[DEBUG-REG] register_webhook_if_needed called, callback_url=%s", callback_url)
     status = check_webhook_registration(calendly_pat, callback_url)
     if status["has_matching_webhook"]:
+        logger.debug("[DEBUG-REG] webhook already exists, skipping creation (signing_key will be None)")
         return {
             **status,
             "created": False,
@@ -207,6 +221,7 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
         }
 
     generated_signing_key = _generate_signing_key()
+    logger.debug("[DEBUG-REG] generating new signing key: %s…", generated_signing_key[:8])
     payload = {
         "url": callback_url,
         "events": sorted(REQUIRED_EVENTS),
@@ -216,6 +231,7 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
         # Per Calendly create-subscription contract, provide signing_key explicitly.
         "signing_key": generated_signing_key,
     }
+    logger.debug("[DEBUG-REG] creating webhook with payload: %s", {k: v for k, v in payload.items() if k != "signing_key"})
 
     try:
         response = requests.post(
@@ -227,10 +243,13 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
     except requests.RequestException as exc:
         raise CalendlyWebhookError(f"Failed to register Calendly webhook: {exc}") from exc
 
+    logger.debug("[DEBUG-REG] Calendly create response: status=%d, body=%s", response.status_code, response.text[:500])
+
     if response.status_code not in (200, 201):
         # A concurrent registration may have already succeeded. Re-check before failing.
         refreshed = check_webhook_registration(calendly_pat, callback_url)
         if refreshed["has_matching_webhook"]:
+            logger.debug("[DEBUG-REG] concurrent registration detected, returning existing (no signing_key)")
             return {
                 **refreshed,
                 "created": False,
@@ -240,6 +259,7 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
         raise CalendlyWebhookError(f"Failed to register Calendly webhook: {_parse_error(response)}")
 
     resource = response.json().get("resource", {})
+    logger.debug("[DEBUG-REG] webhook created successfully, uri=%s", resource.get("uri"))
     refreshed = check_webhook_registration(calendly_pat, callback_url)
     return {
         **refreshed,
