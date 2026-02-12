@@ -185,6 +185,22 @@ class TestHandleAwaitingName:
         assert client.name == "John Smith"  # Should be title-cased
         assert "John Smith" in response
 
+    def test_name_with_pleasantries_extracts_core_name(self, db_session):
+        """Natural-language intro should extract a clean name."""
+        client = Client(
+            phone_e164="+85212345678", conversation_state=states.AWAITING_NAME
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_name(
+            client, "I am Avi. Nice to meet you", db_session
+        )
+
+        assert next_state == states.AWAITING_DURATION
+        assert client.name == "Avi"
+        assert "Avi" in response
+
     def test_name_too_short_rejects(self, db_session):
         """Name shorter than 2 characters should be rejected."""
         client = Client(
@@ -253,6 +269,23 @@ class TestHandleAwaitingDuration:
         conv_data = json.loads(client.conversation_data or "{}")
         assert conv_data.get("duration") == 45
 
+    def test_multiple_duration_numbers_rejects(
+        self, db_session, sample_specialties
+    ):
+        """Multiple-number input should be rejected for duration selection."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_DURATION,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_duration(client, "1,3", db_session)
+
+        assert next_state == states.AWAITING_DURATION
+        assert "1" in response and "2" in response and "3" in response
+
     def test_valid_duration_choice_3_saves_60min(
         self, db_session, sample_specialties
     ):
@@ -320,6 +353,22 @@ class TestHandleAwaitingSpecialty:
         db_session.commit()
 
         next_state, response = handle_awaiting_specialty(client, "99", db_session)
+
+        assert next_state == states.AWAITING_SPECIALTY
+        assert "please reply" in response.lower()
+
+    def test_multiple_specialty_numbers_rejects(self, db_session, sample_specialties):
+        """Multiple-number input should be rejected for specialty selection."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_SPECIALTY,
+        )
+        update_conversation_data(client, duration=30)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_specialty(client, "1,2", db_session)
 
         assert next_state == states.AWAITING_SPECIALTY
         assert "please reply" in response.lower()
@@ -429,6 +478,22 @@ class TestHandleAwaitingTimeBandInvalid:
 
         assert next_state == states.AWAITING_TIME_BAND
         assert "didn't understand" in response.lower()
+
+    def test_multiple_numbers_rejects(self, db_session):
+        """Multiple-number input should be rejected for single-choice step."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_TIME_BAND,
+        )
+        update_conversation_data(client, duration=30, specialty_id=1)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_time_band(client, "1,2", db_session)
+
+        assert next_state == states.AWAITING_TIME_BAND
+        assert "1" in response and "2" in response and "3" in response
 
 
 class TestHandleAwaitingDays:

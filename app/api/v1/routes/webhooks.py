@@ -42,13 +42,25 @@ def verify_calendly_signature(payload: bytes, signature: str | None) -> bool:
     try:
         timestamp, sig_value = signature.split(",", 1)
         signed_payload = f"{timestamp}.{payload.decode()}"
-        expected_sig = hmac.new(
-            settings.calendly_webhook_secret.encode(),
-            signed_payload.encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        secrets = [
+            secret.strip()
+            for secret in settings.calendly_webhook_secret.split(",")
+            if secret.strip()
+        ]
+        if not secrets:
+            logger.warning("CALENDLY_WEBHOOK_SECRET configured but empty after parsing")
+            return True
 
-        return hmac.compare_digest(sig_value, expected_sig)
+        for secret in secrets:
+            expected_sig = hmac.new(
+                secret.encode(),
+                signed_payload.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            if hmac.compare_digest(sig_value, expected_sig):
+                return True
+
+        return False
     except Exception as e:
         logger.error(f"Signature verification failed: {e}")
         return False
@@ -64,6 +76,8 @@ async def calendly_webhook(
 
     Supported events:
     - invitee.created: When a patient books an appointment
+    - invitee.rescheduled: When a patient reschedules an appointment
+    - invitee.canceled: When a patient cancels an appointment
 
     Webhook payload contains:
     - event: The event type (e.g., "invitee.created")
@@ -91,11 +105,37 @@ async def calendly_webhook(
 
     if event_type == "invitee.created":
         return await handle_invitee_created(db, payload)
+    elif event_type == "invitee.rescheduled":
+        return await handle_invitee_rescheduled(db, payload)
     elif event_type == "invitee.canceled":
         return await handle_invitee_canceled(db, payload)
     else:
         logger.warning(f"Unhandled Calendly event type: {event_type}")
         return {"status": "ignored", "event": event_type}
+
+
+def _extract_uri(value: object) -> str | None:
+    """Extract URI from a Calendly webhook field that may be str or nested dict."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("uri", "event", "scheduled_event", "scheduled_event_uri"):
+            nested = value.get(key)
+            if isinstance(nested, str):
+                return nested
+            if isinstance(nested, dict):
+                uri = nested.get("uri")
+                if isinstance(uri, str):
+                    return uri
+    return None
+
+
+def _payload_uri(payload: dict, *keys: str) -> str | None:
+    for key in keys:
+        uri = _extract_uri(payload.get(key))
+        if uri:
+            return uri
+    return None
 
 
 async def handle_invitee_created(db: Session, payload: dict) -> dict:
@@ -277,5 +317,146 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
 
     except Exception as e:
         logger.exception(f"Error handling invitee.canceled event: {e}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+
+async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
+    """Handle invitee.rescheduled event - move/update existing session to new time."""
+    try:
+        old_event_uri = _payload_uri(payload, "old_event", "old_event_uri")
+        new_event_uri = _payload_uri(payload, "new_event", "new_event_uri", "event")
+        old_invitee_uri = _payload_uri(payload, "old_invitee", "old_invitee_uri")
+        new_invitee_uri = _payload_uri(payload, "new_invitee", "new_invitee_uri", "invitee")
+
+        lookup_order = [
+            ("calendly_event_uri", old_event_uri),
+            ("calendly_invitee_uri", old_invitee_uri),
+            ("calendly_event_uri", new_event_uri),
+            ("calendly_invitee_uri", new_invitee_uri),
+        ]
+
+        session = None
+        for field_name, uri in lookup_order:
+            if not uri:
+                continue
+            if field_name == "calendly_event_uri":
+                session = db.exec(
+                    select(TherapySession).where(TherapySession.calendly_event_uri == uri)
+                ).first()
+            else:
+                session = db.exec(
+                    select(TherapySession).where(TherapySession.calendly_invitee_uri == uri)
+                ).first()
+            if session:
+                break
+
+        if not session:
+            logger.warning(
+                "No session found for rescheduled event (old_event=%s, old_invitee=%s, new_event=%s, new_invitee=%s)",
+                old_event_uri,
+                old_invitee_uri,
+                new_event_uri,
+                new_invitee_uri,
+            )
+            return {"status": "not_found", "message": "Session not found"}
+
+        therapist = db.get(Therapist, session.therapist_id)
+        if not therapist:
+            logger.error(f"No therapist found for session {session.id}")
+            return {"status": "error", "message": "Therapist not found"}
+
+        if not therapist.calendly_pat_encrypted:
+            logger.error(f"Therapist {therapist.id} has no Calendly PAT")
+            return {"status": "error", "message": "Therapist PAT not configured"}
+
+        target_event_uri = new_event_uri or session.calendly_event_uri
+        if not target_event_uri:
+            logger.error(f"No target event URI in rescheduled payload for session {session.id}")
+            return {"status": "error", "message": "Missing event URI"}
+
+        pat = decrypt_string(therapist.calendly_pat_encrypted)
+        event_details = get_scheduled_event_with_pat(target_event_uri, pat)
+        if not event_details:
+            logger.error(f"Failed to fetch scheduled event details for reschedule: {target_event_uri}")
+            return {"status": "error", "message": "Could not fetch event details"}
+
+        start_time = datetime.fromisoformat(
+            event_details["start_time"].replace("Z", "+00:00")
+        )
+        end_time = datetime.fromisoformat(
+            event_details["end_time"].replace("Z", "+00:00")
+        )
+        event_type_uri = event_details["event_type"]
+
+        therapist_event_type = db.exec(
+            select(TherapistEventType).where(
+                TherapistEventType.therapist_id == therapist.id,
+                TherapistEventType.calendly_event_type_uri == event_type_uri,
+            )
+        ).first()
+
+        duration_minutes = session.duration_minutes
+        if therapist_event_type:
+            duration_minutes = therapist_event_type.duration_minutes
+
+        existing_new_session = None
+        if target_event_uri and target_event_uri != session.calendly_event_uri:
+            existing_new_session = db.exec(
+                select(TherapySession).where(
+                    TherapySession.calendly_event_uri == target_event_uri,
+                    TherapySession.id != session.id,
+                )
+            ).first()
+
+        if existing_new_session:
+            # If a new-event session already exists (out-of-order webhooks), keep it
+            # as canonical and mark the old session cancelled.
+            existing_new_session.start_time = start_time
+            existing_new_session.end_time = end_time
+            existing_new_session.duration_minutes = duration_minutes
+            existing_new_session.status = "scheduled"
+            if new_invitee_uri:
+                existing_new_session.calendly_invitee_uri = new_invitee_uri
+            existing_new_session.updated_at = datetime.now(timezone.utc)
+
+            session.status = "cancelled"
+            session.updated_at = datetime.now(timezone.utc)
+
+            db.add(existing_new_session)
+            db.add(session)
+            db.commit()
+
+            logger.info(
+                "Rescheduled session merged: old_session=%s new_session=%s",
+                session.id,
+                existing_new_session.id,
+            )
+            return {
+                "status": "success",
+                "session_id": existing_new_session.id,
+                "action": "rescheduled",
+            }
+
+        session.start_time = start_time
+        session.end_time = end_time
+        session.duration_minutes = duration_minutes
+        session.status = "scheduled"
+        session.calendly_event_uri = target_event_uri
+        if new_invitee_uri:
+            session.calendly_invitee_uri = new_invitee_uri
+        session.updated_at = datetime.now(timezone.utc)
+        db.add(session)
+        db.commit()
+
+        logger.info("Rescheduled session %s to event %s", session.id, target_event_uri)
+        return {
+            "status": "success",
+            "session_id": session.id,
+            "action": "rescheduled",
+        }
+
+    except Exception as e:
+        logger.exception(f"Error handling invitee.rescheduled event: {e}")
         db.rollback()
         return {"status": "error", "message": str(e)}

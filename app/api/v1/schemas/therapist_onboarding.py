@@ -170,6 +170,26 @@ class SaveCalendlyRequest(BaseModel):
         return self
 
 
+class CalendlyWebhookActionRequest(BaseModel):
+    """Optional PAT override for Calendly webhook check/register actions."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "calendly_pat": "eyJraWQiOiIxY2UxZTEzNj...",
+            }
+        }
+    )
+
+    calendly_pat: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional Calendly PAT override. If omitted, backend uses stored encrypted PAT."
+        ),
+    )
+
+
 # Response schemas
 
 
@@ -240,6 +260,37 @@ class SaveCalendlyResponse(BaseModel):
     slot_mapping: list[SlotMappingInfo]
     is_active: bool
     message: str = "Calendly connected and account activated"
+
+
+class CalendlyWebhookSubscriptionInfo(BaseModel):
+    """Webhook subscription info from Calendly."""
+
+    uri: str | None = None
+    scope: str | None = None
+    state: str | None = None
+    callback_url: str
+    events: list[str] = []
+
+
+class CalendlyWebhookCheckResponse(BaseModel):
+    """Response for webhook registration check."""
+
+    endpoint_url: str
+    user_uri: str
+    organization_uri: str
+    has_matching_webhook: bool
+    needs_registration: bool
+    missing_events: list[str] = []
+    subscriptions: list[CalendlyWebhookSubscriptionInfo] = []
+    warnings: list[str] = []
+
+
+class CalendlyWebhookRegisterResponse(CalendlyWebhookCheckResponse):
+    """Response for webhook registration action."""
+
+    created: bool
+    created_webhook_uri: str | None = None
+    signing_key: str | None = None
 
 
 class TherapistProfileResponse(BaseModel):

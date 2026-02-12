@@ -1,5 +1,7 @@
 """State machine handlers for WhatsApp bot conversation flow."""
 
+import re
+
 from sqlmodel import Session, select
 
 from app.models import Therapist, TherapistEventType, TherapistSpecialty
@@ -15,6 +17,41 @@ from app.services.bot.helpers import (
 
 
 GREETING_KEYWORDS = {"hi", "hello", "hey", "menu", "reset", "start"}
+
+
+def _extract_name(body: str) -> str:
+    """Extract a likely person name from natural-language input."""
+    text = body.strip()
+    if not text:
+        return ""
+
+    # Prefer explicit self-introductions.
+    intro_patterns = [
+        r"\b(?:my name is|i am|i'm|im|this is|name is)\b\s+(.+)",
+    ]
+    candidate = text
+    for pattern in intro_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            break
+
+    # Trim conversational tails.
+    candidate = re.split(r"[.!?\n]", candidate, maxsplit=1)[0].strip()
+    candidate = re.sub(
+        r"\b(?:nice to meet you|thanks|thank you|pleasure to meet you)\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip(" -,:;")
+
+    # Keep alphabetic name tokens with apostrophes/hyphens.
+    tokens = re.findall(r"[A-Za-z][A-Za-z'\-]*", candidate)
+    if not tokens:
+        tokens = re.findall(r"[A-Za-z][A-Za-z'\-]*", text)
+
+    # Cap to avoid accidentally storing full sentences as names.
+    return " ".join(tokens[:4]).title()
 
 
 def _get_preferred_therapist_name(client, db: Session) -> str | None:
@@ -109,7 +146,7 @@ def handle_awaiting_name(client, body: str, db: Session) -> tuple[str, str]:
     - Must be at least 2 characters
     - Cannot be only digits
     """
-    name = body.strip().title()
+    name = _extract_name(body)
 
     # Validate name
     if len(name) < 2:

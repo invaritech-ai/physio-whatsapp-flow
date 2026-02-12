@@ -4,8 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_admin
+from app.core.config import settings
+from app.core.encryption import decrypt_string
 from app.db.session import get_session
 from app.models import Therapist, TherapistSpecialty, TherapistSpecialtyMap, User
+from app.api.v1.schemas.therapist_onboarding import CalendlyWebhookCheckResponse
 from app.api.v1.schemas.therapist import (
     TherapistCreate,
     TherapistUpdate,
@@ -14,6 +17,7 @@ from app.api.v1.schemas.therapist import (
     SpecialtyAssignment,
 )
 from app.api.v1.schemas.specialty import SpecialtyResponse
+from app.services.calendly_webhooks import CalendlyWebhookError, check_webhook_registration
 
 router = APIRouter(prefix="/admin/therapists", tags=["Admin - Therapists"])
 
@@ -242,3 +246,41 @@ def list_therapist_specialties(therapist_id: int, admin: User = Depends(get_curr
         )
         for s in specialties
     ]
+
+
+@router.post("/{therapist_id}/calendly-webhook/check", response_model=CalendlyWebhookCheckResponse)
+def check_therapist_calendly_webhook(
+    therapist_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """
+    Admin-triggered Calendly webhook check for a therapist.
+
+    Useful for operational diagnostics when onboarding spans multiple Calendly orgs.
+    """
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    if not therapist.calendly_pat_encrypted:
+        raise HTTPException(
+            status_code=400,
+            detail="Therapist does not have a stored Calendly PAT.",
+        )
+
+    if not settings.public_base_url:
+        raise HTTPException(
+            status_code=500,
+            detail="PUBLIC_BASE_URL is not configured.",
+        )
+
+    calendly_pat = decrypt_string(therapist.calendly_pat_encrypted)
+    endpoint_url = f"{settings.public_base_url.rstrip('/')}/api/v1/webhooks/calendly"
+
+    try:
+        status = check_webhook_registration(calendly_pat, endpoint_url)
+    except CalendlyWebhookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return CalendlyWebhookCheckResponse(endpoint_url=endpoint_url, **status)

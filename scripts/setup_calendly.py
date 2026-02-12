@@ -151,6 +151,7 @@ def create_webhook(webhook_url, headers, org_uri):
     # Events we want to subscribe to
     events = [
         "invitee.created",
+        "invitee.rescheduled",
         "invitee.canceled",
     ]
 

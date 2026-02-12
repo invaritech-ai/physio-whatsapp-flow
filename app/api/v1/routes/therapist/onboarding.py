@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist_allow_inactive
+from app.core.config import settings
+from app.core.encryption import decrypt_string
 from app.db.session import get_session
 from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
 from app.api.v1.schemas.therapist_onboarding import (
@@ -24,6 +26,14 @@ from app.api.v1.schemas.therapist_onboarding import (
     EventTypeInfo,
     EventTypeDetail,
     SpecialtyInfo,
+    CalendlyWebhookActionRequest,
+    CalendlyWebhookCheckResponse,
+    CalendlyWebhookRegisterResponse,
+)
+from app.services.calendly_webhooks import (
+    CalendlyWebhookError,
+    check_webhook_registration,
+    register_webhook_if_needed,
 )
 from app.services.therapist_onboarding import (
     validate_calendly_pat,
@@ -33,6 +43,26 @@ from app.services.therapist_onboarding import (
 )
 
 router = APIRouter(prefix="/therapist", tags=["Therapist - Onboarding"])
+
+
+def _resolve_calendly_pat(therapist: Therapist, explicit_pat: str | None = None) -> str:
+    if explicit_pat:
+        return explicit_pat
+    if therapist.calendly_pat_encrypted:
+        return decrypt_string(therapist.calendly_pat_encrypted)
+    raise HTTPException(
+        status_code=400,
+        detail="Calendly PAT not configured. Connect Calendly first.",
+    )
+
+
+def _calendly_webhook_endpoint() -> str:
+    if not settings.public_base_url:
+        raise HTTPException(
+            status_code=500,
+            detail="PUBLIC_BASE_URL is not configured.",
+        )
+    return f"{settings.public_base_url.rstrip('/')}/api/v1/webhooks/calendly"
 
 
 @router.post("/onboarding/complete", response_model=CompleteOnboardingResponse, status_code=201)
@@ -416,6 +446,53 @@ def save_calendly(
         calendly_user_uri=therapist.calendly_user_uri,
         slot_mapping=sorted(slot_mapping_response, key=lambda s: s.duration_minutes),
         is_active=therapist.is_active,
+    )
+
+
+@router.post("/onboarding/calendly-webhook/check", response_model=CalendlyWebhookCheckResponse)
+def check_calendly_webhook(
+    data: CalendlyWebhookActionRequest,
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+):
+    """
+    Check whether Calendly webhook registration is needed for this therapist.
+
+    Uses stored encrypted PAT by default, or request PAT override if provided.
+    """
+    calendly_pat = _resolve_calendly_pat(therapist, data.calendly_pat)
+    endpoint_url = _calendly_webhook_endpoint()
+    try:
+        status = check_webhook_registration(calendly_pat, endpoint_url)
+    except CalendlyWebhookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return CalendlyWebhookCheckResponse(
+        endpoint_url=endpoint_url,
+        **status,
+    )
+
+
+@router.post("/onboarding/calendly-webhook/register", response_model=CalendlyWebhookRegisterResponse)
+def register_calendly_webhook(
+    data: CalendlyWebhookActionRequest,
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+):
+    """
+    Register Calendly webhook for this therapist if missing (idempotent).
+
+    Uses user-scope registration so therapists from different Calendly orgs can
+    self-provision their own webhook subscription.
+    """
+    calendly_pat = _resolve_calendly_pat(therapist, data.calendly_pat)
+    endpoint_url = _calendly_webhook_endpoint()
+    try:
+        result = register_webhook_if_needed(calendly_pat, endpoint_url)
+    except CalendlyWebhookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return CalendlyWebhookRegisterResponse(
+        endpoint_url=endpoint_url,
+        **result,
     )
 
 
