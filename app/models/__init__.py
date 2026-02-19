@@ -1,5 +1,6 @@
 from app.models.access_request import AccessRequest
 from app.models.auth_event import AuthEvent
+from app.models.billing import BillingPlan, ClientPlanAssignment
 from app.models.client import Client
 from app.models.event_type import TherapistEventType
 from app.models.matching import MatchingDecision
@@ -15,6 +16,8 @@ __all__ = [
     "AccessRequest",
     "AuthEvent",
     "User",
+    "BillingPlan",
+    "ClientPlanAssignment",
     "Client",
     "Therapist",
     "TherapistSpecialty",

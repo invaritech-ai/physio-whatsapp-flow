@@ -12,6 +12,7 @@ class Therapist(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", unique=True, index=True)
     display_name: str | None = None
+    license_number: str | None = Field(default=None, max_length=64, unique=True, index=True)
     is_active: bool = Field(default=True)
     calendly_user_uri: str | None = None  # e.g., "https://api.calendly.com/users/XXXXX"
     calendly_pat_encrypted: str | None = None  # Encrypted Calendly Personal Access Token

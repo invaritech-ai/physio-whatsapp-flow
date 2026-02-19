@@ -21,7 +21,9 @@ def _render_invoice_pdf_file(
     diagnosis: str | None,
     session_start_at: datetime | None,
     therapist_name: str | None,
-    payment_method: str | None,
+    therapist_license_number: str | None,
+    payment_mode: str | None,
+    special_notes: str | None,
     issued_at: datetime | None,
 ) -> Path:
     renderer = settings.invoice_renderer.strip().lower()
@@ -37,7 +39,9 @@ def _render_invoice_pdf_file(
                 diagnosis=diagnosis,
                 session_start_at=session_start_at,
                 therapist_name=therapist_name,
-                payment_method=payment_method,
+                therapist_license_number=therapist_license_number,
+                payment_mode=payment_mode,
+                special_notes=special_notes,
                 issued_at=issued_at,
             )
         except Exception:
@@ -54,7 +58,10 @@ def _render_invoice_pdf_file(
         description=description,
         session_start_at=session_start_at,
         therapist_name=therapist_name,
-        payment_method=payment_method,
+        therapist_license_number=therapist_license_number,
+        diagnosis=diagnosis,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
         issued_at=issued_at,
     )
 
@@ -71,7 +78,9 @@ def generate_and_store_invoice_pdf_url(
     diagnosis: str | None,
     session_start_at: datetime | None,
     therapist_name: str | None,
-    payment_method: str | None,
+    therapist_license_number: str | None,
+    payment_mode: str | None,
+    special_notes: str | None,
     issued_at: datetime | None,
 ) -> str:
     pdf_path = _render_invoice_pdf_file(
@@ -85,7 +94,9 @@ def generate_and_store_invoice_pdf_url(
         diagnosis=diagnosis,
         session_start_at=session_start_at,
         therapist_name=therapist_name,
-        payment_method=payment_method,
+        therapist_license_number=therapist_license_number,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
         issued_at=issued_at,
     )
     return store_invoice_pdf(invoice_id=invoice_id, local_pdf_path=pdf_path)

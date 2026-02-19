@@ -1,12 +1,22 @@
 """Tests for admin invoice endpoints."""
 
 from datetime import datetime, timedelta, timezone
+import re
 from unittest.mock import patch
 
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import Client, ClientFinancial, Receipt, Session as TherapySession, Therapist, User
+from app.models import (
+    Client,
+    ClientFinancial,
+    PaymentRecord,
+    Receipt,
+    Session as TherapySession,
+    SessionNote,
+    Therapist,
+    User,
+)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -43,9 +53,11 @@ def _create_therapist(db_session: Session, *, suffix: str) -> Therapist:
     db_session.commit()
     db_session.refresh(user)
 
+    normalized_suffix = re.sub(r"[^A-Z0-9]+", "-", suffix.upper()).strip("-")
     therapist = Therapist(
         user_id=user.id,
         display_name=user.display_name,
+        license_number=f"PT-{normalized_suffix}",
         is_active=True,
     )
     db_session.add(therapist)
@@ -162,6 +174,110 @@ def test_generate_invoice_success_updates_financials_and_serves_pdf(client, db_s
         )
     assert detail_response.status_code == 200
     assert detail_response.json()["id"] == data["id"]
+
+
+def test_generate_invoice_accepts_optional_metadata_and_renders_provider_details(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-meta")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100008",
+    )
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=70000,
+            total_receipted_cents=0,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "amount_cents": 65000,
+                "currency": "HKD",
+                "description": "Physio session invoice",
+                "payment_mode": "Cash",
+                "diagnosis": "Bilateral plantar fasciitis",
+                "special_notes": "Bring insurer card",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["payment_mode"] == "Cash"
+    assert data["diagnosis"] == "Bilateral plantar fasciitis"
+    assert data["special_notes"] == "Bring insurer card"
+
+    pdf_response = client.get(data["pdf_url"])
+    assert pdf_response.status_code == 200
+    pdf_text = pdf_response.content.decode("latin-1", errors="ignore")
+    assert f"License #{therapist.license_number}" in pdf_text
+    assert "Diagnosis: Bilateral plantar fasciitis" in pdf_text
+    assert "Special Notes: Bring insurer card" in pdf_text
+
+
+def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-fallback-meta")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100009",
+    )
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=90000,
+            total_receipted_cents=0,
+            currency="HKD",
+        )
+    )
+    db_session.add(
+        PaymentRecord(
+            session_id=session_row.id,
+            amount_cents=65000,
+            currency="HKD",
+            payment_method="bank_transfer",
+            status="confirmed",
+            recorded_by_user_id=admin.id,
+        )
+    )
+    db_session.add(
+        SessionNote(
+            session_id=session_row.id,
+            author_user_id=admin.id,
+            note_text="Diagnosis: Lumbar strain",
+            is_read=False,
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "amount_cents": 65000,
+                "currency": "HKD",
+                "description": "Physio session invoice",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["payment_mode"] == "Bank Transfer"
+    assert data["diagnosis"] == "Lumbar strain"
+    assert data["special_notes"] == "-"
 
 
 def test_generate_invoice_rejects_amount_exceeding_available_balance(client, db_session: Session):

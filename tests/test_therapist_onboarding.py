@@ -50,6 +50,7 @@ def therapist_no_uri_fixture(db_session: Session, therapist_user: User):
     therapist = Therapist(
         user_id=therapist_user.id,
         display_name="Dr. Test Therapist",
+        license_number="PT-ONBOARD-001",
         is_active=True,
     )
     db_session.add(therapist)
@@ -64,6 +65,7 @@ def therapist_with_uri_fixture(db_session: Session, therapist_user: User):
     therapist = Therapist(
         user_id=therapist_user.id,
         display_name="Dr. Test Therapist",
+        license_number="PT-ONBOARD-002",
         calendly_user_uri="https://api.calendly.com/users/TEST123",
         is_active=True,
     )
@@ -283,6 +285,49 @@ class TestCompleteOnboarding:
         assert response.status_code == 400
         assert "Invalid specialty IDs" in response.json()["detail"]
 
+    def test_complete_onboarding_requires_license_number(
+        self,
+        client,
+        db_session: Session,
+        sample_specialties_onboarding: list[TherapistSpecialty],
+        mock_calendly_valid,
+    ):
+        user = User(
+            neon_auth_sub="therapist-no-license-sub",
+            email="therapist-no-license@test.com",
+            display_name="No License Therapist",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+        therapist = Therapist(
+            user_id=user.id,
+            display_name="No License Therapist",
+            is_active=True,
+        )
+        db_session.add(therapist)
+        db_session.commit()
+
+        with patch("app.core.auth._verify_neon_token") as mock_verify:
+            mock_verify.return_value = {
+                "sub": user.neon_auth_sub,
+                "email": user.email,
+            }
+            response = client.post(
+                "/api/v1/therapist/onboarding/complete",
+                json={
+                    "calendly_pat": "valid_token_123",
+                    "specialty_ids": [1],
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "license_number_required"
+
 
 class TestOnboardingStatus:
     """Tests for GET /therapist/onboarding/status"""
@@ -302,6 +347,7 @@ class TestOnboardingStatus:
         assert response.status_code == 200
         data = response.json()
         assert data["is_onboarded"] is False
+        assert data["has_license_number"] is True
         assert data["has_calendly_uri"] is False
         assert data["has_event_types"] is False
         assert data["has_specialties"] is False
@@ -309,6 +355,7 @@ class TestOnboardingStatus:
         assert "calendly_setup" in data["missing_steps"]
         assert "event_types" in data["missing_steps"]
         assert "specialties" in data["missing_steps"]
+        assert "license_number" not in data["missing_steps"]
 
     def test_status_fully_onboarded(
         self,
@@ -319,15 +366,34 @@ class TestOnboardingStatus:
         mock_jwt_therapist,
     ):
         """Status shows complete onboarding."""
-        # Add event types
-        event_type = TherapistEventType(
-            therapist_id=therapist_with_uri.id,
-            calendly_event_type_uri="https://api.calendly.com/event_types/30MIN",
-            duration_minutes=30,
-            scheduling_url="https://calendly.com/test/30min",
-            is_active=True,
+        # Add required slot mapping event types
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist_with_uri.id,
+                calendly_event_type_uri="https://api.calendly.com/event_types/30MIN",
+                duration_minutes=30,
+                scheduling_url="https://calendly.com/test/30min",
+                is_active=True,
+            )
         )
-        db_session.add(event_type)
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist_with_uri.id,
+                calendly_event_type_uri="https://api.calendly.com/event_types/45MIN",
+                duration_minutes=45,
+                scheduling_url="https://calendly.com/test/45min",
+                is_active=True,
+            )
+        )
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist_with_uri.id,
+                calendly_event_type_uri="https://api.calendly.com/event_types/60MIN",
+                duration_minutes=60,
+                scheduling_url="https://calendly.com/test/60min",
+                is_active=True,
+            )
+        )
 
         # Add specialties
         mapping = TherapistSpecialtyMap(
@@ -345,12 +411,52 @@ class TestOnboardingStatus:
         assert response.status_code == 200
         data = response.json()
         assert data["is_onboarded"] is True
+        assert data["has_license_number"] is True
         assert data["has_calendly_uri"] is True
         assert data["has_event_types"] is True
         assert data["has_specialties"] is True
-        assert data["event_types_count"] == 1
+        assert data["event_types_count"] == 3
         assert data["specialties_count"] == 1
         assert data["missing_steps"] == []
+
+    def test_status_missing_license_number_step(
+        self,
+        client,
+        db_session: Session,
+    ):
+        user = User(
+            neon_auth_sub="therapist-missing-license-sub",
+            email="therapist-missing-license@test.com",
+            display_name="Missing License Therapist",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+        therapist = Therapist(
+            user_id=user.id,
+            display_name="Missing License Therapist",
+            is_active=True,
+        )
+        db_session.add(therapist)
+        db_session.commit()
+
+        with patch("app.core.auth._verify_neon_token") as mock_verify:
+            mock_verify.return_value = {
+                "sub": user.neon_auth_sub,
+                "email": user.email,
+            }
+            response = client.get(
+                "/api/v1/therapist/onboarding/status",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["has_license_number"] is False
+        assert "license_number" in data["missing_steps"]
 
 
 class TestValidateCalendly:
@@ -505,6 +611,74 @@ class TestSyncEventTypes:
         assert "does not have Calendly URI" in response.json()["detail"]
 
 
+class TestUpdateProfile:
+    """Tests for PATCH /therapist/onboarding/profile"""
+
+    def test_update_profile_persists_license_number(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        response = client.patch(
+            "/api/v1/therapist/onboarding/profile",
+            json={
+                "display_name": "Dr. Updated",
+                "license_number": " pt 203315 ",
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["display_name"] == "Dr. Updated"
+        assert data["license_number"] == "PT 203315"
+
+        db_session.refresh(therapist_no_uri)
+        assert therapist_no_uri.display_name == "Dr. Updated"
+        assert therapist_no_uri.license_number == "PT 203315"
+
+    def test_update_profile_duplicate_license_number_fails(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        other_user = User(
+            neon_auth_sub="therapist-other-license-sub",
+            email="therapist-other-license@test.com",
+            display_name="Other Therapist",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(other_user)
+        db_session.commit()
+        db_session.refresh(other_user)
+
+        other_therapist = Therapist(
+            user_id=other_user.id,
+            display_name="Other Therapist",
+            license_number="PT-CLASH-1",
+            is_active=True,
+        )
+        db_session.add(other_therapist)
+        db_session.commit()
+
+        response = client.patch(
+            "/api/v1/therapist/onboarding/profile",
+            json={
+                "display_name": "Dr. Updated",
+                "license_number": "pt-clash-1",
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "license_number_already_exists"
+
+
 class TestUpdateSpecialties:
     """Tests for PATCH /therapist/specialties"""
 
@@ -631,6 +805,7 @@ class TestGetTherapistProfile:
         data = response.json()
         assert data["id"] == therapist_with_uri.id
         assert data["display_name"] == "Dr. Test Therapist"
+        assert data["license_number"] == "PT-ONBOARD-002"
         assert data["email"] == "therapist@test.com"
         assert data["is_active"] is True
         assert data["calendly_user_uri"] == "https://api.calendly.com/users/TEST123"
@@ -654,6 +829,7 @@ class TestGetTherapistProfile:
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == therapist_no_uri.id
+        assert data["license_number"] == "PT-ONBOARD-001"
         assert data["specialties"] == []
         assert data["event_types"] == []
         assert data["calendly_user_uri"] is None

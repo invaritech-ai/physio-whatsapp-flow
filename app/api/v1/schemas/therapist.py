@@ -16,6 +16,7 @@ class TherapistCreate(BaseModel):
                 "neon_auth_sub": "auth-therapist-123",
                 "email": "dr.smith@clinic.com",
                 "display_name": "Dr. Smith",
+                "license_number": "PT203315",
                 "calendly_user_uri": "https://api.calendly.com/users/XXXXX",
             }
         }
@@ -24,6 +25,7 @@ class TherapistCreate(BaseModel):
     neon_auth_sub: str = Field(..., min_length=1, description="Neon Auth subject ID")
     email: EmailStr = Field(..., description="Therapist email (unique)")
     display_name: str = Field(..., min_length=1, max_length=100)
+    license_number: str | None = Field(default=None, min_length=3, max_length=64)
     calendly_user_uri: str | None = Field(None, description="Calendly user URI")
 
 
@@ -31,6 +33,7 @@ class TherapistUpdate(BaseModel):
     """Request schema for updating therapist."""
 
     display_name: str | None = Field(None, min_length=1, max_length=100)
+    license_number: str | None = Field(default=None, min_length=3, max_length=64)
     is_active: bool | None = None
     calendly_user_uri: str | None = None
 
@@ -49,6 +52,7 @@ class TherapistResponse(BaseModel):
     id: int
     user_id: int
     display_name: str | None
+    license_number: str | None
     is_active: bool
     calendly_user_uri: str | None
     specialties: list[SpecialtyResponse]
@@ -62,6 +66,7 @@ class TherapistListResponse(BaseModel):
 
     id: int
     display_name: str | None
+    license_number: str | None
     is_active: bool
     email: str  # From User relation
     specialty_count: int

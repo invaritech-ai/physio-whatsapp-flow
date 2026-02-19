@@ -14,6 +14,7 @@ from app.api.v1.schemas.therapist_patient import (
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
 from app.models import Client, Session as TherapySession, Therapist
+from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/therapist/patients", tags=["Therapist Patients"])
 
@@ -143,6 +144,9 @@ def get_therapist_patient_detail(
     ).all()
     session_count, completed_count, upcoming_count, last_session_at, next_session_at = _build_patient_metrics(sessions)
 
+    plan_map = load_active_plan_map(db, client_ids={client_id})
+    plan_30 = plan_map.get((client_id, 30))
+    plan_45 = plan_map.get((client_id, 45))
     return TherapistPatientDetailResponse(
         id=client.id,
         name=client.name,
@@ -155,6 +159,8 @@ def get_therapist_patient_detail(
         upcoming_session_count=upcoming_count,
         last_session_at=last_session_at,
         next_session_at=next_session_at,
+        plan_30=plan_30,
+        plan_45=plan_45,
     )
 
 
@@ -183,5 +189,27 @@ def list_therapist_patient_sessions(
     if to_date:
         stmt = stmt.where(TherapySession.start_time <= to_date)
     stmt = stmt.order_by(TherapySession.start_time.desc()).offset(offset).limit(limit)
-
-    return db.exec(stmt).all()
+    sessions = db.exec(stmt).all()
+    plan_map = load_active_plan_map(db, client_ids={client_id})
+    rows: list[TherapistPatientSessionItem] = []
+    for session in sessions:
+        expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
+            session,
+            plan_map=plan_map,
+        )
+        rows.append(
+            TherapistPatientSessionItem(
+                id=session.id,
+                start_time=session.start_time,
+                end_time=session.end_time,
+                duration_minutes=session.duration_minutes,
+                status=session.status,
+                source=session.source,
+                charge_amount_cents=session.charge_amount_cents,
+                currency=session.currency,
+                expected_charge_cents=expected_charge_cents,
+                expected_charge_currency=expected_charge_currency,
+                assigned_plan=assigned_plan,
+            )
+        )
+    return rows

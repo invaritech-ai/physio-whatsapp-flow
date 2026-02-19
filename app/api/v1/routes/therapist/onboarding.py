@@ -45,6 +45,7 @@ from app.services.therapist_onboarding import (
     update_therapist_specialties,
     complete_therapist_onboarding,
 )
+from app.services.license_numbers import is_valid_license_number, normalize_license_number
 
 router = APIRouter(prefix="/therapist", tags=["Therapist - Onboarding"])
 
@@ -69,6 +70,35 @@ def _calendly_webhook_endpoint() -> str:
     return f"{settings.public_base_url.rstrip('/')}/api/v1/webhooks/calendly"
 
 
+def _normalize_and_validate_license_number(value: str | None) -> str | None:
+    normalized = normalize_license_number(value)
+    if normalized is None:
+        return None
+    if not is_valid_license_number(normalized):
+        raise HTTPException(status_code=400, detail="invalid_license_number")
+    return normalized
+
+
+def _ensure_unique_license_number(
+    db: Session,
+    *,
+    therapist_id: int | None,
+    license_number: str | None,
+) -> None:
+    if license_number is None:
+        return
+    existing = db.exec(
+        select(Therapist).where(Therapist.license_number == license_number)
+    ).first()
+    if existing and existing.id != therapist_id:
+        raise HTTPException(status_code=400, detail="license_number_already_exists")
+
+
+def _require_license_number(therapist: Therapist) -> None:
+    if not therapist.license_number or not therapist.license_number.strip():
+        raise HTTPException(status_code=400, detail="license_number_required")
+
+
 @router.post("/onboarding/complete", response_model=CompleteOnboardingResponse, status_code=201)
 def complete_onboarding(
     data: CompleteOnboardingRequest,
@@ -90,6 +120,7 @@ def complete_onboarding(
     Raises:
         400: Invalid PAT, missing event types, invalid specialty IDs, or already onboarded
     """
+    _require_license_number(therapist)
     try:
         success, response_data, errors = complete_therapist_onboarding(
             db, therapist, data.calendly_pat, data.specialty_ids
@@ -143,6 +174,9 @@ def get_onboarding_status(
 
     # Determine step states
     has_profile_name = therapist.display_name is not None and therapist.display_name != ""
+    has_license_number = (
+        therapist.license_number is not None and therapist.license_number.strip() != ""
+    )
     has_calendly_uri = therapist.calendly_user_uri is not None
     has_event_types = len(event_types) > 0
     has_specialties = len(specialty_mappings) > 0
@@ -152,7 +186,7 @@ def get_onboarding_status(
     has_slot_mapping = {30, 45, 60}.issubset(mapped_durations)
 
     is_onboarded = (
-        has_profile_name and has_specialties and has_calendly_uri
+        has_profile_name and has_license_number and has_specialties and has_calendly_uri
         and has_slot_mapping and therapist.is_active
     )
 
@@ -160,10 +194,14 @@ def get_onboarding_status(
     missing_steps = []
     if not has_profile_name:
         missing_steps.append("profile_name")
+    if not has_license_number:
+        missing_steps.append("license_number")
     if not has_specialties:
         missing_steps.append("specialties")
     if not has_calendly_uri:
         missing_steps.append("calendly_setup")
+    if not has_event_types:
+        missing_steps.append("event_types")
     if not has_slot_mapping:
         missing_steps.append("slot_mapping")
     if not therapist.is_active:
@@ -172,6 +210,7 @@ def get_onboarding_status(
     return OnboardingStatusResponse(
         is_onboarded=is_onboarded,
         has_profile_name=has_profile_name,
+        has_license_number=has_license_number,
         has_specialties=has_specialties,
         specialties_count=len(specialty_mappings),
         has_calendly_uri=has_calendly_uri,
@@ -335,6 +374,14 @@ def update_profile(
     """
     # Update therapist display_name
     therapist.display_name = data.display_name
+    if "license_number" in data.model_fields_set:
+        normalized_license = _normalize_and_validate_license_number(data.license_number)
+        _ensure_unique_license_number(
+            db,
+            therapist_id=therapist.id,
+            license_number=normalized_license,
+        )
+        therapist.license_number = normalized_license
 
     # Also update user display_name
     user = db.get(User, therapist.user_id)
@@ -347,7 +394,10 @@ def update_profile(
     db.commit()
     db.refresh(therapist)
 
-    return UpdateProfileResponse(display_name=therapist.display_name)
+    return UpdateProfileResponse(
+        display_name=therapist.display_name,
+        license_number=therapist.license_number,
+    )
 
 
 @router.post("/onboarding/calendly", response_model=SaveCalendlyResponse)
@@ -368,6 +418,7 @@ def save_calendly(
     Server validates each URI belongs to the therapist's Calendly account,
     persists only the mapped event types, and activates the account.
     """
+    _require_license_number(therapist)
     from app.core.encryption import encrypt_string
 
     # Validate PAT
@@ -604,6 +655,7 @@ def get_therapist_profile(
         id=therapist.id,
         user_id=therapist.user_id,
         display_name=therapist.display_name,
+        license_number=therapist.license_number,
         email=user.email if user else None,
         is_active=therapist.is_active,
         calendly_user_uri=therapist.calendly_user_uri,

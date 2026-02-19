@@ -18,6 +18,11 @@ class PaymentRecord(SQLModel, table=True):
     currency: str = Field(default="HKD")
     payment_method: str  # e.g., "cash", "credit_card", "fps", "bank_transfer"
     status: str = Field(default="pending")  # pending|confirmed|rejected
+    received_by_role: str | None = Field(default=None, max_length=20)  # admin|therapist
+    received_by_name: str | None = Field(default=None, max_length=120)
+    paid_at: datetime | None = None
+    reference: str | None = Field(default=None, max_length=255)
+    notes: str | None = Field(default=None, sa_column=sa.Column(sa.Text(), nullable=True))
     recorded_by_user_id: int = Field(foreign_key="user.id", index=True)
     created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))
     updated_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))
@@ -44,6 +49,9 @@ class Receipt(SQLModel, table=True):
     amount_cents: int
     currency: str = Field(default="HKD")
     description: str = Field(sa_column=sa.Column(sa.Text(), nullable=False))
+    payment_mode: str | None = Field(default=None, max_length=120)
+    diagnosis: str | None = Field(default=None, sa_column=sa.Column(sa.Text(), nullable=True))
+    special_notes: str | None = Field(default=None, sa_column=sa.Column(sa.Text(), nullable=True))
     pdf_url: str | None = None  # Generated receipt PDF
     status: str = Field(default="pending")  # pending|issued|voided
     issued_by_user_id: int = Field(foreign_key="user.id", index=True)

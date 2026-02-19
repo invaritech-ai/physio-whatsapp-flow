@@ -1,7 +1,7 @@
-# Patient + Billing API Draft (Backend v0.2)
+# Patient + Billing API Draft (Backend v0.3)
 
 Date: 2026-02-19  
-Status: Draft with frontend freeze decisions (2026-02-19)  
+Status: Draft with Phase 4/4.1 contract updates (2026-02-19)  
 Owners: Backend Team + Frontend Team
 
 ## 1) Scope
@@ -26,13 +26,21 @@ Agreed with frontend:
    - `email`
    - `date_of_birth`
    - `address`
+5. `GET /api/v1/admin/clients` uses a paginated envelope:
+   - `items`, `total`, `limit`, `offset`, `has_more`
+6. Therapist `license_number` is required before onboarding completion and is exposed in therapist profile/admin therapist surfaces.
+7. Invoice generation supports optional metadata fields:
+   - `payment_mode`
+   - `diagnosis` (override supported)
+   - `special_notes`
 
 ## 2) Auth + Response Conventions
 
 - All endpoints below require `Authorization: Bearer <token>`.
 - Admin routes require `role=admin`.
 - Therapist routes require `role=therapist`.
-- Response style stays as raw object/list (no global `{status,data}` envelope in this phase).
+- Response style stays as raw object/list by default (no global `{status,data}` envelope in this phase).
+- Exception: `GET /api/v1/admin/clients` returns a paginated metadata envelope.
 - Validation/auth errors use existing backend patterns:
   - `401 invalid_token`
   - `403 access_pending`
@@ -49,25 +57,32 @@ Query params:
 - `q` (optional): name/phone contains search
 - `phone_e164` (optional): exact phone lookup
 - `email` (optional): exact or contains (implementation-defined, documented in OpenAPI)
+- `date_of_birth` (optional): exact date (`YYYY-MM-DD`)
 - `preferred_therapist_id` (optional)
 - `limit` (default 50, max 200)
 - `offset` (default 0)
 
 Response:
 ```json
-[
-  {
-    "id": 101,
-    "name": "John Chan",
-    "phone_e164": "+85291234567",
-    "email": "john.chan@example.com",
-    "date_of_birth": "1992-07-19",
-    "address": "Flat 12A, Example Building, Kowloon, Hong Kong",
-    "preferred_therapist_id": 12,
-    "created_at": "2026-02-10T09:00:00Z",
-    "updated_at": "2026-02-18T16:20:00Z"
-  }
-]
+{
+  "items": [
+    {
+      "id": 101,
+      "name": "John Chan",
+      "phone_e164": "+85291234567",
+      "email": "john.chan@example.com",
+      "date_of_birth": "1992-07-19",
+      "address": "Flat 12A, Example Building, Kowloon, Hong Kong",
+      "preferred_therapist_id": 12,
+      "created_at": "2026-02-10T09:00:00Z",
+      "updated_at": "2026-02-18T16:20:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "has_more": false
+}
 ```
 
 ### 3.2 Create Patient
@@ -251,7 +266,10 @@ Request:
   "session_id": 501,
   "amount_cents": 65000,
   "currency": "HKD",
-  "description": "Physio session invoice"
+  "description": "Physio session invoice",
+  "payment_mode": "cash",
+  "diagnosis": "Bilateral plantar fasciitis",
+  "special_notes": "Please submit to insurer within 30 days."
 }
 ```
 
@@ -262,6 +280,10 @@ Behavior:
 - Saves `pdf_url`
 - Enforces guard:
   - `amount_cents <= available_to_receipt_cents` at issuance time
+- Metadata fallback precedence:
+  - `payment_mode`: request > latest payment record > `"N/A"`
+  - `diagnosis`: request > latest session note extraction > `"-"`
+  - `special_notes`: request > `"-"`
 
 Response:
 ```json

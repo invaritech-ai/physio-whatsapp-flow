@@ -151,7 +151,12 @@ def test_list_clients_filters(client, db_session: Session):
     with _admin_auth_context(admin):
         q_response = client.get("/api/v1/admin/clients?q=alice", headers=_auth_headers())
     assert q_response.status_code == 200
-    q_data = q_response.json()
+    q_payload = q_response.json()
+    q_data = q_payload["items"]
+    assert q_payload["total"] == 1
+    assert q_payload["limit"] == 50
+    assert q_payload["offset"] == 0
+    assert q_payload["has_more"] is False
     assert len(q_data) == 1
     assert q_data[0]["name"] == "Alice Ng"
 
@@ -161,7 +166,7 @@ def test_list_clients_filters(client, db_session: Session):
             headers=_auth_headers(),
         )
     assert phone_response.status_code == 200
-    phone_data = phone_response.json()
+    phone_data = phone_response.json()["items"]
     assert len(phone_data) == 1
     assert phone_data[0]["name"] == "Bob Chan"
 
@@ -171,7 +176,7 @@ def test_list_clients_filters(client, db_session: Session):
             headers=_auth_headers(),
         )
     assert pref_response.status_code == 200
-    pref_data = pref_response.json()
+    pref_data = pref_response.json()["items"]
     assert len(pref_data) == 1
     assert pref_data[0]["preferred_therapist_id"] == therapist_a.id
 
@@ -208,6 +213,24 @@ def test_patch_client_updates_and_clears_optional_fields(client, db_session: Ses
     assert data["email"] == "new@example.com"
     assert data["address"] == "New Address"
     assert data["preferred_therapist_id"] is None
+
+
+def test_list_clients_returns_pagination_metadata(client, db_session: Session):
+    admin = _create_admin(db_session)
+    db_session.add(Client(phone_e164="+85293330001", name="Client 1"))
+    db_session.add(Client(phone_e164="+85293330002", name="Client 2"))
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get("/api/v1/admin/clients?limit=1&offset=0", headers=_auth_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["limit"] == 1
+    assert payload["offset"] == 0
+    assert payload["has_more"] is True
+    assert len(payload["items"]) == 1
 
 
 def test_list_client_sessions_with_status_filter(client, db_session: Session):

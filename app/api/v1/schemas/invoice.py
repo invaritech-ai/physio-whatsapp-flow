@@ -16,6 +16,9 @@ class InvoiceListItem(BaseModel):
     amount_cents: int
     currency: str
     description: str
+    payment_mode: str | None = None
+    diagnosis: str | None = None
+    special_notes: str | None = None
     pdf_url: str | None
     status: str
     created_at: datetime
@@ -38,15 +41,21 @@ class InvoiceGenerateRequest(BaseModel):
                 "amount_cents": 65000,
                 "currency": "HKD",
                 "description": "Physio session invoice",
+                "payment_mode": "cash",
+                "diagnosis": "Bilateral plantar fasciitis",
+                "special_notes": "Please submit to insurer within 30 days.",
             }
         }
     )
 
     client_id: int = Field(gt=0)
     session_id: int = Field(gt=0)
-    amount_cents: int = Field(gt=0)
+    amount_cents: int | None = Field(default=None, gt=0)
     currency: str = Field(default="HKD", min_length=3, max_length=8)
     description: str = Field(min_length=1, max_length=2000)
+    payment_mode: str | None = Field(default=None, min_length=1, max_length=120)
+    diagnosis: str | None = Field(default=None, min_length=1, max_length=2000)
+    special_notes: str | None = Field(default=None, min_length=1, max_length=4000)
 
 
 class TherapistInvoiceListItem(InvoiceListItem):

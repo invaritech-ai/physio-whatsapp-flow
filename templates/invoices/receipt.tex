@@ -60,13 +60,13 @@ Tel: {{client_phone}}
 \makecell[l]{
 {{item_datetime_line}}\\
 {{item_description}}\\
-{{therapist_name}}
+{{provider_line}}
 }
 &
 \makecell[l]{
 Invoice \#{{invoice_number}}\\
 Diagnosis: {{diagnosis_line}}\\
-{{item_description}}
+Special Notes: {{special_notes_line}}
 }
 &
 \${{amount_display}}\\[8pt]
@@ -76,7 +76,7 @@ Diagnosis: {{diagnosis_line}}\\
 \multicolumn{2}{r}{Subtotal} & \${{amount_display}}\\
 \multicolumn{2}{r}{Payer Total} & \${{amount_display}}\\[6pt]
 
-{{therapist_name}} & & \\[6pt]
+{{provider_line}} & & \\[6pt]
 
 \midrule
 \multicolumn{3}{l}{\textbf{Payments}}\\[4pt]

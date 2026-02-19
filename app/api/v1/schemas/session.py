@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.api.v1.schemas.pricing import AssignedPlanSummary
+
 
 class SessionListItem(BaseModel):
     """Response schema for a session in a list view."""
@@ -17,6 +19,9 @@ class SessionListItem(BaseModel):
     end_time: datetime
     duration_minutes: int
     status: str
+    expected_charge_cents: int | None = None
+    expected_charge_currency: str | None = None
+    assigned_plan: AssignedPlanSummary | None = None
 
 
 class SessionDetail(BaseModel):
@@ -34,6 +39,9 @@ class SessionDetail(BaseModel):
     source: str
     charge_amount_cents: int | None
     currency: str
+    expected_charge_cents: int | None = None
+    expected_charge_currency: str | None = None
+    assigned_plan: AssignedPlanSummary | None = None
     calendly_event_uri: str | None
     created_at: datetime
 

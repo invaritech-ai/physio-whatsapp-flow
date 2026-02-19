@@ -4,6 +4,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.api.v1.schemas.pricing import AssignedPlanSummary
+
 
 class TherapistPatientListItem(BaseModel):
     """Therapist-scoped patient list item."""
@@ -36,6 +38,8 @@ class TherapistPatientDetailResponse(BaseModel):
     upcoming_session_count: int
     last_session_at: datetime | None
     next_session_at: datetime | None
+    plan_30: AssignedPlanSummary | None = None
+    plan_45: AssignedPlanSummary | None = None
 
 
 class TherapistPatientSessionItem(BaseModel):
@@ -51,3 +55,6 @@ class TherapistPatientSessionItem(BaseModel):
     source: str
     charge_amount_cents: int | None
     currency: str
+    expected_charge_cents: int | None = None
+    expected_charge_currency: str | None = None
+    assigned_plan: AssignedPlanSummary | None = None

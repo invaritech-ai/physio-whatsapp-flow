@@ -1,16 +1,16 @@
 """Admin endpoints for client (patient) management."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.client import (
     ClientCreate,
     ClientDetailResponse,
     ClientFinancialResponse,
-    ClientListItem,
+    ClientListResponse,
     ClientMessageListItem,
     ClientSessionListItem,
     ClientUpdate,
@@ -19,6 +19,7 @@ from app.core.auth import get_current_admin
 from app.core.config import settings
 from app.db.session import get_session
 from app.models import Client, ClientFinancial, MessageLog, Session as TherapySession, Therapist, User
+from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/clients", tags=["Admin - Clients"])
 
@@ -49,11 +50,12 @@ def _ensure_unique_phone(
         raise HTTPException(status_code=400, detail="Client phone already exists")
 
 
-@router.get("", response_model=list[ClientListItem])
+@router.get("", response_model=ClientListResponse)
 def list_clients(
     q: str | None = None,
     phone_e164: str | None = None,
     email: str | None = None,
+    date_of_birth: date | None = None,
     preferred_therapist_id: int | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -62,18 +64,20 @@ def list_clients(
 ):
     """List/search clients for admin workspace."""
     _ = admin
-    stmt = select(Client)
+    filters = []
 
     if phone_e164:
-        stmt = stmt.where(Client.phone_e164 == phone_e164)
+        filters.append(Client.phone_e164 == phone_e164)
     if email:
         like_email = f"%{email.strip()}%"
-        stmt = stmt.where(Client.email.ilike(like_email))  # type: ignore[arg-type]
+        filters.append(Client.email.ilike(like_email))  # type: ignore[arg-type]
+    if date_of_birth:
+        filters.append(Client.date_of_birth == date_of_birth)
     if preferred_therapist_id is not None:
-        stmt = stmt.where(Client.preferred_therapist_id == preferred_therapist_id)
+        filters.append(Client.preferred_therapist_id == preferred_therapist_id)
     if q and q.strip():
         like = f"%{q.strip()}%"
-        stmt = stmt.where(
+        filters.append(
             or_(
                 Client.name.ilike(like),  # type: ignore[arg-type]
                 Client.phone_e164.ilike(like),  # type: ignore[arg-type]
@@ -81,8 +85,23 @@ def list_clients(
             )
         )
 
-    stmt = stmt.order_by(Client.created_at.desc()).offset(offset).limit(limit)
-    return db.exec(stmt).all()
+    total_stmt = select(func.count()).select_from(Client)
+    items_stmt = select(Client)
+    for condition in filters:
+        total_stmt = total_stmt.where(condition)
+        items_stmt = items_stmt.where(condition)
+
+    total = db.exec(total_stmt).one()
+    items = db.exec(
+        items_stmt.order_by(Client.created_at.desc()).offset(offset).limit(limit)
+    ).all()
+    return ClientListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + len(items)) < total,
+    )
 
 
 @router.post("", response_model=ClientDetailResponse, status_code=201)
@@ -178,7 +197,31 @@ def list_client_sessions(
         stmt = stmt.where(TherapySession.start_time <= to_date)
 
     stmt = stmt.order_by(TherapySession.start_time.desc()).offset(offset).limit(limit)
-    return db.exec(stmt).all()
+    sessions = db.exec(stmt).all()
+    plan_map = load_active_plan_map(db, client_ids={client_id})
+    rows: list[ClientSessionListItem] = []
+    for session in sessions:
+        expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
+            session,
+            plan_map=plan_map,
+        )
+        rows.append(
+            ClientSessionListItem(
+                id=session.id,
+                therapist_id=session.therapist_id,
+                start_time=session.start_time,
+                end_time=session.end_time,
+                duration_minutes=session.duration_minutes,
+                status=session.status,
+                source=session.source,
+                charge_amount_cents=session.charge_amount_cents,
+                currency=session.currency,
+                expected_charge_cents=expected_charge_cents,
+                expected_charge_currency=expected_charge_currency,
+                assigned_plan=assigned_plan,
+            )
+        )
+    return rows
 
 
 @router.get("/{client_id}/messages", response_model=list[ClientMessageListItem])

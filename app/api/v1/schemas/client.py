@@ -4,6 +4,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.api.v1.schemas.pricing import AssignedPlanSummary
+
 
 class ClientListItem(BaseModel):
     """Client item for list/search responses."""
@@ -23,6 +25,16 @@ class ClientListItem(BaseModel):
 
 class ClientDetailResponse(ClientListItem):
     """Detailed client response."""
+
+
+class ClientListResponse(BaseModel):
+    """Paginated client list response."""
+
+    items: list[ClientListItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
 
 
 class ClientCreate(BaseModel):
@@ -74,6 +86,9 @@ class ClientSessionListItem(BaseModel):
     source: str
     charge_amount_cents: int | None
     currency: str
+    expected_charge_cents: int | None = None
+    expected_charge_currency: str | None = None
+    assigned_plan: AssignedPlanSummary | None = None
 
 
 class ClientMessageListItem(BaseModel):

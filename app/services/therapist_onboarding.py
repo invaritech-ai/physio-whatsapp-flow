@@ -264,6 +264,9 @@ def complete_therapist_onboarding(
         - data: Dictionary with therapist profile data
         - errors: List of error messages (empty if successful)
     """
+    if not therapist.license_number or not therapist.license_number.strip():
+        return False, {}, ["license_number_required"]
+
     # Step 1: Validate Calendly PAT
     valid, validation_data, errors = validate_calendly_pat(calendly_pat)
     if not valid:

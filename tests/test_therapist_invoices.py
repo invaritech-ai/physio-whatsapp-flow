@@ -76,6 +76,9 @@ def _create_client_session_and_receipt(
     phone: str,
     amount_cents: int,
     status: str = "issued",
+    payment_mode: str | None = None,
+    diagnosis: str | None = None,
+    special_notes: str | None = None,
 ) -> tuple[Client, TherapySession, Receipt]:
     client_row = Client(phone_e164=phone, name=f"Client {phone[-2:]}")
     db_session.add(client_row)
@@ -103,6 +106,9 @@ def _create_client_session_and_receipt(
         amount_cents=amount_cents,
         currency="HKD",
         description="Therapist invoice",
+        payment_mode=payment_mode,
+        diagnosis=diagnosis,
+        special_notes=special_notes,
         pdf_url=f"/generated/invoices/invoice-{therapist_id}-{client_row.id}.pdf",
         status=status,
         issued_by_user_id=issued_by_user_id,
@@ -124,6 +130,9 @@ def test_list_therapist_invoices_returns_scoped_results(client, db_session: Sess
         issued_by_user_id=admin.id,
         phone="+85290200001",
         amount_cents=30000,
+        payment_mode="Cash",
+        diagnosis="Bilateral plantar fasciitis",
+        special_notes="Bring reports",
     )
     _create_client_session_and_receipt(
         db_session,
@@ -141,6 +150,9 @@ def test_list_therapist_invoices_returns_scoped_results(client, db_session: Sess
     assert len(data) == 1
     assert data[0]["id"] == own_receipt.id
     assert data[0]["client_phone_e164"] == "+85290200001"
+    assert data[0]["payment_mode"] == "Cash"
+    assert data[0]["diagnosis"] == "Bilateral plantar fasciitis"
+    assert data[0]["special_notes"] == "Bring reports"
     assert data[0]["pdf_url"].startswith("/generated/invoices/")
 
 

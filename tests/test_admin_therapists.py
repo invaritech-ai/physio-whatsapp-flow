@@ -3,7 +3,28 @@
 import pytest
 from sqlmodel import Session, select
 
+from app.core.auth import get_current_admin
+from app.main import app
 from app.models import Therapist, TherapistSpecialty, TherapistSpecialtyMap, User
+
+
+@pytest.fixture(autouse=True)
+def override_admin_auth(db_session: Session):
+    """Bypass JWT and inject an admin user for admin therapist endpoint tests."""
+    admin = User(
+        neon_auth_sub="auth-admin-test",
+        email="admin@test.com",
+        display_name="Admin",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
+
+    app.dependency_overrides[get_current_admin] = lambda: admin
+    yield
+    app.dependency_overrides.pop(get_current_admin, None)
 
 
 class TestCreateTherapist:
@@ -24,6 +45,7 @@ class TestCreateTherapist:
         assert response.status_code == 201
         data = response.json()
         assert data["display_name"] == "Dr. Smith"
+        assert data["license_number"] is None
         assert data["calendly_user_uri"] == "https://calendly.com/dr-smith"
         assert data["is_active"] is True
         assert data["specialties"] == []
@@ -54,7 +76,23 @@ class TestCreateTherapist:
 
         assert response.status_code == 201
         data = response.json()
+        assert data["license_number"] is None
         assert data["calendly_user_uri"] is None
+
+    def test_create_therapist_with_license_number_normalizes(self, client, db_session: Session):
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "neon_auth_sub": "auth-license-normalized",
+                "email": "dr.license@test.com",
+                "display_name": "Dr. License",
+                "license_number": "  pt-203315  ",
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["license_number"] == "PT-203315"
 
     def test_create_duplicate_email(self, client, db_session: Session):
         """Duplicate email should fail."""
@@ -82,6 +120,40 @@ class TestCreateTherapist:
         assert response.status_code == 400
         assert "already registered" in response.json()["detail"].lower()
 
+    def test_create_duplicate_license_number_returns_400(self, client, db_session: Session):
+        existing_user = User(
+            neon_auth_sub="auth-therapist-existing-license",
+            email="existing-license@test.com",
+            display_name="Dr Existing License",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(existing_user)
+        db_session.commit()
+        db_session.refresh(existing_user)
+
+        existing_therapist = Therapist(
+            user_id=existing_user.id,
+            display_name="Dr Existing License",
+            license_number="PT-203315",
+            is_active=True,
+        )
+        db_session.add(existing_therapist)
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "neon_auth_sub": "auth-duplicate-license",
+                "email": "duplicate-license@test.com",
+                "display_name": "Dr Duplicate License",
+                "license_number": "pt-203315",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "license_number_already_exists"
+
 
 class TestListTherapists:
     """Tests for GET /admin/therapists"""
@@ -101,7 +173,7 @@ class TestListTherapists:
         db_session.commit()
         db_session.flush()
 
-        users = db_session.exec(select(User)).all()
+        users = db_session.exec(select(User).where(User.role == "therapist")).all()
         for user in users:
             therapist = Therapist(
                 user_id=user.id, display_name=user.display_name, is_active=True
@@ -117,6 +189,7 @@ class TestListTherapists:
         # Should have email and specialty_count
         assert all("email" in t for t in data)
         assert all("specialty_count" in t for t in data)
+        assert all("license_number" in t for t in data)
 
     def test_list_empty_therapists(self, client, db_session: Session):
         """List when no therapists exist."""
@@ -159,6 +232,7 @@ class TestGetTherapist:
         data = response.json()
         assert data["id"] == therapist.id
         assert data["display_name"] == "Dr. Test"
+        assert data["license_number"] is None
         assert data["calendly_user_uri"] == "https://calendly.com/test"
         assert data["specialties"] == []
 
@@ -231,6 +305,77 @@ class TestUpdateTherapist:
 
         assert response.status_code == 200
         assert response.json()["calendly_user_uri"] == "https://calendly.com/updated"
+
+    def test_update_therapist_license_number(self, client, db_session: Session):
+        user = User(
+            neon_auth_sub="auth-license-update",
+            email="dr-license-update@test.com",
+            display_name="Dr. License Update",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+        therapist = Therapist(user_id=user.id, display_name="Dr. License Update", is_active=True)
+        db_session.add(therapist)
+        db_session.commit()
+        db_session.refresh(therapist)
+
+        response = client.patch(
+            f"/api/v1/admin/therapists/{therapist.id}",
+            json={"license_number": "pt 777"},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["license_number"] == "PT 777"
+
+    def test_update_therapist_duplicate_license_number_returns_400(self, client, db_session: Session):
+        user_a = User(
+            neon_auth_sub="auth-license-a",
+            email="dr-license-a@test.com",
+            display_name="Dr. License A",
+            role="therapist",
+            is_active=True,
+        )
+        user_b = User(
+            neon_auth_sub="auth-license-b",
+            email="dr-license-b@test.com",
+            display_name="Dr. License B",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user_a)
+        db_session.add(user_b)
+        db_session.commit()
+        db_session.refresh(user_a)
+        db_session.refresh(user_b)
+
+        therapist_a = Therapist(
+            user_id=user_a.id,
+            display_name="Dr. License A",
+            license_number="PT-ABC-1",
+            is_active=True,
+        )
+        therapist_b = Therapist(
+            user_id=user_b.id,
+            display_name="Dr. License B",
+            is_active=True,
+        )
+        db_session.add(therapist_a)
+        db_session.add(therapist_b)
+        db_session.commit()
+        db_session.refresh(therapist_b)
+
+        response = client.patch(
+            f"/api/v1/admin/therapists/{therapist_b.id}",
+            json={"license_number": "pt-abc-1"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "license_number_already_exists"
 
 
 class TestDeleteTherapist:

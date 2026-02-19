@@ -18,8 +18,33 @@ from app.api.v1.schemas.therapist import (
 )
 from app.api.v1.schemas.specialty import SpecialtyResponse
 from app.services.calendly_webhooks import CalendlyWebhookError, check_webhook_registration
+from app.services.license_numbers import is_valid_license_number, normalize_license_number
 
 router = APIRouter(prefix="/admin/therapists", tags=["Admin - Therapists"])
+
+
+def _normalize_and_validate_license_number(license_number: str | None) -> str | None:
+    normalized = normalize_license_number(license_number)
+    if normalized is None:
+        return None
+    if not is_valid_license_number(normalized):
+        raise HTTPException(status_code=400, detail="invalid_license_number")
+    return normalized
+
+
+def _ensure_unique_license_number(
+    db: Session,
+    license_number: str | None,
+    *,
+    ignore_therapist_id: int | None = None,
+) -> None:
+    if license_number is None:
+        return
+    existing = db.exec(
+        select(Therapist).where(Therapist.license_number == license_number)
+    ).first()
+    if existing and existing.id != ignore_therapist_id:
+        raise HTTPException(status_code=400, detail="license_number_already_exists")
 
 
 @router.post("", response_model=TherapistResponse, status_code=201)
@@ -33,6 +58,8 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
     existing_user = db.exec(select(User).where(User.email == data.email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+    license_number = _normalize_and_validate_license_number(data.license_number)
+    _ensure_unique_license_number(db, license_number)
 
     # Create User record
     user = User(
@@ -49,6 +76,7 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
     therapist = Therapist(
         user_id=user.id,
         display_name=data.display_name,
+        license_number=license_number,
         calendly_user_uri=data.calendly_user_uri,
         is_active=True,
     )
@@ -61,6 +89,7 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
         id=therapist.id,
         user_id=therapist.user_id,
         display_name=therapist.display_name,
+        license_number=therapist.license_number,
         is_active=therapist.is_active,
         calendly_user_uri=therapist.calendly_user_uri,
         specialties=[],
@@ -89,6 +118,7 @@ def list_therapists(admin: User = Depends(get_current_admin), db: Session = Depe
             TherapistListResponse(
                 id=therapist.id,
                 display_name=therapist.display_name,
+                license_number=therapist.license_number,
                 is_active=therapist.is_active,
                 email=user.email,
                 specialty_count=specialty_count,
@@ -117,6 +147,7 @@ def get_therapist(therapist_id: int, admin: User = Depends(get_current_admin), d
         id=therapist.id,
         user_id=therapist.user_id,
         display_name=therapist.display_name,
+        license_number=therapist.license_number,
         is_active=therapist.is_active,
         calendly_user_uri=therapist.calendly_user_uri,
         specialties=[
@@ -141,6 +172,14 @@ def update_therapist(
     # Update fields if provided
     if data.display_name is not None:
         therapist.display_name = data.display_name
+    if "license_number" in data.model_fields_set:
+        normalized_license = _normalize_and_validate_license_number(data.license_number)
+        _ensure_unique_license_number(
+            db,
+            normalized_license,
+            ignore_therapist_id=therapist.id,
+        )
+        therapist.license_number = normalized_license
     if data.is_active is not None:
         therapist.is_active = data.is_active
     if data.calendly_user_uri is not None:
@@ -151,7 +190,7 @@ def update_therapist(
     db.refresh(therapist)
 
     # Return full response with specialties
-    return get_therapist(therapist_id, db)
+    return get_therapist(therapist_id=therapist_id, admin=admin, db=db)
 
 
 @router.delete("/{therapist_id}", status_code=204)

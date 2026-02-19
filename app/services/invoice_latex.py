@@ -86,14 +86,17 @@ def _build_template_context(
     diagnosis: str | None,
     session_start_at: datetime | None,
     therapist_name: str | None,
-    payment_method: str | None,
+    therapist_license_number: str | None,
+    payment_mode: str | None,
+    special_notes: str | None,
     issued_at: datetime | None,
 ) -> dict[str, str]:
     printed_at = _format_invoice_datetime(issued_at or datetime.now(timezone.utc))
     session_at = _format_invoice_datetime(session_start_at)
     payment_at = _format_payment_datetime(session_start_at)
     payer_name = client_name or "Client"
-    payment_label = payment_method or "N/A"
+    payment_label = payment_mode or "N/A"
+    provider_line = f"{therapist_name or '-'}, License #{therapist_license_number or '-'}"
     return {
         "business_name": _latex_escape(settings.business_name),
         "business_address": _latex_escape(settings.business_address),
@@ -107,9 +110,10 @@ def _build_template_context(
         "items_payments_title": _latex_escape("Items and Payments"),
         "item_datetime_line": _latex_escape(session_at),
         "item_description": _latex_escape(description),
-        "therapist_name": _latex_escape(therapist_name or "-"),
+        "provider_line": _latex_escape(provider_line),
         "invoice_number": _latex_escape(f"{invoice_id}-P01"),
         "diagnosis_line": _latex_escape(diagnosis or "-"),
+        "special_notes_line": _latex_escape(special_notes or "-"),
         "amount_display": _latex_escape(_currency_amount(amount_cents)),
         "payment_datetime_method": _latex_escape(f"{payment_at} {payment_label}"),
         "payment_payer_name": _latex_escape(payer_name),
@@ -169,7 +173,9 @@ def write_latex_invoice_pdf_file(
     diagnosis: str | None,
     session_start_at: datetime | None,
     therapist_name: str | None,
-    payment_method: str | None,
+    therapist_license_number: str | None,
+    payment_mode: str | None,
+    special_notes: str | None,
     issued_at: datetime | None,
 ) -> Path:
     template_path = _resolve_template_path()
@@ -186,7 +192,9 @@ def write_latex_invoice_pdf_file(
         diagnosis=diagnosis,
         session_start_at=session_start_at,
         therapist_name=therapist_name,
-        payment_method=payment_method,
+        therapist_license_number=therapist_license_number,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
         issued_at=issued_at,
     )
     rendered_tex = _render_template(

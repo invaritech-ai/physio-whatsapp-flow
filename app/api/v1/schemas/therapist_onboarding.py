@@ -94,12 +94,19 @@ class UpdateProfileRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "display_name": "Dr. Sarah Smith",
+                "license_number": "PT203315",
             }
         }
     )
 
     display_name: str = Field(
         ..., min_length=1, max_length=100, description="Therapist display name"
+    )
+    license_number: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=64,
+        description="Therapist license number",
     )
 
 
@@ -210,6 +217,7 @@ class OnboardingStatusResponse(BaseModel):
 
     is_onboarded: bool
     has_profile_name: bool
+    has_license_number: bool
     has_specialties: bool
     specialties_count: int
     has_calendly_uri: bool
@@ -243,6 +251,7 @@ class UpdateProfileResponse(BaseModel):
     """Response after updating profile."""
 
     display_name: str
+    license_number: str | None = None
     message: str = "Profile updated successfully"
 
 
@@ -301,6 +310,7 @@ class TherapistProfileResponse(BaseModel):
     id: int | None
     user_id: int
     display_name: str | None = None
+    license_number: str | None = None
     email: str | None = None
     is_active: bool
     calendly_user_uri: str | None = None

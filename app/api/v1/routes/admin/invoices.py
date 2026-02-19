@@ -25,6 +25,7 @@ from app.models import (
     User,
 )
 from app.services.invoice_generation import generate_and_store_invoice_pdf_url
+from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
 _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
@@ -100,6 +101,9 @@ def _to_invoice_list_item(invoice: Receipt) -> InvoiceListItem:
         amount_cents=invoice.amount_cents,
         currency=invoice.currency,
         description=invoice.description,
+        payment_mode=invoice.payment_mode,
+        diagnosis=invoice.diagnosis,
+        special_notes=invoice.special_notes,
         pdf_url=invoice.pdf_url,
         status=invoice.status,
         created_at=invoice.created_at,
@@ -167,32 +171,49 @@ def generate_invoice(
     if admin.id is None:
         raise HTTPException(status_code=403, detail="access_denied")
 
+    def _clean_optional_text(value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
     client = _ensure_client_exists(db, payload.client_id)
     session_row = _ensure_session_belongs_to_client(
         db,
         session_id=payload.session_id,
         client_id=payload.client_id,
     )
+    plan_map = load_active_plan_map(db, client_ids={payload.client_id})
+    default_amount_cents, _, _ = resolve_expected_charge(session_row, plan_map=plan_map)
+    amount_cents = payload.amount_cents if payload.amount_cents is not None else default_amount_cents
+    if amount_cents is None or amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="amount_cents_required")
     therapist = db.get(Therapist, session_row.therapist_id)
     therapist_name = therapist.display_name if therapist else None
+    therapist_license_number = therapist.license_number if therapist else None
     payment_record = db.exec(
         select(PaymentRecord)
         .where(PaymentRecord.session_id == payload.session_id)
         .order_by(PaymentRecord.created_at.desc())
     ).first()
-    payment_method = "N/A"
-    if payment_record and payment_record.payment_method:
-        payment_method = payment_record.payment_method.replace("_", " ").title()
+    payment_mode = _clean_optional_text(payload.payment_mode)
+    if payment_mode is None and payment_record and payment_record.payment_method:
+        payment_mode = payment_record.payment_method.replace("_", " ").title()
+    if payment_mode is None:
+        payment_mode = "N/A"
     latest_note = db.exec(
         select(SessionNote)
         .where(SessionNote.session_id == payload.session_id)
         .order_by(SessionNote.created_at.desc())
     ).first()
-    diagnosis = None
+    extracted_diagnosis = None
     if latest_note and latest_note.note_text:
         match = _DIAGNOSIS_PATTERN.search(latest_note.note_text)
         if match:
-            diagnosis = match.group(1).strip()
+            extracted_diagnosis = match.group(1).strip()
+    diagnosis = _clean_optional_text(payload.diagnosis) or extracted_diagnosis or "-"
+    special_notes = _clean_optional_text(payload.special_notes) or "-"
+    description = payload.description.strip()
 
     currency = payload.currency.upper()
     financial = _get_or_create_client_financial_locked(
@@ -204,16 +225,19 @@ def generate_invoice(
         financial.total_paid_cents - financial.total_receipted_cents,
         0,
     )
-    if payload.amount_cents > available_to_receipt_cents:
+    if amount_cents > available_to_receipt_cents:
         raise HTTPException(status_code=400, detail="amount_exceeds_available_to_receipt")
 
     now = datetime.now(timezone.utc)
     invoice = Receipt(
         client_id=payload.client_id,
         session_id=payload.session_id,
-        amount_cents=payload.amount_cents,
+        amount_cents=amount_cents,
         currency=currency,
-        description=payload.description.strip(),
+        description=description,
+        payment_mode=payment_mode,
+        diagnosis=diagnosis,
+        special_notes=special_notes,
         status="pending",
         issued_by_user_id=admin.id,
         created_at=now,
@@ -227,13 +251,15 @@ def generate_invoice(
             client_name=client.name,
             client_address=client.address,
             client_phone=client.phone_e164,
-            amount_cents=payload.amount_cents,
+            amount_cents=amount_cents,
             currency=currency,
-            description=payload.description.strip(),
+            description=description,
             diagnosis=diagnosis,
             session_start_at=session_row.start_time,
             therapist_name=therapist_name,
-            payment_method=payment_method,
+            therapist_license_number=therapist_license_number,
+            payment_mode=payment_mode,
+            special_notes=special_notes,
             issued_at=now,
         )
     except (OSError, RuntimeError) as exc:
@@ -244,7 +270,7 @@ def generate_invoice(
         raise HTTPException(status_code=500, detail=error_code) from exc
 
     invoice.status = "issued"
-    financial.total_receipted_cents += payload.amount_cents
+    financial.total_receipted_cents += amount_cents
     financial.currency = currency
     financial.updated_at = now
     db.add(financial)

@@ -68,9 +68,12 @@ def build_invoice_pdf_bytes(
     amount_cents: int,
     currency: str,
     description: str,
+    diagnosis: str | None = None,
     session_start_at: datetime | None = None,
     therapist_name: str | None = None,
-    payment_method: str | None = None,
+    therapist_license_number: str | None = None,
+    payment_mode: str | None = None,
+    special_notes: str | None = None,
     issued_at: datetime | None = None,
 ) -> bytes:
     issued = issued_at or datetime.now(timezone.utc)
@@ -80,7 +83,11 @@ def build_invoice_pdf_bytes(
     payer_name = _to_ascii(client_name) if client_name else "Client"
     client_address_line = _to_ascii(client_address) if client_address else ""
     therapist_line = _to_ascii(therapist_name) if therapist_name else ""
-    payment_method_line = _to_ascii(payment_method) if payment_method else "N/A"
+    therapist_license_line = _to_ascii(therapist_license_number) if therapist_license_number else "-"
+    provider_line = f"{therapist_line}, License #{therapist_license_line}" if therapist_line else f"License #{therapist_license_line}"
+    diagnosis_line = _to_ascii(diagnosis) if diagnosis else "-"
+    payment_mode_line = _to_ascii(payment_mode) if payment_mode else "N/A"
+    special_notes_line = _to_ascii(special_notes) if special_notes else "-"
     lines = [
         _to_ascii(settings.business_name),
         _to_ascii(settings.business_address),
@@ -95,16 +102,16 @@ def build_invoice_pdf_bytes(
         "Items and Payments",
         "Items | Details | Amount",
         f"{session_display}, {_to_ascii(description)}",
-        therapist_line,
+        provider_line,
         f"Invoice #{invoice_id}-P01",
-        _to_ascii(description),
+        f"Diagnosis: {diagnosis_line}",
+        f"Special Notes: {special_notes_line}",
         f"${amount_display}",
         f"Subtotal: ${amount_display}",
         f"Payer Total: ${amount_display}",
         "",
         "Payments",
-        f"{session_display}",
-        payment_method_line,
+        f"{session_display} {payment_mode_line}",
         payer_name,
         "",
         (
@@ -169,9 +176,12 @@ def write_invoice_pdf(
     amount_cents: int,
     currency: str,
     description: str,
+    diagnosis: str | None = None,
     session_start_at: datetime | None = None,
     therapist_name: str | None = None,
-    payment_method: str | None = None,
+    therapist_license_number: str | None = None,
+    payment_mode: str | None = None,
+    special_notes: str | None = None,
     issued_at: datetime | None = None,
 ) -> str:
     output_path = write_basic_invoice_pdf_file(
@@ -182,9 +192,12 @@ def write_invoice_pdf(
         amount_cents=amount_cents,
         currency=currency,
         description=description,
+        diagnosis=diagnosis,
         session_start_at=session_start_at,
         therapist_name=therapist_name,
-        payment_method=payment_method,
+        therapist_license_number=therapist_license_number,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
         issued_at=issued_at,
     )
     _ = output_path
@@ -200,9 +213,12 @@ def write_basic_invoice_pdf_file(
     amount_cents: int,
     currency: str,
     description: str,
+    diagnosis: str | None = None,
     session_start_at: datetime | None = None,
     therapist_name: str | None = None,
-    payment_method: str | None = None,
+    therapist_license_number: str | None = None,
+    payment_mode: str | None = None,
+    special_notes: str | None = None,
     issued_at: datetime | None = None,
 ) -> Path:
     pdf_bytes = build_invoice_pdf_bytes(
@@ -213,9 +229,12 @@ def write_basic_invoice_pdf_file(
         amount_cents=amount_cents,
         currency=currency,
         description=description,
+        diagnosis=diagnosis,
         session_start_at=session_start_at,
         therapist_name=therapist_name,
-        payment_method=payment_method,
+        therapist_license_number=therapist_license_number,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
         issued_at=issued_at,
     )
     output_path = invoice_pdf_path(invoice_id)
