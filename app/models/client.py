@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import partial
 
+import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
 
 
@@ -12,6 +13,9 @@ class Client(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     phone_e164: str = Field(unique=True, index=True)  # E.164 format: +85212345678
     name: str | None = None
+    email: str | None = Field(default=None, index=True)
+    date_of_birth: date | None = None
+    address: str | None = Field(default=None, sa_column=sa.Column(sa.Text(), nullable=True))
     conversation_state: str = Field(default="IDLE")
     conversation_data: str | None = Field(default=None)  # JSON string for IVR multi-step data
     preferred_therapist_id: int | None = Field(default=None, foreign_key="therapist.id")

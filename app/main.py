@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import logging
 import os
+from pathlib import Path
 
 # DEV: enable DEBUG logging for app modules to trace webhook issues
 logging.basicConfig(level=logging.INFO)
@@ -12,6 +13,7 @@ logging.getLogger("app").setLevel(logging.DEBUG)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
 
 from slowapi import _rate_limit_exceeded_handler
@@ -48,6 +50,15 @@ app = FastAPI(
     title="movement-whatsapp-automation-api",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# Static invoice document serving for generated PDF links
+invoice_storage_path = Path(settings.invoice_storage_dir)
+invoice_storage_path.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/" + settings.invoice_public_path.strip("/"),
+    StaticFiles(directory=str(invoice_storage_path)),
+    name="generated-invoices",
 )
 
 # Rate limiting

@@ -1,0 +1,259 @@
+"""Admin endpoints for invoice management."""
+
+import re
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
+
+from app.api.v1.schemas.invoice import (
+    InvoiceDetailResponse,
+    InvoiceGenerateRequest,
+    InvoiceListItem,
+)
+from app.core.auth import get_current_admin
+from app.db.session import get_session
+from app.models import (
+    Client,
+    ClientFinancial,
+    PaymentRecord,
+    Receipt,
+    Session as TherapySession,
+    SessionNote,
+    Therapist,
+    User,
+)
+from app.services.invoice_generation import generate_and_store_invoice_pdf_url
+
+router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
+_DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
+
+
+def _ensure_client_exists(db: Session, client_id: int) -> Client:
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    return client
+
+
+def _ensure_session_belongs_to_client(
+    db: Session,
+    *,
+    session_id: int,
+    client_id: int,
+) -> TherapySession:
+    session_row = db.get(TherapySession, session_id)
+    if not session_row:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    if session_row.client_id != client_id:
+        raise HTTPException(status_code=400, detail="invalid_session_for_client")
+    return session_row
+
+
+def _ensure_invoice_exists(db: Session, invoice_id: int) -> Receipt:
+    invoice = db.get(Receipt, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="invoice_not_found")
+    return invoice
+
+
+def _get_or_create_client_financial_locked(
+    db: Session,
+    *,
+    client_id: int,
+    currency: str,
+) -> ClientFinancial:
+    stmt = select(ClientFinancial).where(ClientFinancial.client_id == client_id)
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name != "sqlite":
+        stmt = stmt.with_for_update()
+    record = db.exec(stmt).first()
+    if record:
+        return record
+
+    record = ClientFinancial(
+        client_id=client_id,
+        currency=currency,
+        total_paid_cents=0,
+        total_receipted_cents=0,
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(record)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        record = db.exec(
+            select(ClientFinancial).where(ClientFinancial.client_id == client_id)
+        ).first()
+        if not record:
+            raise HTTPException(status_code=409, detail="invoice_generation_conflict")
+    return record
+
+
+def _to_invoice_list_item(invoice: Receipt) -> InvoiceListItem:
+    return InvoiceListItem(
+        id=invoice.id,
+        client_id=invoice.client_id,
+        session_id=invoice.session_id,
+        amount_cents=invoice.amount_cents,
+        currency=invoice.currency,
+        description=invoice.description,
+        pdf_url=invoice.pdf_url,
+        status=invoice.status,
+        created_at=invoice.created_at,
+    )
+
+
+def _to_invoice_detail(invoice: Receipt) -> InvoiceDetailResponse:
+    list_item = _to_invoice_list_item(invoice)
+    return InvoiceDetailResponse(
+        **list_item.model_dump(),
+        issued_by_user_id=invoice.issued_by_user_id,
+    )
+
+
+@router.get("", response_model=list[InvoiceListItem])
+def list_invoices(
+    client_id: int | None = None,
+    therapist_id: int | None = None,
+    status: str | None = Query(default=None, pattern="^(pending|issued|voided)$"),
+    from_date: datetime | None = Query(None, alias="from"),
+    to_date: datetime | None = Query(None, alias="to"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    _ = admin
+
+    stmt = select(Receipt)
+    if therapist_id is not None:
+        stmt = stmt.join(TherapySession, TherapySession.id == Receipt.session_id).where(
+            TherapySession.therapist_id == therapist_id
+        )
+    if client_id is not None:
+        stmt = stmt.where(Receipt.client_id == client_id)
+    if status:
+        stmt = stmt.where(Receipt.status == status)
+    if from_date:
+        stmt = stmt.where(Receipt.created_at >= from_date)
+    if to_date:
+        stmt = stmt.where(Receipt.created_at <= to_date)
+
+    stmt = stmt.order_by(Receipt.created_at.desc(), Receipt.id.desc()).offset(offset).limit(limit)
+    invoices = db.exec(stmt).all()
+    return [_to_invoice_list_item(invoice) for invoice in invoices]
+
+
+@router.get("/{invoice_id}", response_model=InvoiceDetailResponse)
+def get_invoice_detail(
+    invoice_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    _ = admin
+    invoice = _ensure_invoice_exists(db, invoice_id)
+    return _to_invoice_detail(invoice)
+
+
+@router.post("/generate", response_model=InvoiceDetailResponse, status_code=201)
+def generate_invoice(
+    payload: InvoiceGenerateRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    if admin.id is None:
+        raise HTTPException(status_code=403, detail="access_denied")
+
+    client = _ensure_client_exists(db, payload.client_id)
+    session_row = _ensure_session_belongs_to_client(
+        db,
+        session_id=payload.session_id,
+        client_id=payload.client_id,
+    )
+    therapist = db.get(Therapist, session_row.therapist_id)
+    therapist_name = therapist.display_name if therapist else None
+    payment_record = db.exec(
+        select(PaymentRecord)
+        .where(PaymentRecord.session_id == payload.session_id)
+        .order_by(PaymentRecord.created_at.desc())
+    ).first()
+    payment_method = "N/A"
+    if payment_record and payment_record.payment_method:
+        payment_method = payment_record.payment_method.replace("_", " ").title()
+    latest_note = db.exec(
+        select(SessionNote)
+        .where(SessionNote.session_id == payload.session_id)
+        .order_by(SessionNote.created_at.desc())
+    ).first()
+    diagnosis = None
+    if latest_note and latest_note.note_text:
+        match = _DIAGNOSIS_PATTERN.search(latest_note.note_text)
+        if match:
+            diagnosis = match.group(1).strip()
+
+    currency = payload.currency.upper()
+    financial = _get_or_create_client_financial_locked(
+        db,
+        client_id=payload.client_id,
+        currency=currency,
+    )
+    available_to_receipt_cents = max(
+        financial.total_paid_cents - financial.total_receipted_cents,
+        0,
+    )
+    if payload.amount_cents > available_to_receipt_cents:
+        raise HTTPException(status_code=400, detail="amount_exceeds_available_to_receipt")
+
+    now = datetime.now(timezone.utc)
+    invoice = Receipt(
+        client_id=payload.client_id,
+        session_id=payload.session_id,
+        amount_cents=payload.amount_cents,
+        currency=currency,
+        description=payload.description.strip(),
+        status="pending",
+        issued_by_user_id=admin.id,
+        created_at=now,
+    )
+    db.add(invoice)
+    db.flush()
+
+    try:
+        invoice.pdf_url = generate_and_store_invoice_pdf_url(
+            invoice_id=invoice.id,
+            client_name=client.name,
+            client_address=client.address,
+            client_phone=client.phone_e164,
+            amount_cents=payload.amount_cents,
+            currency=currency,
+            description=payload.description.strip(),
+            diagnosis=diagnosis,
+            session_start_at=session_row.start_time,
+            therapist_name=therapist_name,
+            payment_method=payment_method,
+            issued_at=now,
+        )
+    except (OSError, RuntimeError) as exc:
+        db.rollback()
+        error_code = "invoice_pdf_generation_failed"
+        if "s3" in str(exc).lower() or "upload" in str(exc).lower():
+            error_code = "invoice_upload_failed"
+        raise HTTPException(status_code=500, detail=error_code) from exc
+
+    invoice.status = "issued"
+    financial.total_receipted_cents += payload.amount_cents
+    financial.currency = currency
+    financial.updated_at = now
+    db.add(financial)
+    db.add(invoice)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="invoice_generation_conflict") from exc
+
+    db.refresh(invoice)
+    return _to_invoice_detail(invoice)

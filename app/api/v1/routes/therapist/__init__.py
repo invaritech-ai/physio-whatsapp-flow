@@ -2,13 +2,15 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.routes.therapist import onboarding, sessions
+from app.api.v1.routes.therapist import invoices, onboarding, patients, sessions
 
 router = APIRouter()
 
 # Register therapist routes
 router.include_router(onboarding.router)
 router.include_router(sessions.router)
+router.include_router(patients.router)
+router.include_router(invoices.router)
 # Compatibility mount for frontend contract:
 # /api/v1/therapist/sessions/*
 router.include_router(sessions.router, prefix="/therapist")
