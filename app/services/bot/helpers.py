@@ -15,7 +15,7 @@ def get_or_create_client(db: Session, phone_e164: str) -> Client:
     Phone should be in E.164 format (e.g., 'whatsapp:+85212345678')
     Strip 'whatsapp:' prefix if present.
     """
-    clean_phone = phone_e164.replace("whatsapp:", "")
+    clean_phone = re.sub(r"[\s\-()]", "", phone_e164.replace("whatsapp:", ""))
     stmt = select(Client).where(Client.phone_e164 == clean_phone)
     client = db.exec(stmt).first()
 
