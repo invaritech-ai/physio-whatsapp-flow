@@ -1,0 +1,4 @@
+phone_e164,name,preferred_therapist_email,preferred_therapist_display_name,notes
++85291234567,Jane Lee,alyssa@movement.physio,Dr Alyssa,legacy import 2026-02
++85293456789,Michael Wong,,,no therapist preference yet
++85295555555,Sarah Chan,harry@movement.physio,Dr Harry,requested continuity from 2025

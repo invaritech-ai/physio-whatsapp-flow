@@ -80,7 +80,7 @@ def session_summary(
     to_date: datetime | None = Query(None, alias="to"),
 ):
     """Get session counts and next upcoming session."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Base query for this therapist
     base = select(TherapySession).where(

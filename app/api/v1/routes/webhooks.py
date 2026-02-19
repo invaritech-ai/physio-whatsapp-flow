@@ -44,10 +44,12 @@ def verify_calendly_signature(
         logger.warning("No stored Calendly webhook signing keys found for incoming payload")
         return False
 
-    # Calendly sends signature as: timestamp,signature_value
-    # We compute: HMAC-SHA256(timestamp.payload, secret)
+    # Calendly sends signature as: t=<timestamp>,v1=<signature_hex>
+    # We compute: HMAC-SHA256("<timestamp>.<payload>", secret)
     try:
-        timestamp, sig_value = signature.split(",", 1)
+        t_part, v1_part = signature.split(",", 1)
+        timestamp = t_part.removeprefix("t=")
+        sig_value = v1_part.removeprefix("v1=")
         logger.debug("[DEBUG-SIG] parsed timestamp=%s, sig_value=%s…", timestamp, sig_value[:16])
         signed_payload = f"{timestamp}.{payload.decode()}"
         logger.debug("[DEBUG-SIG] signed_payload length=%d", len(signed_payload))
@@ -289,16 +291,17 @@ def _find_session_by_refs(
     event_uri: str | None = None,
     invitee_uri: str | None = None,
 ) -> TherapySession | None:
-    if event_uri:
+    # Prefer invitee_uri (unique per booking) over event_uri (unique per scheduled event)
+    if invitee_uri:
         session = db.exec(
-            select(TherapySession).where(TherapySession.calendly_event_uri == event_uri)
+            select(TherapySession).where(TherapySession.calendly_invitee_uri == invitee_uri)
         ).first()
         if session:
             return session
 
-    if invitee_uri:
+    if event_uri:
         session = db.exec(
-            select(TherapySession).where(TherapySession.calendly_invitee_uri == invitee_uri)
+            select(TherapySession).where(TherapySession.calendly_event_uri == event_uri)
         ).first()
         if session:
             return session
@@ -329,12 +332,16 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """
     try:
         # Extract data from payload
-        event_uri = _payload_uri(payload, "event", "new_event", "new_event_uri")
-        invitee = payload.get("invitee", {})
-        invitee_uri = _extract_uri(invitee) or _payload_uri(payload, "new_invitee", "new_invitee_uri")
-        # Also try top-level uri (Calendly puts invitee URI there)
+        # Prefer scheduled_event.uri (canonical) over payload.event
+        scheduled_event = payload.get("scheduled_event", {})
+        event_uri = scheduled_event.get("uri") if isinstance(scheduled_event, dict) else None
+        if not event_uri:
+            event_uri = _payload_uri(payload, "event", "new_event", "new_event_uri")
+        # Invitee URI: payload.uri is canonical for Calendly v2
+        invitee_uri = _extract_uri(payload.get("uri"))
         if not invitee_uri:
-            invitee_uri = _extract_uri(payload.get("uri"))
+            invitee = payload.get("invitee", {})
+            invitee_uri = _extract_uri(invitee) or _payload_uri(payload, "new_invitee", "new_invitee_uri")
         old_event_uri = _payload_uri(payload, "old_event", "old_event_uri")
         old_invitee_uri = _payload_uri(payload, "old_invitee", "old_invitee_uri")
         is_rescheduled = bool(payload.get("rescheduled")) or bool(old_event_uri or old_invitee_uri)
@@ -506,13 +513,39 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
 async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
     """Handle invitee.canceled event - mark session as canceled.
 
-    Payload contains event URI and invitee details.
+    Calendly fires invitee.canceled for both true cancellations and reschedules.
+    When rescheduled=True, we skip cancellation because the companion
+    invitee.created webhook will handle the session update.
     """
     try:
-        event_uri = _payload_uri(payload, "event", "old_event", "old_event_uri")
-        invitee_uri = _payload_uri(payload, "invitee", "old_invitee", "old_invitee_uri")
+        # If this is a reschedule, let invitee.created handle it
+        if payload.get("rescheduled"):
+            logger.info(
+                "Skipping invitee.canceled for rescheduled event (invitee.created will handle)"
+            )
+            return {"status": "skipped", "reason": "rescheduled"}
 
-        session = _find_session_by_refs(db, event_uri=event_uri, invitee_uri=invitee_uri)
+        # Extract event URI from scheduled_event.uri (canonical) or payload.event
+        scheduled_event = payload.get("scheduled_event")
+        if isinstance(scheduled_event, dict):
+            event_uri = scheduled_event.get("uri")
+        else:
+            event_uri = None
+        if not event_uri:
+            event_uri = _payload_uri(payload, "event", "old_event", "old_event_uri")
+
+        # Extract invitee URI from payload.uri (canonical for cancel payloads)
+        invitee_uri = _extract_uri(payload.get("uri"))
+        if not invitee_uri:
+            invitee_uri = _payload_uri(payload, "invitee", "old_invitee", "old_invitee_uri")
+
+        logger.info(
+            "Processing invitee.canceled: event_uri=%s, invitee_uri=%s",
+            event_uri, invitee_uri,
+        )
+
+        # Prefer invitee_uri match (more specific) over event_uri
+        session = _find_session_by_refs(db, invitee_uri=invitee_uri, event_uri=event_uri)
 
         if not session:
             logger.warning(f"No session found for canceled event: {event_uri or invitee_uri}")

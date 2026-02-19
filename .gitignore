@@ -26,3 +26,6 @@ build/
 .claude
 .cline
 
+# Client import output files (may contain real client data)
+data/imports/
+
