@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -419,8 +420,8 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             logger.error("No phone number found in booking form")
             return {"status": "error", "message": "Phone number required"}
 
-        # Normalize phone number (remove whatsapp: prefix if present, ensure E.164 format)
-        phone_e164 = phone_number.replace("whatsapp:", "").strip()
+        # Normalize phone number: strip whatsapp: prefix, remove spaces/dashes, ensure E.164
+        phone_e164 = re.sub(r"[\s\-()]", "", phone_number.replace("whatsapp:", ""))
         if not phone_e164.startswith("+"):
             phone_e164 = f"+{phone_e164}"
 
