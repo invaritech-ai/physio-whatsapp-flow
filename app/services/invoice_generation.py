@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from app.core.config import settings
+from app.services.invoice_documents import write_basic_invoice_pdf_file
+from app.services.invoice_latex import write_latex_invoice_pdf_file
+from app.services.invoice_storage import store_invoice_pdf
+
+
+def _render_invoice_pdf_file(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    client_address: str | None,
+    client_phone: str,
+    amount_cents: int,
+    currency: str,
+    description: str,
+    diagnosis: str | None,
+    session_start_at: datetime | None,
+    therapist_name: str | None,
+    payment_method: str | None,
+    issued_at: datetime | None,
+) -> Path:
+    renderer = settings.invoice_renderer.strip().lower()
+    if renderer == "latex":
+        try:
+            return write_latex_invoice_pdf_file(
+                invoice_id=invoice_id,
+                client_name=client_name,
+                client_address=client_address,
+                client_phone=client_phone,
+                amount_cents=amount_cents,
+                description=description,
+                diagnosis=diagnosis,
+                session_start_at=session_start_at,
+                therapist_name=therapist_name,
+                payment_method=payment_method,
+                issued_at=issued_at,
+            )
+        except Exception:
+            if not settings.invoice_latex_fallback_to_basic:
+                raise
+
+    return write_basic_invoice_pdf_file(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        client_address=client_address,
+        client_phone=client_phone,
+        amount_cents=amount_cents,
+        currency=currency,
+        description=description,
+        session_start_at=session_start_at,
+        therapist_name=therapist_name,
+        payment_method=payment_method,
+        issued_at=issued_at,
+    )
+
+
+def generate_and_store_invoice_pdf_url(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    client_address: str | None,
+    client_phone: str,
+    amount_cents: int,
+    currency: str,
+    description: str,
+    diagnosis: str | None,
+    session_start_at: datetime | None,
+    therapist_name: str | None,
+    payment_method: str | None,
+    issued_at: datetime | None,
+) -> str:
+    pdf_path = _render_invoice_pdf_file(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        client_address=client_address,
+        client_phone=client_phone,
+        amount_cents=amount_cents,
+        currency=currency,
+        description=description,
+        diagnosis=diagnosis,
+        session_start_at=session_start_at,
+        therapist_name=therapist_name,
+        payment_method=payment_method,
+        issued_at=issued_at,
+    )
+    return store_invoice_pdf(invoice_id=invoice_id, local_pdf_path=pdf_path)

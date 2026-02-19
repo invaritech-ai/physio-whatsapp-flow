@@ -1,0 +1,353 @@
+"""Tests for admin invoice endpoints."""
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+from sqlmodel import Session, select
+
+from app.core.config import settings
+from app.models import Client, ClientFinancial, Receipt, Session as TherapySession, Therapist, User
+
+
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": "Bearer test-token"}
+
+
+def _epoch(dt: datetime) -> int:
+    return int(dt.timestamp())
+
+
+def _create_admin(db_session: Session) -> User:
+    admin = User(
+        neon_auth_sub="admin-invoices-sub",
+        email="admin-invoices@test.com",
+        display_name="Admin Invoices",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
+    return admin
+
+
+def _create_therapist(db_session: Session, *, suffix: str) -> Therapist:
+    user = User(
+        neon_auth_sub=f"therapist-{suffix}-invoices-sub",
+        email=f"therapist-{suffix}-invoices@test.com",
+        display_name=f"Dr {suffix}",
+        role="therapist",
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    therapist = Therapist(
+        user_id=user.id,
+        display_name=user.display_name,
+        is_active=True,
+    )
+    db_session.add(therapist)
+    db_session.commit()
+    db_session.refresh(therapist)
+    return therapist
+
+
+def _admin_auth_context(admin: User):
+    return patch(
+        "app.core.auth._verify_neon_token",
+        return_value={
+            "sub": admin.neon_auth_sub,
+            "email": admin.email,
+            "iat": _epoch(datetime.now(timezone.utc)),
+        },
+    )
+
+
+def _create_client_and_session(
+    db_session: Session,
+    *,
+    therapist_id: int,
+    phone: str,
+) -> tuple[Client, TherapySession]:
+    client_row = Client(phone_e164=phone, name="Invoice Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    now = datetime.now(timezone.utc)
+    session_row = TherapySession(
+        client_id=client_row.id,
+        therapist_id=therapist_id,
+        start_time=now - timedelta(days=1),
+        end_time=now - timedelta(days=1, minutes=-45),
+        duration_minutes=45,
+        status="completed",
+        source="manual",
+        charge_amount_cents=65000,
+        currency="HKD",
+    )
+    db_session.add(session_row)
+    db_session.commit()
+    db_session.refresh(session_row)
+    return client_row, session_row
+
+
+def test_generate_invoice_success_updates_financials_and_serves_pdf(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-success")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100001",
+    )
+
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=120000,
+            total_receipted_cents=20000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    payload = {
+        "client_id": client_row.id,
+        "session_id": session_row.id,
+        "amount_cents": 65000,
+        "currency": "HKD",
+        "description": "Physio session invoice",
+    }
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json=payload,
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["client_id"] == client_row.id
+    assert data["session_id"] == session_row.id
+    assert data["amount_cents"] == 65000
+    assert data["status"] == "issued"
+    assert data["pdf_url"].startswith("/generated/invoices/invoice-")
+
+    pdf_response = client.get(data["pdf_url"])
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"].startswith("application/pdf")
+
+    financial = db_session.exec(
+        select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)
+    ).first()
+    assert financial is not None
+    assert financial.total_receipted_cents == 85000
+
+    with _admin_auth_context(admin):
+        list_response = client.get(
+            f"/api/v1/admin/invoices?client_id={client_row.id}",
+            headers=_auth_headers(),
+        )
+    assert list_response.status_code == 200
+    list_data = list_response.json()
+    assert len(list_data) == 1
+    assert list_data[0]["id"] == data["id"]
+
+    with _admin_auth_context(admin):
+        detail_response = client.get(
+            f"/api/v1/admin/invoices/{data['id']}",
+            headers=_auth_headers(),
+        )
+    assert detail_response.status_code == 200
+    assert detail_response.json()["id"] == data["id"]
+
+
+def test_generate_invoice_rejects_amount_exceeding_available_balance(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-guard")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100002",
+    )
+
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=50000,
+            total_receipted_cents=45000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "amount_cents": 10000,
+                "currency": "HKD",
+                "description": "Too high",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "amount_exceeds_available_to_receipt"
+
+
+def test_generate_invoice_rejects_session_client_mismatch(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-mismatch")
+
+    client_a, _ = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100003",
+    )
+    client_b, session_b = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100004",
+    )
+    assert client_a.id != client_b.id
+
+    db_session.add(
+        ClientFinancial(
+            client_id=client_a.id,
+            total_paid_cents=100000,
+            total_receipted_cents=0,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_a.id,
+                "session_id": session_b.id,
+                "amount_cents": 10000,
+                "currency": "HKD",
+                "description": "Mismatch",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_session_for_client"
+
+
+def test_list_invoices_filters_by_therapist_id(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist_a = _create_therapist(db_session, suffix="invoice-filter-a")
+    therapist_b = _create_therapist(db_session, suffix="invoice-filter-b")
+
+    client_a, session_a = _create_client_and_session(
+        db_session,
+        therapist_id=therapist_a.id,
+        phone="+85290100005",
+    )
+    client_b, session_b = _create_client_and_session(
+        db_session,
+        therapist_id=therapist_b.id,
+        phone="+85290100006",
+    )
+
+    db_session.add(
+        Receipt(
+            client_id=client_a.id,
+            session_id=session_a.id,
+            amount_cents=10000,
+            currency="HKD",
+            description="A",
+            pdf_url="/generated/invoices/invoice-a.pdf",
+            status="issued",
+            issued_by_user_id=admin.id,
+        )
+    )
+    db_session.add(
+        Receipt(
+            client_id=client_b.id,
+            session_id=session_b.id,
+            amount_cents=20000,
+            currency="HKD",
+            description="B",
+            pdf_url="/generated/invoices/invoice-b.pdf",
+            status="issued",
+            issued_by_user_id=admin.id,
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/invoices?therapist_id={therapist_a.id}",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["session_id"] == session_a.id
+
+
+def test_get_invoice_detail_returns_404_when_missing(client, db_session: Session):
+    admin = _create_admin(db_session)
+    with _admin_auth_context(admin):
+        response = client.get("/api/v1/admin/invoices/999999", headers=_auth_headers())
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "invoice_not_found"
+
+
+def test_generate_invoice_latex_falls_back_to_basic_when_engine_missing(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-latex-fallback")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100007",
+    )
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=90000,
+            total_receipted_cents=0,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    original_renderer = settings.invoice_renderer
+    original_engine = settings.invoice_latex_engine
+    original_fallback = settings.invoice_latex_fallback_to_basic
+    settings.invoice_renderer = "latex"
+    settings.invoice_latex_engine = "missing_latex_engine"
+    settings.invoice_latex_fallback_to_basic = True
+    try:
+        with _admin_auth_context(admin):
+            response = client.post(
+                "/api/v1/admin/invoices/generate",
+                json={
+                    "client_id": client_row.id,
+                    "session_id": session_row.id,
+                    "amount_cents": 10000,
+                    "currency": "HKD",
+                    "description": "Fallback render",
+                },
+                headers=_auth_headers(),
+            )
+    finally:
+        settings.invoice_renderer = original_renderer
+        settings.invoice_latex_engine = original_engine
+        settings.invoice_latex_fallback_to_basic = original_fallback
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["pdf_url"].startswith("/generated/invoices/invoice-")
