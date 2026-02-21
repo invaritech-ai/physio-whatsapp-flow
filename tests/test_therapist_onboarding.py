@@ -748,6 +748,63 @@ class TestUpdateSpecialties:
         assert len(mappings) == 2
         assert all(m.specialty_id in [2, 3] for m in mappings)
 
+    def test_update_specialties_keeps_existing_and_adds_new_without_duplicate_error(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        sample_specialties_onboarding: list[TherapistSpecialty],
+        mock_jwt_therapist,
+    ):
+        """Keep an existing specialty and add another one without unique-constraint failure."""
+        existing_mapping = TherapistSpecialtyMap(
+            therapist_id=therapist_no_uri.id,
+            specialty_id=1,
+        )
+        db_session.add(existing_mapping)
+        db_session.commit()
+
+        response = client.patch(
+            "/api/v1/therapist/specialties",
+            json={"specialty_ids": [1, 3]},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert sorted([s["id"] for s in data["specialties"]]) == [1, 3]
+
+        stmt = select(TherapistSpecialtyMap).where(
+            TherapistSpecialtyMap.therapist_id == therapist_no_uri.id
+        )
+        mappings = db_session.exec(stmt).all()
+        assert sorted([m.specialty_id for m in mappings]) == [1, 3]
+
+    def test_update_specialties_deduplicates_duplicate_specialty_ids(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        sample_specialties_onboarding: list[TherapistSpecialty],
+        mock_jwt_therapist,
+    ):
+        """Duplicate specialty IDs in request should not create duplicate mappings."""
+        response = client.patch(
+            "/api/v1/therapist/specialties",
+            json={"specialty_ids": [1, 1, 2]},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert sorted([s["id"] for s in data["specialties"]]) == [1, 2]
+
+        stmt = select(TherapistSpecialtyMap).where(
+            TherapistSpecialtyMap.therapist_id == therapist_no_uri.id
+        )
+        mappings = db_session.exec(stmt).all()
+        assert sorted([m.specialty_id for m in mappings]) == [1, 2]
+
     def test_update_specialties_invalid_ids(
         self,
         client,

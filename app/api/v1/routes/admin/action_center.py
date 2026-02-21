@@ -1,0 +1,258 @@
+"""Admin action-center summary endpoint."""
+
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import and_, func, or_
+from sqlmodel import Session, select
+
+from app.api.v1.schemas.action_center import (
+    AdminActionCenterDebugIds,
+    AdminActionCenterSummaryResponse,
+)
+from app.core.auth import get_current_admin
+from app.db.session import get_session
+from app.models import (
+    AccessRequest,
+    ClientFinancial,
+    ClientPlanAssignment,
+    PaymentRecord,
+    Session as TherapySession,
+    Therapist,
+    TherapistSpecialtyMap,
+    User,
+)
+
+router = APIRouter(prefix="/admin/action-center", tags=["Admin - Action Center"])
+
+
+@router.get("/summary", response_model=AdminActionCenterSummaryResponse)
+def get_action_center_summary(
+    lookback_days: int = Query(default=30, ge=1, le=365),
+    financial_alert_threshold_cents: int = Query(default=100000, ge=1),
+    include_debug_ids: bool = Query(default=False),
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    _ = admin
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=lookback_days)
+
+    pending_access_requests = db.exec(
+        select(func.count())
+        .select_from(AccessRequest)
+        .where(AccessRequest.status == "pending")
+    ).one()
+
+    therapists_missing_license = db.exec(
+        select(func.count())
+        .select_from(Therapist)
+        .where(
+            or_(
+                Therapist.license_number.is_(None),
+                func.trim(Therapist.license_number) == "",
+            )
+        )
+    ).one()
+
+    therapists_missing_calendly = db.exec(
+        select(func.count())
+        .select_from(Therapist)
+        .where(
+            or_(
+                Therapist.calendly_user_uri.is_(None),
+                func.trim(Therapist.calendly_user_uri) == "",
+            )
+        )
+    ).one()
+
+    specialty_exists = (
+        select(TherapistSpecialtyMap.id)
+        .where(TherapistSpecialtyMap.therapist_id == Therapist.id)
+        .exists()
+    )
+    therapists_missing_specialties = db.exec(
+        select(func.count()).select_from(Therapist).where(~specialty_exists)
+    ).one()
+
+    active_clients_subquery = (
+        select(TherapySession.client_id.label("client_id"))
+        .where(TherapySession.start_time >= window_start)
+        .distinct()
+        .subquery()
+    )
+
+    active_clients_in_window = db.exec(
+        select(func.count()).select_from(active_clients_subquery)
+    ).one()
+
+    clients_missing_plan_30 = db.exec(
+        select(func.count())
+        .select_from(active_clients_subquery)
+        .outerjoin(
+            ClientPlanAssignment,
+            and_(
+                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                ClientPlanAssignment.duration_minutes == 30,
+                ClientPlanAssignment.is_active == True,  # noqa: E712
+            ),
+        )
+        .where(ClientPlanAssignment.id.is_(None))
+    ).one()
+
+    clients_missing_plan_45 = db.exec(
+        select(func.count())
+        .select_from(active_clients_subquery)
+        .outerjoin(
+            ClientPlanAssignment,
+            and_(
+                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                ClientPlanAssignment.duration_minutes == 45,
+                ClientPlanAssignment.is_active == True,  # noqa: E712
+            ),
+        )
+        .where(ClientPlanAssignment.id.is_(None))
+    ).one()
+
+    assignment_30_exists = (
+        select(ClientPlanAssignment.id)
+        .where(
+            and_(
+                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                ClientPlanAssignment.duration_minutes == 30,
+                ClientPlanAssignment.is_active == True,  # noqa: E712
+            )
+        )
+        .exists()
+    )
+    assignment_45_exists = (
+        select(ClientPlanAssignment.id)
+        .where(
+            and_(
+                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                ClientPlanAssignment.duration_minutes == 45,
+                ClientPlanAssignment.is_active == True,  # noqa: E712
+            )
+        )
+        .exists()
+    )
+    active_clients_missing_any_plan_assignment = db.exec(
+        select(func.count())
+        .select_from(active_clients_subquery)
+        .where(or_(~assignment_30_exists, ~assignment_45_exists))
+    ).one()
+
+    clients_with_receipting_backlog = db.exec(
+        select(func.count())
+        .select_from(ClientFinancial)
+        .where(
+            (ClientFinancial.total_paid_cents - ClientFinancial.total_receipted_cents)
+            >= financial_alert_threshold_cents
+        )
+    ).one()
+
+    past_sessions_missing_payment_record = db.exec(
+        select(func.count(func.distinct(TherapySession.id)))
+        .select_from(TherapySession)
+        .outerjoin(PaymentRecord, PaymentRecord.session_id == TherapySession.id)
+        .where(
+            TherapySession.end_time < now,
+            TherapySession.end_time >= window_start,
+            TherapySession.status.notin_(["cancelled", "no_show"]),
+            PaymentRecord.id.is_(None),
+        )
+    ).one()
+
+    active_clients_missing_financial_profile = db.exec(
+        select(func.count())
+        .select_from(active_clients_subquery)
+        .outerjoin(
+            ClientFinancial,
+            ClientFinancial.client_id == active_clients_subquery.c.client_id,
+        )
+        .where(ClientFinancial.id.is_(None))
+    ).one()
+
+    debug_ids: AdminActionCenterDebugIds | None = None
+    if include_debug_ids:
+        pending_access_request_ids = db.exec(
+            select(AccessRequest.id)
+            .where(AccessRequest.status == "pending")
+            .order_by(AccessRequest.requested_at.desc(), AccessRequest.id.desc())
+        ).all()
+        clients_missing_plan_30_ids = db.exec(
+            select(active_clients_subquery.c.client_id)
+            .outerjoin(
+                ClientPlanAssignment,
+                and_(
+                    ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                    ClientPlanAssignment.duration_minutes == 30,
+                    ClientPlanAssignment.is_active == True,  # noqa: E712
+                ),
+            )
+            .where(ClientPlanAssignment.id.is_(None))
+            .order_by(active_clients_subquery.c.client_id)
+        ).all()
+        clients_missing_plan_45_ids = db.exec(
+            select(active_clients_subquery.c.client_id)
+            .outerjoin(
+                ClientPlanAssignment,
+                and_(
+                    ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                    ClientPlanAssignment.duration_minutes == 45,
+                    ClientPlanAssignment.is_active == True,  # noqa: E712
+                ),
+            )
+            .where(ClientPlanAssignment.id.is_(None))
+            .order_by(active_clients_subquery.c.client_id)
+        ).all()
+        clients_missing_any_plan_assignment_ids = sorted(
+            set(clients_missing_plan_30_ids) | set(clients_missing_plan_45_ids)
+        )
+        past_sessions_missing_payment_record_ids = db.exec(
+            select(func.distinct(TherapySession.id))
+            .select_from(TherapySession)
+            .outerjoin(PaymentRecord, PaymentRecord.session_id == TherapySession.id)
+            .where(
+                TherapySession.end_time < now,
+                TherapySession.end_time >= window_start,
+                TherapySession.status.notin_(["cancelled", "no_show"]),
+                PaymentRecord.id.is_(None),
+            )
+            .order_by(TherapySession.id)
+        ).all()
+        active_clients_missing_financial_profile_ids = db.exec(
+            select(active_clients_subquery.c.client_id)
+            .outerjoin(
+                ClientFinancial,
+                ClientFinancial.client_id == active_clients_subquery.c.client_id,
+            )
+            .where(ClientFinancial.id.is_(None))
+            .order_by(active_clients_subquery.c.client_id)
+        ).all()
+        debug_ids = AdminActionCenterDebugIds(
+            pending_access_request_ids=pending_access_request_ids,
+            clients_missing_plan_30_ids=clients_missing_plan_30_ids,
+            clients_missing_plan_45_ids=clients_missing_plan_45_ids,
+            clients_missing_any_plan_assignment_ids=clients_missing_any_plan_assignment_ids,
+            past_sessions_missing_payment_record_ids=past_sessions_missing_payment_record_ids,
+            active_clients_missing_financial_profile_ids=active_clients_missing_financial_profile_ids,
+        )
+
+    return AdminActionCenterSummaryResponse(
+        as_of=now,
+        lookback_days=lookback_days,
+        financial_alert_threshold_cents=financial_alert_threshold_cents,
+        active_clients_in_window=active_clients_in_window,
+        pending_access_requests=pending_access_requests,
+        therapists_missing_license=therapists_missing_license,
+        therapists_missing_calendly=therapists_missing_calendly,
+        therapists_missing_specialties=therapists_missing_specialties,
+        clients_missing_plan_30=clients_missing_plan_30,
+        clients_missing_plan_45=clients_missing_plan_45,
+        active_clients_missing_any_plan_assignment=active_clients_missing_any_plan_assignment,
+        clients_with_receipting_backlog=clients_with_receipting_backlog,
+        past_sessions_missing_payment_record=past_sessions_missing_payment_record,
+        active_clients_missing_financial_profile=active_clients_missing_financial_profile,
+        debug_ids=debug_ids,
+    )
