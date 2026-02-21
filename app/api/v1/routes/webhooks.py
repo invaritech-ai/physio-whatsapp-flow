@@ -339,9 +339,9 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
         if not event_uri:
             event_uri = _payload_uri(payload, "event", "new_event", "new_event_uri")
         # Invitee URI: payload.uri is canonical for Calendly v2
+        invitee = payload.get("invitee", {})
         invitee_uri = _extract_uri(payload.get("uri"))
         if not invitee_uri:
-            invitee = payload.get("invitee", {})
             invitee_uri = _extract_uri(invitee) or _payload_uri(payload, "new_invitee", "new_invitee_uri")
         old_event_uri = _payload_uri(payload, "old_event", "old_event_uri")
         old_invitee_uri = _payload_uri(payload, "old_invitee", "old_invitee_uri")
@@ -357,9 +357,11 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
         # Calendly nests event_memberships under scheduled_event
         scheduled_event = payload.get("scheduled_event", {})
         if isinstance(scheduled_event, dict):
-            event_memberships = scheduled_event.get("event_memberships", [])
+            event_memberships = scheduled_event.get("event_memberships") or []
         else:
-            event_memberships = payload.get("event_memberships", [])
+            event_memberships = []
+        if not event_memberships:
+            event_memberships = payload.get("event_memberships") or []
         if not event_memberships:
             logger.error("No event_memberships in webhook payload")
             return {"status": "error", "message": "Missing event memberships"}
@@ -515,16 +517,15 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
     """Handle invitee.canceled event - mark session as canceled.
 
     Calendly fires invitee.canceled for both true cancellations and reschedules.
-    When rescheduled=True, we skip cancellation because the companion
-    invitee.created webhook will handle the session update.
+    We still process cancellation so out-of-order deliveries stay deterministic.
+    The companion invitee.created webhook can move the same session back to
+    scheduled with new event/invitee URIs.
     """
     try:
-        # If this is a reschedule, let invitee.created handle it
         if payload.get("rescheduled"):
             logger.info(
-                "Skipping invitee.canceled for rescheduled event (invitee.created will handle)"
+                "Processing invitee.canceled with rescheduled=True; invitee.created may re-activate updated session"
             )
-            return {"status": "skipped", "reason": "rescheduled"}
 
         # Extract event URI from scheduled_event.uri (canonical) or payload.event
         scheduled_event = payload.get("scheduled_event")

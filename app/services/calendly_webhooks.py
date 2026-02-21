@@ -243,7 +243,12 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
     except requests.RequestException as exc:
         raise CalendlyWebhookError(f"Failed to register Calendly webhook: {exc}") from exc
 
-    logger.debug("[DEBUG-REG] Calendly create response: status=%d, body=%s", response.status_code, response.text[:500])
+    response_preview = str(getattr(response, "text", "") or "")[:500]
+    logger.debug(
+        "[DEBUG-REG] Calendly create response: status=%d, body=%s",
+        response.status_code,
+        response_preview,
+    )
 
     if response.status_code not in (200, 201):
         # A concurrent registration may have already succeeded. Re-check before failing.

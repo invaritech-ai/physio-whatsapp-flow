@@ -13,6 +13,7 @@ from app.models import (
     Client,
     Session as TherapySession,
     Therapist,
+    TherapistEventType,
     TherapistSpecialty,
     User,
 )
@@ -95,6 +96,33 @@ def sample_therapist_fixture(db_session):
         db_session.add(therapist)
         db_session.commit()
         db_session.refresh(therapist)
+
+        # Seed standard event types so booking-link flows work in bot tests.
+        event_types = [
+            TherapistEventType(
+                therapist_id=therapist.id,
+                calendly_event_type_uri=f"https://api.calendly.com/event_types/{therapist.id}-30",
+                duration_minutes=30,
+                scheduling_url="https://calendly.com/test-therapist/30min",
+                is_active=True,
+            ),
+            TherapistEventType(
+                therapist_id=therapist.id,
+                calendly_event_type_uri=f"https://api.calendly.com/event_types/{therapist.id}-45",
+                duration_minutes=45,
+                scheduling_url="https://calendly.com/test-therapist/45min",
+                is_active=True,
+            ),
+            TherapistEventType(
+                therapist_id=therapist.id,
+                calendly_event_type_uri=f"https://api.calendly.com/event_types/{therapist.id}-60",
+                duration_minutes=60,
+                scheduling_url="https://calendly.com/test-therapist/60min",
+                is_active=True,
+            ),
+        ]
+        db_session.add_all(event_types)
+        db_session.commit()
         return therapist
 
 
