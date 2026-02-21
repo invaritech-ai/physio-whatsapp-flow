@@ -1,11 +1,13 @@
 """Admin endpoints for global session management."""
 
 from datetime import datetime, timezone
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlmodel import Session, select
 
+from app.api.v1.schemas.clinical_note import ClinicalNoteResponse
 from app.api.v1.schemas.admin_session import (
     AdminSessionDetailResponse,
     AdminSessionListItem,
@@ -14,11 +16,12 @@ from app.api.v1.schemas.admin_session import (
 )
 from app.core.auth import get_current_admin
 from app.db.session import get_session
-from app.models import BillingPlan, Client, ClientPlanAssignment, Therapist, User
+from app.models import BillingPlan, Client, ClientPlanAssignment, SessionNote, Therapist, User
 from app.models import Session as TherapySession
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/sessions", tags=["Admin - Sessions"])
+_DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
 
 
 def _ensure_session_exists(db: Session, session_id: int) -> TherapySession:
@@ -96,6 +99,26 @@ def _build_detail_response(
         calendly_invitee_uri=row.calendly_invitee_uri,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _extract_diagnosis(note_text: str) -> str | None:
+    match = _DIAGNOSIS_PATTERN.search(note_text)
+    if not match:
+        return None
+    return match.group(1).strip() or None
+
+
+def _build_clinical_note_response(note: SessionNote) -> ClinicalNoteResponse:
+    diagnosis = _extract_diagnosis(note.note_text) or "-"
+    return ClinicalNoteResponse(
+        session_id=note.session_id,
+        note_id=note.id or 0,
+        note_text=note.note_text,
+        diagnosis=diagnosis,
+        author_user_id=note.author_user_id,
+        created_at=note.created_at,
+        updated_at=note.created_at,
     )
 
 
@@ -262,3 +285,21 @@ def update_session(
         therapist_name=therapist.display_name if therapist else None,
         plan_map=plan_map,
     )
+
+
+@router.get("/{session_id}/clinical-note", response_model=ClinicalNoteResponse)
+def get_admin_session_clinical_note(
+    session_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    _ = admin
+    _ensure_session_exists(db, session_id)
+    note = db.exec(
+        select(SessionNote)
+        .where(SessionNote.session_id == session_id)
+        .order_by(SessionNote.created_at.desc())
+    ).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="clinical_note_not_found")
+    return _build_clinical_note_response(note)

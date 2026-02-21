@@ -5,7 +5,15 @@ from unittest.mock import patch
 
 from sqlmodel import Session, select
 
-from app.models import BillingPlan, Client, ClientPlanAssignment, Session as TherapySession, Therapist, User
+from app.models import (
+    BillingPlan,
+    Client,
+    ClientPlanAssignment,
+    Session as TherapySession,
+    SessionNote,
+    Therapist,
+    User,
+)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -303,3 +311,40 @@ def test_update_admin_session_rejects_duration_mismatch(client, db_session: Sess
 
     assert response.status_code == 400
     assert response.json()["detail"] == "plan_duration_mismatch"
+
+
+def test_get_admin_session_clinical_note(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="clinical")
+    client_row = _create_client(db_session, phone="+85295550007", name="Clinical Admin View")
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=datetime.now(timezone.utc),
+        duration_minutes=45,
+        status="completed",
+    )
+
+    therapist_user = db_session.get(User, therapist.user_id)
+    assert therapist_user is not None
+    note = SessionNote(
+        session_id=session_row.id,
+        author_user_id=therapist_user.id,
+        note_text="Follow-up completed. Diagnosis: Bilateral plantar fasciitis",
+    )
+    db_session.add(note)
+    db_session.commit()
+    db_session.refresh(note)
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/sessions/{session_row.id}/clinical-note",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_row.id
+    assert payload["note_id"] == note.id
+    assert payload["diagnosis"] == "Bilateral plantar fasciitis"

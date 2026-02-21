@@ -1,18 +1,24 @@
 """Therapist session endpoints — calendar view and session detail."""
 
 from datetime import datetime, timedelta, timezone
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
-from app.models import Client, Therapist
+from app.models import Client, SessionNote, Therapist
 from app.models import Session as TherapySession
+from app.api.v1.schemas.clinical_note import (
+    ClinicalNoteResponse,
+    ClinicalNoteUpsertRequest,
+)
 from app.api.v1.schemas.session import SessionDetail, SessionListItem, SessionSummary
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/sessions", tags=["Therapist Sessions"])
+_DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
 
 
 def _parse_datetime_query(value: str | None) -> datetime | None:
@@ -55,6 +61,69 @@ def _build_list_item(
         expected_charge_currency=expected_charge_currency,
         assigned_plan=assigned_plan,
     )
+
+
+def _extract_diagnosis(note_text: str) -> str | None:
+    match = _DIAGNOSIS_PATTERN.search(note_text)
+    if not match:
+        return None
+    return match.group(1).strip() or None
+
+
+def _merge_note_with_diagnosis(note_text: str, diagnosis: str | None) -> tuple[str, str]:
+    clean_note = note_text.strip()
+    if diagnosis is None:
+        derived = _extract_diagnosis(clean_note) or "-"
+        return clean_note, derived
+
+    clean_diagnosis = diagnosis.strip()
+    if not clean_diagnosis:
+        derived = _extract_diagnosis(clean_note) or "-"
+        return clean_note, derived
+
+    if _DIAGNOSIS_PATTERN.search(clean_note):
+        merged = _DIAGNOSIS_PATTERN.sub(f"Diagnosis: {clean_diagnosis}", clean_note, count=1)
+    else:
+        merged = f"{clean_note}\\n\\nDiagnosis: {clean_diagnosis}"
+    return merged, clean_diagnosis
+
+
+def _build_clinical_note_response(
+    note: SessionNote,
+    *,
+    diagnosis: str,
+    updated_at: datetime | None = None,
+) -> ClinicalNoteResponse:
+    effective_updated_at = updated_at or note.created_at
+    return ClinicalNoteResponse(
+        session_id=note.session_id,
+        note_id=note.id or 0,
+        note_text=note.note_text,
+        diagnosis=diagnosis,
+        author_user_id=note.author_user_id,
+        created_at=note.created_at,
+        updated_at=effective_updated_at,
+    )
+
+
+def _get_therapist_session_or_404(
+    db: Session,
+    *,
+    therapist_id: int,
+    session_id: int,
+) -> TherapySession:
+    session_row = db.exec(
+        select(TherapySession).where(
+            TherapySession.id == session_id,
+            TherapySession.therapist_id == therapist_id,
+        )
+    ).first()
+    if not session_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    return session_row
 
 
 @router.get("", response_model=list[SessionListItem])
@@ -196,3 +265,66 @@ def get_session_detail(
         calendly_event_uri=session.calendly_event_uri,
         created_at=session.created_at,
     )
+
+
+@router.put("/{session_id}/clinical-note", response_model=ClinicalNoteResponse)
+def upsert_session_clinical_note(
+    session_id: int,
+    payload: ClinicalNoteUpsertRequest,
+    therapist: Therapist = Depends(get_current_therapist),
+    db: Session = Depends(get_session),
+):
+    """Create/update therapist clinical note for a session."""
+    _get_therapist_session_or_404(db, therapist_id=therapist.id, session_id=session_id)
+
+    merged_note_text, diagnosis = _merge_note_with_diagnosis(payload.note_text, payload.diagnosis)
+    existing = db.exec(
+        select(SessionNote)
+        .where(
+            SessionNote.session_id == session_id,
+            SessionNote.author_user_id == therapist.user_id,
+        )
+        .order_by(SessionNote.created_at.desc())
+    ).first()
+    now = datetime.now(timezone.utc)
+    if existing:
+        existing.note_text = merged_note_text
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return _build_clinical_note_response(existing, diagnosis=diagnosis, updated_at=now)
+
+    note = SessionNote(
+        session_id=session_id,
+        author_user_id=therapist.user_id,
+        note_text=merged_note_text,
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return _build_clinical_note_response(note, diagnosis=diagnosis)
+
+
+@router.get("/{session_id}/clinical-note", response_model=ClinicalNoteResponse)
+def get_session_clinical_note(
+    session_id: int,
+    therapist: Therapist = Depends(get_current_therapist),
+    db: Session = Depends(get_session),
+):
+    """Fetch therapist-authored clinical note for a session."""
+    _get_therapist_session_or_404(db, therapist_id=therapist.id, session_id=session_id)
+    note = db.exec(
+        select(SessionNote)
+        .where(
+            SessionNote.session_id == session_id,
+            SessionNote.author_user_id == therapist.user_id,
+        )
+        .order_by(SessionNote.created_at.desc())
+    ).first()
+    if not note:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clinical_note_not_found",
+        )
+    diagnosis = _extract_diagnosis(note.note_text) or "-"
+    return _build_clinical_note_response(note, diagnosis=diagnosis)
