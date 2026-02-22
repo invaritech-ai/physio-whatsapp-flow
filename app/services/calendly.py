@@ -180,6 +180,41 @@ def get_scheduled_event_with_pat(
     return None
 
 
+def get_invitee_links_with_pat(
+    invitee_uri: str, calendly_pat: str
+) -> dict[str, str] | None:
+    """Fetch client-facing reschedule/cancel links from a Calendly invitee URI.
+
+    Args:
+        invitee_uri: Full Calendly invitee URI
+                     (e.g., "https://api.calendly.com/scheduled_events/.../invitees/...")
+        calendly_pat: Therapist's Calendly Personal Access Token
+
+    Returns:
+        Dict with reschedule_url and cancel_url when available, else None.
+    """
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(invitee_uri, headers=pat_headers, timeout=20)
+        if response.status_code == 200:
+            resource = response.json().get("resource", {})
+            reschedule_url = resource.get("reschedule_url")
+            cancel_url = resource.get("cancel_url")
+            if isinstance(reschedule_url, str) and isinstance(cancel_url, str):
+                return {
+                    "reschedule_url": reschedule_url,
+                    "cancel_url": cancel_url,
+                }
+    except Exception:
+        pass
+
+    return None
+
+
 def get_event_types_with_pat(user_uri: str, calendly_pat: str) -> list[dict[str, Any]]:
     """Fetch event types using provided Personal Access Token.
 

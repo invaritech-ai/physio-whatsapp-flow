@@ -1,11 +1,17 @@
 """Reschedule/cancel helper - lookup upcoming sessions for client."""
 
 from datetime import datetime, timezone
+import logging
 
 from sqlmodel import Session, select
 
+from app.core.encryption import decrypt_string
 from app.models import Session as TherapySession
 from app.models import Therapist
+from app.services.calendly import get_invitee_links_with_pat
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list[dict]:
@@ -15,8 +21,8 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
     Returns list of dicts with:
     - start_time: Formatted datetime string
     - therapist_name: Display name of therapist
-    - reschedule_url: Link to reschedule (stub in Phase 2)
-    - cancel_url: Link to cancel (stub in Phase 2)
+    - reschedule_url: Client-facing Calendly reschedule link (if available)
+    - cancel_url: Client-facing Calendly cancel link (if available)
     """
     if client_id is None:
         return []
@@ -44,17 +50,23 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
         # Format start time
         start_time_str = session.start_time.strftime("%A, %B %d at %I:%M %p")
 
-        # STUB: Generate reschedule/cancel URLs
-        # In Phase 3, this will use actual Calendly invitee URIs
-        # For now, generate stub URLs based on event URI
-        if session.calendly_event_uri:
-            # In Phase 3, we'll use: session.calendly_invitee_uri + "/reschedule"
-            reschedule_url = f"{session.calendly_event_uri}/reschedule"
-            cancel_url = f"{session.calendly_event_uri}/cancel"
-        else:
-            # Fallback stub URLs
-            reschedule_url = f"https://calendly.com/reschedule/stub-{session.id}"
-            cancel_url = f"https://calendly.com/cancel/stub-{session.id}"
+        # Fetch true client-facing links from invitee resource.
+        # Never expose raw Calendly API URIs to clients.
+        reschedule_url = None
+        cancel_url = None
+        if session.calendly_invitee_uri and therapist and therapist.calendly_pat_encrypted:
+            try:
+                pat = decrypt_string(therapist.calendly_pat_encrypted)
+                invitee_links = get_invitee_links_with_pat(session.calendly_invitee_uri, pat)
+                if invitee_links:
+                    reschedule_url = invitee_links.get("reschedule_url")
+                    cancel_url = invitee_links.get("cancel_url")
+            except Exception:
+                logger.exception(
+                    "Failed to resolve Calendly invitee links for session_id=%s therapist_id=%s",
+                    session.id,
+                    session.therapist_id,
+                )
 
         result.append(
             {

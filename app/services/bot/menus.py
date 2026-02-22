@@ -160,8 +160,16 @@ def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:
     for idx, session in enumerate(upcoming_sessions, 1):
         lines.append(f"\n{idx}. {session['start_time']}")
         lines.append(f"   Therapist: {session['therapist_name']}")
-        lines.append(f"   📝 Reschedule: {session['reschedule_url']}")
-        lines.append(f"   ❌ Cancel: {session['cancel_url']}")
+        reschedule_url = session.get("reschedule_url")
+        cancel_url = session.get("cancel_url")
+        if reschedule_url:
+            lines.append(f"   📝 Reschedule: {reschedule_url}")
+        else:
+            lines.append("   📝 Reschedule: Please reply 'help reschedule' and admin will assist.")
+        if cancel_url:
+            lines.append(f"   ❌ Cancel: {cancel_url}")
+        else:
+            lines.append("   ❌ Cancel: Please reply 'help cancel' and admin will assist.")
 
     lines.append("\n💡 Click the links above to manage your appointments.")
 
