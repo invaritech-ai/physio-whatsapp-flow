@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -68,6 +69,13 @@ class Settings(BaseSettings):
     # Celery + Redis
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
+
+    @model_validator(mode="after")
+    def validate_production_cors_config(self) -> "Settings":
+        env = self.app_env.strip().lower()
+        if env in {"production", "prod"} and not (self.web_base_url and self.web_base_url.strip()):
+            raise ValueError("WEB_BASE_URL must be configured when APP_ENV is production/prod.")
+        return self
 
 
 settings = Settings()

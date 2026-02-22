@@ -70,35 +70,43 @@ def _extract_diagnosis(note_text: str) -> str | None:
     return match.group(1).strip() or None
 
 
-def _merge_note_with_diagnosis(note_text: str, diagnosis: str | None) -> tuple[str, str]:
-    clean_note = note_text.strip()
+def _normalize_note_text(note_text: str) -> str:
+    normalized = note_text.replace("\r\n", "\n").replace("\r", "\n")
+    # Backward compatibility for previously persisted escaped newlines.
+    if "\\n" in normalized:
+        normalized = normalized.replace("\\n", "\n")
+    return normalized
+
+
+def _merge_note_with_diagnosis(note_text: str, diagnosis: str | None) -> tuple[str, str | None]:
+    clean_note = _normalize_note_text(note_text.strip())
     if diagnosis is None:
-        derived = _extract_diagnosis(clean_note) or "-"
+        derived = _extract_diagnosis(clean_note)
         return clean_note, derived
 
     clean_diagnosis = diagnosis.strip()
     if not clean_diagnosis:
-        derived = _extract_diagnosis(clean_note) or "-"
+        derived = _extract_diagnosis(clean_note)
         return clean_note, derived
 
     if _DIAGNOSIS_PATTERN.search(clean_note):
         merged = _DIAGNOSIS_PATTERN.sub(f"Diagnosis: {clean_diagnosis}", clean_note, count=1)
     else:
-        merged = f"{clean_note}\\n\\nDiagnosis: {clean_diagnosis}"
+        merged = f"{clean_note}\n\nDiagnosis: {clean_diagnosis}"
     return merged, clean_diagnosis
 
 
 def _build_clinical_note_response(
     note: SessionNote,
     *,
-    diagnosis: str,
+    diagnosis: str | None,
     updated_at: datetime | None = None,
 ) -> ClinicalNoteResponse:
     effective_updated_at = updated_at or note.created_at
     return ClinicalNoteResponse(
         session_id=note.session_id,
         note_id=note.id or 0,
-        note_text=note.note_text,
+        note_text=_normalize_note_text(note.note_text),
         diagnosis=diagnosis,
         author_user_id=note.author_user_id,
         created_at=note.created_at,
@@ -326,5 +334,5 @@ def get_session_clinical_note(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="clinical_note_not_found",
         )
-    diagnosis = _extract_diagnosis(note.note_text) or "-"
+    diagnosis = _extract_diagnosis(_normalize_note_text(note.note_text))
     return _build_clinical_note_response(note, diagnosis=diagnosis)

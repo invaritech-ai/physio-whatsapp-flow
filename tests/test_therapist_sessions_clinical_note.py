@@ -104,6 +104,8 @@ def test_upsert_and_get_clinical_note(client, db_session: Session):
     assert put_payload["session_id"] == session_row.id
     assert put_payload["diagnosis"] == "Bilateral plantar fasciitis"
     assert "Diagnosis: Bilateral plantar fasciitis" in put_payload["note_text"]
+    assert "\\n\\nDiagnosis: Bilateral plantar fasciitis" not in put_payload["note_text"]
+    assert "\n\nDiagnosis: Bilateral plantar fasciitis" in put_payload["note_text"]
 
     with _therapist_auth(user):
         get_response = client.get(
@@ -116,6 +118,8 @@ def test_upsert_and_get_clinical_note(client, db_session: Session):
     assert get_payload["session_id"] == session_row.id
     assert get_payload["note_id"] == put_payload["note_id"]
     assert get_payload["diagnosis"] == "Bilateral plantar fasciitis"
+    assert "\\n\\nDiagnosis: Bilateral plantar fasciitis" not in get_payload["note_text"]
+    assert "\n\nDiagnosis: Bilateral plantar fasciitis" in get_payload["note_text"]
 
 
 def test_upsert_existing_note_updates_same_record(client, db_session: Session):
@@ -150,6 +154,40 @@ def test_upsert_existing_note_updates_same_record(client, db_session: Session):
     assert second_payload["note_id"] == first_payload["note_id"]
     assert "Diagnosis: Diagnosis two" in second_payload["note_text"]
     assert second_payload["diagnosis"] == "Diagnosis two"
+
+
+def test_upsert_without_diagnosis_returns_null_diagnosis(client, db_session: Session):
+    user, therapist = _create_therapist_user(db_session, suffix="diag-null")
+    client_row = Client(phone_e164="+85297770022", name="Clinical Client Null Diagnosis")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+    )
+
+    with _therapist_auth(user):
+        put_response = client.put(
+            f"/api/v1/therapist/sessions/{session_row.id}/clinical-note",
+            json={"note_text": "Patient tolerated load progression well."},
+            headers=_auth_headers(),
+        )
+
+    assert put_response.status_code == 200
+    put_payload = put_response.json()
+    assert put_payload["diagnosis"] is None
+
+    with _therapist_auth(user):
+        get_response = client.get(
+            f"/api/v1/therapist/sessions/{session_row.id}/clinical-note",
+            headers=_auth_headers(),
+        )
+
+    assert get_response.status_code == 200
+    get_payload = get_response.json()
+    assert get_payload["diagnosis"] is None
 
 
 def test_therapist_cannot_write_other_therapist_session(client, db_session: Session):

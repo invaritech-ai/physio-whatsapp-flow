@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 import logging
-import os
 from pathlib import Path
+from typing import AsyncIterator
 
-# DEV: enable DEBUG logging for app modules to trace webhook issues
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("app").setLevel(logging.DEBUG)
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import Session, select
+from starlette.responses import Response
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -22,8 +18,10 @@ from slowapi.errors import RateLimitExceeded
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.rate_limit import limiter
-from app.db.session import engine
 
+# DEV: enable DEBUG logging for app modules to trace webhook issues
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("app").setLevel(logging.DEBUG)
 
 scheduler = AsyncIOScheduler()
 
@@ -38,12 +36,35 @@ def send_scheduled_reminders() -> None:
     pass
 
 
+def _rate_limit_exception_handler(request: Request, exc: Exception) -> Response:
+    """
+    Adapter for SlowAPI handler with FastAPI's broader ExceptionHandler signature.
+    """
+    if not isinstance(exc, RateLimitExceeded):
+        raise exc
+    return _rate_limit_exceeded_handler(request, exc)
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    scheduler.add_job(send_scheduled_reminders, "interval", minutes=5)
-    scheduler.start()
-    yield
-    scheduler.shutdown()
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Keep this id stable so hot-reload/restart paths do not duplicate jobs.
+    if scheduler.get_job("scheduled-reminders") is None:
+        scheduler.add_job(
+            send_scheduled_reminders,
+            "interval",
+            id="scheduled-reminders",
+            minutes=5,
+            replace_existing=True,
+        )
+
+    if not scheduler.running:
+        scheduler.start()
+
+    try:
+        yield
+    finally:
+        if scheduler.running:
+            scheduler.shutdown()
 
 
 app = FastAPI(
@@ -63,23 +84,28 @@ app.mount(
 
 # Rate limiting
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exception_handler)
+
 
 # CORS configuration
 def _get_cors_origins() -> list[str]:
-    if settings.app_env == "development":
+    env = settings.app_env.strip().lower()
+    if env == "development":
         return ["*"]
-    origins: list[str] = []
     if settings.web_base_url:
-        origins.append(settings.web_base_url)
-    return origins or ["*"]
+        return [settings.web_base_url]
+    if env in {"production", "prod"}:
+        raise RuntimeError(
+            "WEB_BASE_URL must be configured for production CORS policy."
+        )
+    return ["*"]
 
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 

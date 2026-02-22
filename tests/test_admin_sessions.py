@@ -348,3 +348,76 @@ def test_get_admin_session_clinical_note(client, db_session: Session):
     assert payload["session_id"] == session_row.id
     assert payload["note_id"] == note.id
     assert payload["diagnosis"] == "Bilateral plantar fasciitis"
+
+
+def test_get_admin_session_clinical_note_without_diagnosis_returns_null(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="clinical-null")
+    client_row = _create_client(db_session, phone="+85295550008", name="Clinical Admin View Null")
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=datetime.now(timezone.utc),
+        duration_minutes=45,
+        status="completed",
+    )
+
+    therapist_user = db_session.get(User, therapist.user_id)
+    assert therapist_user is not None
+    note = SessionNote(
+        session_id=session_row.id,
+        author_user_id=therapist_user.id,
+        note_text="Follow-up completed without explicit diagnosis field.",
+    )
+    db_session.add(note)
+    db_session.commit()
+    db_session.refresh(note)
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/sessions/{session_row.id}/clinical-note",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_row.id
+    assert payload["note_id"] == note.id
+    assert payload["diagnosis"] is None
+
+
+def test_get_admin_session_clinical_note_normalizes_escaped_newlines(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="clinical-escaped")
+    client_row = _create_client(db_session, phone="+85295550009", name="Clinical Escaped Newlines")
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=datetime.now(timezone.utc),
+        duration_minutes=45,
+        status="completed",
+    )
+
+    therapist_user = db_session.get(User, therapist.user_id)
+    assert therapist_user is not None
+    note = SessionNote(
+        session_id=session_row.id,
+        author_user_id=therapist_user.id,
+        note_text="Test Notes\\n\\nDiagnosis: Test Diag",
+    )
+    db_session.add(note)
+    db_session.commit()
+    db_session.refresh(note)
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/sessions/{session_row.id}/clinical-note",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["note_text"] == "Test Notes\n\nDiagnosis: Test Diag"
+    assert payload["diagnosis"] == "Test Diag"

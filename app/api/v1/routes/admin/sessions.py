@@ -109,12 +109,20 @@ def _extract_diagnosis(note_text: str) -> str | None:
     return match.group(1).strip() or None
 
 
+def _normalize_note_text(note_text: str) -> str:
+    normalized = note_text.replace("\r\n", "\n").replace("\r", "\n")
+    if "\\n" in normalized:
+        normalized = normalized.replace("\\n", "\n")
+    return normalized
+
+
 def _build_clinical_note_response(note: SessionNote) -> ClinicalNoteResponse:
-    diagnosis = _extract_diagnosis(note.note_text) or "-"
+    normalized_note_text = _normalize_note_text(note.note_text)
+    diagnosis = _extract_diagnosis(normalized_note_text)
     return ClinicalNoteResponse(
         session_id=note.session_id,
         note_id=note.id or 0,
-        note_text=note.note_text,
+        note_text=normalized_note_text,
         diagnosis=diagnosis,
         author_user_id=note.author_user_id,
         created_at=note.created_at,

@@ -41,12 +41,19 @@ def list_users(
 ):
     """List all approved users with their current roles."""
     users = db.exec(select(User).order_by(User.created_at.desc())).all()
+    user_ids = [user.id for user in users if user.id is not None]
+    therapist_user_ids: set[int] = set()
+    if user_ids:
+        therapist_user_ids = set(
+            db.exec(
+                select(Therapist.user_id).where(  # type: ignore[arg-type]
+                    Therapist.user_id.in_(user_ids)
+                )
+            ).all()
+        )
 
     result = []
     for user in users:
-        therapist = db.exec(
-            select(Therapist).where(Therapist.user_id == user.id)
-        ).first()
         result.append(
             UserListResponse(
                 id=user.id,
@@ -54,7 +61,7 @@ def list_users(
                 display_name=user.display_name,
                 role=user.role,
                 is_active=user.is_active,
-                has_therapist_profile=therapist is not None,
+                has_therapist_profile=(user.id in therapist_user_ids),
                 created_at=user.created_at,
             )
         )

@@ -23,7 +23,7 @@ class Session(SQLModel, table=True):
     charge_amount_cents: int | None = None  # Amount to charge in cents
     currency: str = Field(default="HKD")
     calendly_event_uri: str | None = Field(default=None, unique=True, index=True)
-    calendly_invitee_uri: str | None = None
+    calendly_invitee_uri: str | None = Field(default=None, index=True)
     reminder_sent: bool = Field(default=False)
     therapist_notified: bool = Field(default=False)
     created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc))

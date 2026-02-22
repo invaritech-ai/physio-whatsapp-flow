@@ -20,7 +20,7 @@ class ClinicalNoteResponse(BaseModel):
     session_id: int
     note_id: int
     note_text: str
-    diagnosis: str
+    diagnosis: str | None
     author_user_id: int
     created_at: datetime
     updated_at: datetime

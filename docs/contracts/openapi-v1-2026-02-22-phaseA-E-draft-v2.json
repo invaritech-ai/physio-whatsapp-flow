@@ -1,0 +1,1737 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "movement-whatsapp-automation-api (Phase A-E Draft v2)",
+    "version": "2026-02-22-phaseA-E-draft-v2",
+    "description": "Contract-first draft for Phases A-E. These endpoints define target request/response schemas for parallel frontend scaffolding and backend implementation."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8000"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "ClinicalNoteUpsertRequest": {
+        "type": "object",
+        "required": [
+          "note_text"
+        ],
+        "properties": {
+          "note_text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          },
+          "diagnosis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000,
+            "description": "Optional diagnosis override; if omitted, diagnosis may be derived from note text."
+          }
+        }
+      },
+      "ClinicalNoteResponse": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "note_id",
+          "note_text",
+          "diagnosis",
+          "author_user_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "integer"
+          },
+          "note_id": {
+            "type": "integer"
+          },
+          "note_text": {
+            "type": "string"
+          },
+          "diagnosis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author_user_id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InvoiceGenerateRequestV2": {
+        "type": "object",
+        "required": [
+          "client_id",
+          "amount_cents",
+          "currency",
+          "description"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "session_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Optional. Null/omitted for sessionless receipts."
+          },
+          "therapist_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Optional passive-review therapist reference, used especially for supervised_physio service type."
+          },
+          "service_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "supervised_physio",
+              "other"
+            ],
+            "default": "standard"
+          },
+          "trainer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 120,
+            "description": "Optional trainer identifier for supervised physio context."
+          },
+          "reference_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000,
+            "description": "Optional structured note for supervised/sessionless context."
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 8,
+            "default": "HKD"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "payment_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 120
+          },
+          "diagnosis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000
+          },
+          "special_notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 4000
+          }
+        }
+      },
+      "InvoiceDetailResponseV2": {
+        "type": "object",
+        "required": [
+          "id",
+          "client_id",
+          "session_id",
+          "therapist_id",
+          "service_type",
+          "trainer_name",
+          "reference_note",
+          "amount_cents",
+          "currency",
+          "description",
+          "payment_mode",
+          "diagnosis",
+          "special_notes",
+          "pdf_url",
+          "status",
+          "created_at",
+          "issued_by_user_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "client_id": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "therapist_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "service_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "supervised_physio",
+              "other"
+            ]
+          },
+          "trainer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reference_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "payment_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "diagnosis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "special_notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pdf_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "issued",
+              "voided"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issued_by_user_id": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReceiptingSummaryReceiptItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "service_type",
+          "amount_cents",
+          "currency",
+          "description",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "service_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "supervised_physio",
+              "other"
+            ]
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReceiptingSummaryResponse": {
+        "type": "object",
+        "required": [
+          "client_id",
+          "currency",
+          "total_paid_cents",
+          "total_receipted_cents",
+          "claimable_balance_cents",
+          "receipts",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "total_paid_cents": {
+            "type": "integer"
+          },
+          "total_receipted_cents": {
+            "type": "integer"
+          },
+          "claimable_balance_cents": {
+            "type": "integer"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReceiptingSummaryReceiptItem"
+            }
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TherapistSessionLifecycleUpdateRequest": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "started",
+              "completed"
+            ]
+          },
+          "status_changed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000
+          }
+        }
+      },
+      "TherapistSessionLifecycleResponse": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "therapist_id",
+          "status",
+          "status_changed_at",
+          "status_note",
+          "updated_at"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "integer"
+          },
+          "therapist_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "started",
+              "completed",
+              "cancelled",
+              "no_show"
+            ]
+          },
+          "status_changed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TherapistUtilizationItem": {
+        "type": "object",
+        "required": [
+          "therapist_id",
+          "therapist_name",
+          "completed_sessions",
+          "scheduled_sessions",
+          "cancelled_sessions",
+          "no_show_sessions",
+          "utilized_minutes",
+          "period_start",
+          "period_end"
+        ],
+        "properties": {
+          "therapist_id": {
+            "type": "integer"
+          },
+          "therapist_name": {
+            "type": "string"
+          },
+          "completed_sessions": {
+            "type": "integer"
+          },
+          "scheduled_sessions": {
+            "type": "integer"
+          },
+          "cancelled_sessions": {
+            "type": "integer"
+          },
+          "no_show_sessions": {
+            "type": "integer"
+          },
+          "utilized_minutes": {
+            "type": "integer"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TherapistUtilizationListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TherapistUtilizationItem"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TherapistPayrollItem": {
+        "type": "object",
+        "required": [
+          "therapist_id",
+          "therapist_name",
+          "completed_sessions",
+          "payable_minutes",
+          "estimated_payable_cents",
+          "currency",
+          "period_start",
+          "period_end"
+        ],
+        "properties": {
+          "therapist_id": {
+            "type": "integer"
+          },
+          "therapist_name": {
+            "type": "string"
+          },
+          "completed_sessions": {
+            "type": "integer"
+          },
+          "payable_minutes": {
+            "type": "integer"
+          },
+          "estimated_payable_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TherapistPayrollListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TherapistPayrollItem"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CalendlyQueueItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "calendly_event_uri",
+          "calendly_invitee_uri",
+          "client_id",
+          "client_name",
+          "therapist_id",
+          "therapist_name",
+          "start_time",
+          "end_time",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "invitee.created",
+              "invitee.canceled",
+              "invitee.rescheduled"
+            ]
+          },
+          "calendly_event_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "calendly_invitee_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "therapist_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "therapist_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "end_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "acknowledged",
+              "resolved"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CalendlyQueueListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendlyQueueItem"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CalendlyQueueTransitionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "acknowledged",
+              "resolved"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TherapistCalendlyFeedItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "session_id",
+          "client_id",
+          "client_name",
+          "start_time",
+          "end_time",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "created",
+              "canceled",
+              "rescheduled"
+            ]
+          },
+          "session_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "client_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "end_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "seen"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TherapistCalendlyFeedListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TherapistCalendlyFeedItem"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TherapistCalendlyFeedSeenResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "seen"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/therapist/sessions/{session_id}/clinical-note": {
+      "put": {
+        "tags": [
+          "Therapist - Clinical Capture"
+        ],
+        "summary": "Upsert clinical note for therapist-owned session",
+        "operationId": "upsertTherapistClinicalNote",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClinicalNoteUpsertRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Clinical note saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalNoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Therapist - Clinical Capture"
+        ],
+        "summary": "Get therapist clinical note for session",
+        "operationId": "getTherapistClinicalNote",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clinical note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalNoteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session/note not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/sessions/{session_id}/clinical-note": {
+      "get": {
+        "tags": [
+          "Admin - Clinical Capture"
+        ],
+        "summary": "Get clinical note for admin session review",
+        "operationId": "getAdminClinicalNote",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clinical note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalNoteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session/note not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invoices/generate": {
+      "post": {
+        "tags": [
+          "Admin - Flexible Receipting"
+        ],
+        "summary": "Generate invoice (session-linked or sessionless)",
+        "description": "Total receipted amount for a client must not exceed total paid amount. Guard error: `400 amount_exceeds_available_to_receipt`.",
+        "operationId": "generateInvoiceV2",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceGenerateRequestV2"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invoice generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceDetailResponseV2"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation/financial guard failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Dependent entity not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/clients/{client_id}/receipting/summary": {
+      "get": {
+        "tags": [
+          "Admin - Flexible Receipting"
+        ],
+        "summary": "Get running receipting summary for client",
+        "operationId": "getClientReceiptingSummary",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receipting summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptingSummaryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Client not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/therapist/sessions/{session_id}/lifecycle": {
+      "patch": {
+        "tags": [
+          "Therapist - Session Lifecycle"
+        ],
+        "summary": "Update therapist session lifecycle status",
+        "operationId": "updateTherapistSessionLifecycle",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TherapistSessionLifecycleUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lifecycle updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TherapistSessionLifecycleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid state transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/reports/therapist-utilization": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "List therapist utilization metrics by date range",
+        "operationId": "listTherapistUtilization",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "therapist_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Utilization report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TherapistUtilizationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/reports/therapist-payroll": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "List therapist payroll-oriented aggregates by date range",
+        "operationId": "listTherapistPayrollSummary",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "therapist_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payroll report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TherapistPayrollListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/calendly/queue": {
+      "get": {
+        "tags": [
+          "Admin - Calendly Workflow"
+        ],
+        "summary": "List Calendly operational queue items",
+        "operationId": "listCalendlyQueue",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "new",
+                "acknowledged",
+                "resolved"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Calendly queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendlyQueueListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/calendly/queue/{item_id}/ack": {
+      "post": {
+        "tags": [
+          "Admin - Calendly Workflow"
+        ],
+        "summary": "Acknowledge Calendly queue item",
+        "operationId": "ackCalendlyQueueItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item acknowledged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendlyQueueTransitionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Queue item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/calendly/queue/{item_id}/resolve": {
+      "post": {
+        "tags": [
+          "Admin - Calendly Workflow"
+        ],
+        "summary": "Resolve Calendly queue item",
+        "operationId": "resolveCalendlyQueueItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendlyQueueTransitionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Queue item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/therapist/calendly/feed": {
+      "get": {
+        "tags": [
+          "Therapist - Calendly Workflow"
+        ],
+        "summary": "List therapist Calendly event feed",
+        "operationId": "listTherapistCalendlyFeed",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "new",
+                "seen"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Therapist Calendly feed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TherapistCalendlyFeedListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/therapist/calendly/feed/{item_id}/seen": {
+      "patch": {
+        "tags": [
+          "Therapist - Calendly Workflow"
+        ],
+        "summary": "Mark therapist Calendly feed item as seen",
+        "operationId": "markTherapistCalendlyFeedItemSeen",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feed item marked as seen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TherapistCalendlyFeedSeenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Feed item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

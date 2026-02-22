@@ -1,7 +1,7 @@
 """Admin endpoints for managing therapists."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from app.core.auth import get_current_admin
 from app.core.config import settings
@@ -102,18 +102,26 @@ def list_therapists(admin: User = Depends(get_current_admin), db: Session = Depe
     """List all therapists with basic info."""
     stmt = select(Therapist, User).join(User).order_by(Therapist.created_at.desc())
     results = db.exec(stmt).all()
+    therapist_ids = [therapist.id for therapist, _ in results if therapist.id is not None]
+    specialty_count_map: dict[int, int] = {}
+    if therapist_ids:
+        specialty_count_rows = db.exec(
+            select(
+                TherapistSpecialtyMap.therapist_id,
+                func.count(TherapistSpecialtyMap.id),
+            )
+            .where(  # type: ignore[arg-type]
+                TherapistSpecialtyMap.therapist_id.in_(therapist_ids)
+            )
+            .group_by(TherapistSpecialtyMap.therapist_id)
+        ).all()
+        specialty_count_map = {
+            therapist_id: int(count)
+            for therapist_id, count in specialty_count_rows
+        }
 
     therapists = []
     for therapist, user in results:
-        # Count specialties
-        specialty_count = len(
-            db.exec(
-                select(TherapistSpecialtyMap).where(
-                    TherapistSpecialtyMap.therapist_id == therapist.id
-                )
-            ).all()
-        )
-
         therapists.append(
             TherapistListResponse(
                 id=therapist.id,
@@ -121,7 +129,7 @@ def list_therapists(admin: User = Depends(get_current_admin), db: Session = Depe
                 license_number=therapist.license_number,
                 is_active=therapist.is_active,
                 email=user.email,
-                specialty_count=specialty_count,
+                specialty_count=specialty_count_map.get(therapist.id, 0),
             )
         )
 
