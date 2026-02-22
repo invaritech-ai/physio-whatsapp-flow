@@ -30,7 +30,7 @@ celery_app.conf.update(
     beat_schedule={
         "sync-therapist-event-types": {
             "task": "tasks.sync_therapist_event_types",
-            "schedule": settings.celery_sync_interval_hours * 60 * 60,
+            "schedule": settings.celery_sync_interval_seconds,
             "options": {"queue": "integrations"},
         },
     },
