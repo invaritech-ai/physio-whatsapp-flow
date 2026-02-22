@@ -1,6 +1,7 @@
 """Therapist self-service onboarding endpoints."""
 
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -21,6 +22,8 @@ from app.api.v1.schemas.therapist_onboarding import (
     EventTypeSyncResponse,
     UpdateProfileRequest,
     UpdateProfileResponse,
+    UpdatePreferredTimezoneRequest,
+    UpdatePreferredTimezoneResponse,
     UpdateSpecialtiesRequest,
     UpdateSpecialtiesResponse,
     SaveCalendlyRequest,
@@ -77,6 +80,16 @@ def _normalize_and_validate_license_number(value: str | None) -> str | None:
     if not is_valid_license_number(normalized):
         raise HTTPException(status_code=400, detail="invalid_license_number")
     return normalized
+
+
+def _normalize_and_validate_timezone(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="invalid_preferred_timezone")
+    try:
+        return ZoneInfo(normalized).key
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(status_code=400, detail="invalid_preferred_timezone") from exc
 
 
 def _ensure_unique_license_number(
@@ -592,6 +605,24 @@ def register_calendly_webhook(
     )
 
 
+@router.patch("/me/timezone", response_model=UpdatePreferredTimezoneResponse)
+def update_preferred_timezone(
+    data: UpdatePreferredTimezoneRequest,
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+    db: Session = Depends(get_session),
+):
+    """Update therapist preferred timezone with strict IANA validation."""
+    therapist.preferred_timezone = _normalize_and_validate_timezone(
+        data.preferred_timezone
+    )
+    db.add(therapist)
+    db.commit()
+    db.refresh(therapist)
+    return UpdatePreferredTimezoneResponse(
+        preferred_timezone=therapist.preferred_timezone
+    )
+
+
 @router.get("/me", response_model=TherapistProfileResponse)
 def get_therapist_profile(
     therapist: Therapist = Depends(get_current_therapist_allow_inactive),
@@ -656,6 +687,7 @@ def get_therapist_profile(
         user_id=therapist.user_id,
         display_name=therapist.display_name,
         license_number=therapist.license_number,
+        preferred_timezone=therapist.preferred_timezone,
         email=user.email if user else None,
         is_active=therapist.is_active,
         calendly_user_uri=therapist.calendly_user_uri,

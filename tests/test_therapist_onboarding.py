@@ -863,6 +863,7 @@ class TestGetTherapistProfile:
         assert data["id"] == therapist_with_uri.id
         assert data["display_name"] == "Dr. Test Therapist"
         assert data["license_number"] == "PT-ONBOARD-002"
+        assert data["preferred_timezone"] is None
         assert data["email"] == "therapist@test.com"
         assert data["is_active"] is True
         assert data["calendly_user_uri"] == "https://api.calendly.com/users/TEST123"
@@ -887,9 +888,49 @@ class TestGetTherapistProfile:
         data = response.json()
         assert data["id"] == therapist_no_uri.id
         assert data["license_number"] == "PT-ONBOARD-001"
+        assert data["preferred_timezone"] is None
         assert data["specialties"] == []
         assert data["event_types"] == []
         assert data["calendly_user_uri"] is None
+
+
+class TestUpdatePreferredTimezone:
+    """Tests for PATCH /therapist/me/timezone."""
+
+    def test_update_preferred_timezone_success(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        response = client.patch(
+            "/api/v1/therapist/me/timezone",
+            json={"preferred_timezone": " Asia/Hong_Kong "},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["preferred_timezone"] == "Asia/Hong_Kong"
+
+        db_session.refresh(therapist_no_uri)
+        assert therapist_no_uri.preferred_timezone == "Asia/Hong_Kong"
+
+    def test_update_preferred_timezone_rejects_invalid_timezone(
+        self,
+        client,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        response = client.patch(
+            "/api/v1/therapist/me/timezone",
+            json={"preferred_timezone": "Mars/Olympus"},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "invalid_preferred_timezone"
 
 
 class TestAuthorization:

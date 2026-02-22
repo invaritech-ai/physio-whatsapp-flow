@@ -110,6 +110,25 @@ class UpdateProfileRequest(BaseModel):
     )
 
 
+class UpdatePreferredTimezoneRequest(BaseModel):
+    """Request to update therapist preferred timezone."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "preferred_timezone": "Asia/Hong_Kong",
+            }
+        }
+    )
+
+    preferred_timezone: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="IANA timezone identifier (e.g., Asia/Hong_Kong).",
+    )
+
+
 class UpdateSpecialtiesRequest(BaseModel):
     """Request to update therapist specialties.
 
@@ -255,6 +274,13 @@ class UpdateProfileResponse(BaseModel):
     message: str = "Profile updated successfully"
 
 
+class UpdatePreferredTimezoneResponse(BaseModel):
+    """Response after updating preferred timezone."""
+
+    preferred_timezone: str
+    message: str = "Preferred timezone updated successfully"
+
+
 class UpdateSpecialtiesResponse(BaseModel):
     """Response after updating specialties."""
 
@@ -311,6 +337,7 @@ class TherapistProfileResponse(BaseModel):
     user_id: int
     display_name: str | None = None
     license_number: str | None = None
+    preferred_timezone: str | None = None
     email: str | None = None
     is_active: bool
     calendly_user_uri: str | None = None
