@@ -27,6 +27,20 @@ def _title_and_message(event: AuthEvent, details: dict | None) -> tuple[str, str
             "New booking confirmed",
             f"{client_name} booked with {therapist_name} at {start_time}.",
         )
+    if event.event_type == "therapist.notification.booking_cancelled":
+        client_name = (details or {}).get("client_name") or "A client"
+        start_time = (details or {}).get("start_time_local") or "a session"
+        return (
+            "Booking cancelled",
+            f"{client_name} cancelled the booking at {start_time}.",
+        )
+    if event.event_type == "therapist.notification.booking_rescheduled":
+        client_name = (details or {}).get("client_name") or "A client"
+        start_time = (details or {}).get("start_time_local") or "an updated time"
+        return (
+            "Booking rescheduled",
+            f"{client_name} rescheduled to {start_time}.",
+        )
     return ("System notification", event.reason or "You have a new notification.")
 
 
@@ -85,4 +99,3 @@ def list_therapist_notifications(
         offset=offset,
         has_more=offset + limit < int(total),
     )
-

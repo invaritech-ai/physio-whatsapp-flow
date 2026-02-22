@@ -170,6 +170,71 @@ def _format_local_timestamp(value: datetime, preferred_timezone: str | None) -> 
     return f"{date_part} {time_part}"
 
 
+def _append_therapist_notification_event(
+    *,
+    db: Session,
+    event_type: str,
+    user_id: int,
+    details: dict[str, Any],
+    dedupe_reason: str | None = None,
+) -> bool:
+    """Append a therapist notification event, with optional idempotency guard."""
+    if dedupe_reason:
+        existing = db.exec(
+            select(AuthEvent).where(
+                AuthEvent.event_type == event_type,
+                AuthEvent.user_id == user_id,
+                AuthEvent.reason == dedupe_reason,
+            )
+        ).first()
+        if existing:
+            return False
+
+    event = AuthEvent(
+        event_type=event_type,
+        user_id=user_id,
+        reason=dedupe_reason,
+        details_json=json.dumps(details, default=str),
+    )
+    db.add(event)
+    return True
+
+
+def _notify_therapist_session_update(
+    *,
+    db: Session,
+    session: TherapySession,
+    therapist: Therapist,
+    client: Client | None,
+    event_type: str,
+    action: str,
+) -> None:
+    """Create therapist app notification for session state changes."""
+    local_start_text = _format_local_timestamp(session.start_time, therapist.preferred_timezone)
+    details = {
+        "session_id": session.id,
+        "client_id": client.id if client else session.client_id,
+        "client_name": client.name if client else None,
+        "therapist_name": therapist.display_name,
+        "status": session.status,
+        "start_time_utc": session.start_time.isoformat(),
+        "start_time_local": local_start_text,
+        "timezone": therapist.preferred_timezone or settings.invoice_timezone or "UTC",
+        "duration_minutes": session.duration_minutes,
+        "action": action,
+    }
+    dedupe_reason = f"session:{session.id}:{action}"
+    created = _append_therapist_notification_event(
+        db=db,
+        event_type=event_type,
+        user_id=therapist.user_id,
+        details=details,
+        dedupe_reason=dedupe_reason,
+    )
+    if created:
+        db.commit()
+
+
 def _notify_booking_confirmed(
     *,
     db: Session,
@@ -222,13 +287,13 @@ def _notify_booking_confirmed(
             "timezone": therapist_tz,
             "duration_minutes": session.duration_minutes,
         }
-        event = AuthEvent(
+        _append_therapist_notification_event(
+            db=db,
             event_type="therapist.notification.booking_confirmed",
             user_id=therapist.user_id,
-            reason="booking_confirmed",
-            details_json=json.dumps(details, default=str),
+            details=details,
+            dedupe_reason=f"session:{session.id}:booking_confirmed",
         )
-        db.add(event)
         session.therapist_notified = True
         dirty = True
 
@@ -672,6 +737,25 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
         db.add(session)
         db.commit()
 
+        therapist = db.get(Therapist, session.therapist_id)
+        client = db.get(Client, session.client_id) if session.client_id else None
+        if therapist:
+            try:
+                _notify_therapist_session_update(
+                    db=db,
+                    session=session,
+                    therapist=therapist,
+                    client=client,
+                    event_type="therapist.notification.booking_cancelled",
+                    action="cancelled",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create therapist cancellation notification session_id=%s therapist_id=%s",
+                    session.id,
+                    therapist.id,
+                )
+
         logger.info(f"Marked session {session.id} as cancelled")
 
         return {
@@ -792,6 +876,23 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
             db.add(session)
             db.commit()
 
+            client = db.get(Client, existing_new_session.client_id)
+            try:
+                _notify_therapist_session_update(
+                    db=db,
+                    session=existing_new_session,
+                    therapist=therapist,
+                    client=client,
+                    event_type="therapist.notification.booking_rescheduled",
+                    action="rescheduled",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create therapist reschedule notification session_id=%s therapist_id=%s",
+                    existing_new_session.id,
+                    therapist.id,
+                )
+
             logger.info(
                 "Rescheduled session merged: old_session=%s new_session=%s",
                 session.id,
@@ -813,6 +914,23 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
         session.updated_at = datetime.now(timezone.utc)
         db.add(session)
         db.commit()
+
+        client = db.get(Client, session.client_id)
+        try:
+            _notify_therapist_session_update(
+                db=db,
+                session=session,
+                therapist=therapist,
+                client=client,
+                event_type="therapist.notification.booking_rescheduled",
+                action="rescheduled",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create therapist reschedule notification session_id=%s therapist_id=%s",
+                session.id,
+                therapist.id,
+            )
 
         logger.info("Rescheduled session %s to event %s", session.id, target_event_uri)
         return {

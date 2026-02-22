@@ -1,16 +1,18 @@
 """Tests for Calendly invitee.rescheduled webhook handling."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from sqlmodel import select
 
 from app.api.v1.routes.webhooks import (
     handle_invitee_canceled,
     handle_invitee_created,
     handle_invitee_rescheduled,
 )
-from app.models import Client, Session as TherapySession, Therapist, TherapistEventType, User
+from app.models import AuthEvent, Client, Session as TherapySession, Therapist, TherapistEventType, User
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -115,10 +117,22 @@ async def test_rescheduled_updates_existing_session(db_session):
     assert _as_utc(old_session.start_time) == datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc)
     assert _as_utc(old_session.end_time) == datetime(2026, 3, 1, 10, 45, tzinfo=timezone.utc)
 
+    events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == therapist.user_id,
+            AuthEvent.event_type == "therapist.notification.booking_rescheduled",
+        )
+    ).all()
+    assert len(events) == 1
+    assert events[0].reason == f"session:{old_session.id}:rescheduled"
+    details = json.loads(events[0].details_json or "{}")
+    assert details["session_id"] == old_session.id
+    assert details["action"] == "rescheduled"
+
 
 @pytest.mark.anyio
 async def test_rescheduled_merges_when_new_event_session_already_exists(db_session):
-    _, client, old_session, new_event_type = _seed_therapist_client_and_session(db_session)
+    therapist, client, old_session, new_event_type = _seed_therapist_client_and_session(db_session)
 
     # Simulate out-of-order webhooks: a session already exists for new event URI.
     new_start = datetime.now(timezone.utc) + timedelta(days=2)
@@ -169,6 +183,18 @@ async def test_rescheduled_merges_when_new_event_session_already_exists(db_sessi
     assert new_session.duration_minutes == 45
     assert _as_utc(new_session.start_time) == datetime(2026, 3, 2, 11, 0, tzinfo=timezone.utc)
     assert _as_utc(new_session.end_time) == datetime(2026, 3, 2, 11, 45, tzinfo=timezone.utc)
+
+    events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == therapist.user_id,
+            AuthEvent.event_type == "therapist.notification.booking_rescheduled",
+        )
+    ).all()
+    assert len(events) == 1
+    assert events[0].reason == f"session:{new_session.id}:rescheduled"
+    details = json.loads(events[0].details_json or "{}")
+    assert details["session_id"] == new_session.id
+    assert details["action"] == "rescheduled"
 
 
 @pytest.mark.anyio
@@ -239,6 +265,14 @@ async def test_cancel_then_created_reschedule_flow_keeps_single_scheduled_sessio
     assert cancel_result["status"] == "success"
     db_session.refresh(old_session)
     assert old_session.status == "cancelled"
+    cancel_events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == therapist.user_id,
+            AuthEvent.event_type == "therapist.notification.booking_cancelled",
+        )
+    ).all()
+    assert len(cancel_events) == 1
+    assert cancel_events[0].reason == f"session:{old_session.id}:cancelled"
 
     created_payload = {
         "event": "https://api.calendly.com/scheduled_events/NEW",
