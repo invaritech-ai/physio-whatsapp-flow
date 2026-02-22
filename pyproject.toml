@@ -7,6 +7,7 @@ dependencies = [
     "uvicorn",
     "sqlmodel",
     "alembic",
+    "boto3",
     "twilio",
     "requests",
     "python-dotenv",
