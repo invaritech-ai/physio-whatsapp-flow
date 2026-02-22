@@ -1,8 +1,11 @@
 """Pydantic schemas for invoice endpoints."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+InvoiceServiceType = Literal["standard", "supervised_physio", "other"]
 
 
 class InvoiceListItem(BaseModel):
@@ -13,6 +16,10 @@ class InvoiceListItem(BaseModel):
     id: int
     client_id: int
     session_id: int | None
+    therapist_id: int | None
+    service_type: InvoiceServiceType
+    trainer_name: str | None = None
+    reference_note: str | None = None
     amount_cents: int
     currency: str
     description: str
@@ -31,13 +38,17 @@ class InvoiceDetailResponse(InvoiceListItem):
 
 
 class InvoiceGenerateRequest(BaseModel):
-    """Admin request payload to generate a single-session invoice."""
+    """Admin request payload to generate a session-linked or sessionless invoice."""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "client_id": 101,
                 "session_id": 501,
+                "therapist_id": 55,
+                "service_type": "standard",
+                "trainer_name": None,
+                "reference_note": None,
                 "amount_cents": 65000,
                 "currency": "HKD",
                 "description": "Physio session invoice",
@@ -49,13 +60,45 @@ class InvoiceGenerateRequest(BaseModel):
     )
 
     client_id: int = Field(gt=0)
-    session_id: int = Field(gt=0)
+    session_id: int | None = Field(default=None, gt=0)
+    therapist_id: int | None = Field(default=None, gt=0)
+    service_type: InvoiceServiceType = Field(default="standard")
+    trainer_name: str | None = Field(default=None, min_length=1, max_length=120)
+    reference_note: str | None = Field(default=None, min_length=1, max_length=2000)
     amount_cents: int | None = Field(default=None, gt=0)
     currency: str = Field(default="HKD", min_length=3, max_length=8)
     description: str = Field(min_length=1, max_length=2000)
     payment_mode: str | None = Field(default=None, min_length=1, max_length=120)
     diagnosis: str | None = Field(default=None, min_length=1, max_length=2000)
     special_notes: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class ReceiptingSummaryReceiptItem(BaseModel):
+    """Receipt item in admin receipting summary."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    session_id: int | None
+    service_type: InvoiceServiceType
+    amount_cents: int
+    currency: str
+    description: str
+    created_at: datetime
+
+
+class ReceiptingSummaryResponse(BaseModel):
+    """Running receipting totals and recent receipt ledger for a client."""
+
+    client_id: int
+    currency: str
+    total_paid_cents: int
+    total_receipted_cents: int
+    claimable_balance_cents: int
+    receipts: list[ReceiptingSummaryReceiptItem]
+    limit: int
+    offset: int
+    has_more: bool
 
 
 class TherapistInvoiceListItem(InvoiceListItem):

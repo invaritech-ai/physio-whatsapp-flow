@@ -11,7 +11,7 @@ from app.api.v1.schemas.invoice import (
 )
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
-from app.models import Client, Receipt, Session as TherapySession, Therapist
+from app.models import Client, Receipt, Therapist
 
 router = APIRouter(prefix="/therapist/invoices", tags=["Therapist Invoices"])
 
@@ -25,6 +25,10 @@ def _build_therapist_invoice_item(
         id=invoice.id,
         client_id=invoice.client_id,
         session_id=invoice.session_id,
+        therapist_id=invoice.therapist_id,
+        service_type=invoice.service_type,  # type: ignore[arg-type]
+        trainer_name=invoice.trainer_name,
+        reference_note=invoice.reference_note,
         amount_cents=invoice.amount_cents,
         currency=invoice.currency,
         description=invoice.description,
@@ -51,9 +55,8 @@ def list_therapist_invoices(
 ):
     stmt = (
         select(Receipt, Client)
-        .join(TherapySession, TherapySession.id == Receipt.session_id)
         .join(Client, Client.id == Receipt.client_id)
-        .where(TherapySession.therapist_id == therapist.id)
+        .where(Receipt.therapist_id == therapist.id)
     )
     if status:
         stmt = stmt.where(Receipt.status == status)
@@ -78,10 +81,9 @@ def get_therapist_invoice_detail(
 ):
     row = db.exec(
         select(Receipt, Client)
-        .join(TherapySession, TherapySession.id == Receipt.session_id)
         .join(Client, Client.id == Receipt.client_id)
         .where(
-            TherapySession.therapist_id == therapist.id,
+            Receipt.therapist_id == therapist.id,
             Receipt.id == invoice_id,
         )
     ).first()

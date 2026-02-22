@@ -143,6 +143,10 @@ def test_generate_invoice_success_updates_financials_and_serves_pdf(client, db_s
     data = response.json()
     assert data["client_id"] == client_row.id
     assert data["session_id"] == session_row.id
+    assert data["therapist_id"] == therapist.id
+    assert data["service_type"] == "standard"
+    assert data["trainer_name"] is None
+    assert data["reference_note"] is None
     assert data["amount_cents"] == 65000
     assert data["status"] == "issued"
     assert data["pdf_url"].startswith("/generated/invoices/invoice-")
@@ -212,6 +216,8 @@ def test_generate_invoice_accepts_optional_metadata_and_renders_provider_details
 
     assert response.status_code == 201
     data = response.json()
+    assert data["therapist_id"] == therapist.id
+    assert data["service_type"] == "standard"
     assert data["payment_mode"] == "Cash"
     assert data["diagnosis"] == "Bilateral plantar fasciitis"
     assert data["special_notes"] == "Bring insurer card"
@@ -275,6 +281,8 @@ def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_sessio
 
     assert response.status_code == 201
     data = response.json()
+    assert data["therapist_id"] == therapist.id
+    assert data["service_type"] == "standard"
     assert data["payment_mode"] == "Bank Transfer"
     assert data["diagnosis"] == "Lumbar strain"
     assert data["special_notes"] == "-"
@@ -379,6 +387,7 @@ def test_list_invoices_filters_by_therapist_id(client, db_session: Session):
         Receipt(
             client_id=client_a.id,
             session_id=session_a.id,
+            therapist_id=therapist_a.id,
             amount_cents=10000,
             currency="HKD",
             description="A",
@@ -391,6 +400,7 @@ def test_list_invoices_filters_by_therapist_id(client, db_session: Session):
         Receipt(
             client_id=client_b.id,
             session_id=session_b.id,
+            therapist_id=therapist_b.id,
             amount_cents=20000,
             currency="HKD",
             description="B",
@@ -467,3 +477,148 @@ def test_generate_invoice_latex_falls_back_to_basic_when_engine_missing(client, 
     assert response.status_code == 201
     data = response.json()
     assert data["pdf_url"].startswith("/generated/invoices/invoice-")
+
+
+def test_generate_invoice_sessionless_supervised_physio_payload(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-sessionless")
+    client_row = Client(phone_e164="+85290100010", name="Sessionless Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=120000,
+            total_receipted_cents=10000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "therapist_id": therapist.id,
+                "service_type": "supervised_physio",
+                "trainer_name": "Coach Gina",
+                "reference_note": "Trainer-led supervised session; therapist passive review.",
+                "amount_cents": 50000,
+                "currency": "HKD",
+                "description": "Supervised Physiotherapy Exercise",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["session_id"] is None
+    assert data["therapist_id"] == therapist.id
+    assert data["service_type"] == "supervised_physio"
+    assert data["trainer_name"] == "Coach Gina"
+    assert "therapist passive review" in data["reference_note"].lower()
+    assert data["payment_mode"] == "N/A"
+    assert data["pdf_url"].startswith("/generated/invoices/invoice-")
+
+    financial = db_session.exec(
+        select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)
+    ).first()
+    assert financial is not None
+    assert financial.total_receipted_cents == 60000
+
+
+def test_get_client_receipting_summary_returns_running_totals_and_pagination(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-summary")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100011",
+    )
+
+    financial = ClientFinancial(
+        client_id=client_row.id,
+        total_paid_cents=200000,
+        total_receipted_cents=90000,
+        currency="HKD",
+    )
+    db_session.add(financial)
+    db_session.commit()
+
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        Receipt(
+            client_id=client_row.id,
+            session_id=session_row.id,
+            therapist_id=therapist.id,
+            service_type="standard",
+            amount_cents=30000,
+            currency="HKD",
+            description="Receipt 1",
+            status="issued",
+            issued_by_user_id=admin.id,
+            created_at=now - timedelta(days=2),
+        )
+    )
+    db_session.add(
+        Receipt(
+            client_id=client_row.id,
+            session_id=None,
+            therapist_id=therapist.id,
+            service_type="supervised_physio",
+            trainer_name="Coach Gina",
+            amount_cents=30000,
+            currency="HKD",
+            description="Receipt 2",
+            status="issued",
+            issued_by_user_id=admin.id,
+            created_at=now - timedelta(days=1),
+        )
+    )
+    db_session.add(
+        Receipt(
+            client_id=client_row.id,
+            session_id=None,
+            therapist_id=therapist.id,
+            service_type="other",
+            amount_cents=30000,
+            currency="HKD",
+            description="Receipt 3",
+            status="issued",
+            issued_by_user_id=admin.id,
+            created_at=now,
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/receipting/summary?limit=2&offset=0",
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["client_id"] == client_row.id
+    assert payload["currency"] == "HKD"
+    assert payload["total_paid_cents"] == 200000
+    assert payload["total_receipted_cents"] == 90000
+    assert payload["claimable_balance_cents"] == 110000
+    assert payload["limit"] == 2
+    assert payload["offset"] == 0
+    assert payload["has_more"] is True
+    assert len(payload["receipts"]) == 2
+    assert payload["receipts"][0]["service_type"] == "other"
+    assert payload["receipts"][1]["service_type"] == "supervised_physio"
+
+    with _admin_auth_context(admin):
+        page_2 = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/receipting/summary?limit=2&offset=2",
+            headers=_auth_headers(),
+        )
+    assert page_2.status_code == 200
+    page_2_payload = page_2.json()
+    assert page_2_payload["has_more"] is False
+    assert len(page_2_payload["receipts"]) == 1

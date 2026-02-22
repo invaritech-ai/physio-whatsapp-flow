@@ -15,10 +15,14 @@ from app.api.v1.schemas.client import (
     ClientSessionListItem,
     ClientUpdate,
 )
+from app.api.v1.schemas.invoice import (
+    ReceiptingSummaryReceiptItem,
+    ReceiptingSummaryResponse,
+)
 from app.core.auth import get_current_admin
 from app.core.config import settings
 from app.db.session import get_session
-from app.models import Client, ClientFinancial, MessageLog, Session as TherapySession, Therapist, User
+from app.models import Client, ClientFinancial, MessageLog, Receipt, Session as TherapySession, Therapist, User
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/clients", tags=["Admin - Clients"])
@@ -48,6 +52,18 @@ def _ensure_unique_phone(
     existing = db.exec(select(Client).where(Client.phone_e164 == phone_e164)).first()
     if existing and existing.id != ignore_client_id:
         raise HTTPException(status_code=400, detail="Client phone already exists")
+
+
+def _to_receipting_summary_item(receipt: Receipt) -> ReceiptingSummaryReceiptItem:
+    return ReceiptingSummaryReceiptItem(
+        id=receipt.id,
+        session_id=receipt.session_id,
+        service_type=receipt.service_type,  # type: ignore[arg-type]
+        amount_cents=receipt.amount_cents,
+        currency=receipt.currency,
+        description=receipt.description,
+        created_at=receipt.created_at,
+    )
 
 
 @router.get("", response_model=ClientListResponse)
@@ -276,4 +292,48 @@ def get_client_financials(
         total_receipted_cents=record.total_receipted_cents,
         available_to_receipt_cents=available,
         updated_at=record.updated_at,
+    )
+
+
+@router.get("/{client_id}/receipting/summary", response_model=ReceiptingSummaryResponse)
+def get_client_receipting_summary(
+    client_id: int,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Return running receipting totals plus paginated receipt ledger for a client."""
+    _ = admin
+    _ensure_client_exists(db, client_id)
+
+    financial = db.exec(
+        select(ClientFinancial).where(ClientFinancial.client_id == client_id)
+    ).first()
+    currency = financial.currency if financial else settings.default_currency
+    total_paid_cents = financial.total_paid_cents if financial else 0
+    total_receipted_cents = financial.total_receipted_cents if financial else 0
+    claimable_balance_cents = max(total_paid_cents - total_receipted_cents, 0)
+
+    total_receipts = db.exec(
+        select(func.count()).select_from(Receipt).where(Receipt.client_id == client_id)
+    ).one()
+    receipts = db.exec(
+        select(Receipt)
+        .where(Receipt.client_id == client_id)
+        .order_by(Receipt.created_at.desc(), Receipt.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+
+    return ReceiptingSummaryResponse(
+        client_id=client_id,
+        currency=currency,
+        total_paid_cents=total_paid_cents,
+        total_receipted_cents=total_receipted_cents,
+        claimable_balance_cents=claimable_balance_cents,
+        receipts=[_to_receipting_summary_item(receipt) for receipt in receipts],
+        limit=limit,
+        offset=offset,
+        has_more=(offset + len(receipts)) < total_receipts,
     )

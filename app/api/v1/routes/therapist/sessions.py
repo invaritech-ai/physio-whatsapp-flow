@@ -14,7 +14,13 @@ from app.api.v1.schemas.clinical_note import (
     ClinicalNoteResponse,
     ClinicalNoteUpsertRequest,
 )
-from app.api.v1.schemas.session import SessionDetail, SessionListItem, SessionSummary
+from app.api.v1.schemas.session import (
+    SessionDetail,
+    SessionListItem,
+    SessionStatusUpdateRequest,
+    SessionStatusUpdateResponse,
+    SessionSummary,
+)
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/sessions", tags=["Therapist Sessions"])
@@ -272,6 +278,34 @@ def get_session_detail(
         assigned_plan=assigned_plan,
         calendly_event_uri=session.calendly_event_uri,
         created_at=session.created_at,
+    )
+
+
+@router.patch("/{session_id}/status", response_model=SessionStatusUpdateResponse)
+def update_session_status(
+    session_id: int,
+    payload: SessionStatusUpdateRequest,
+    therapist: Therapist = Depends(get_current_therapist),
+    db: Session = Depends(get_session),
+):
+    """Update a therapist-owned session status."""
+    session_row = _get_therapist_session_or_404(
+        db,
+        therapist_id=therapist.id,
+        session_id=session_id,
+    )
+
+    now = datetime.now(timezone.utc)
+    session_row.status = payload.status
+    session_row.updated_at = now
+    db.add(session_row)
+    db.commit()
+    db.refresh(session_row)
+
+    return SessionStatusUpdateResponse(
+        session_id=session_row.id,
+        status=session_row.status,
+        updated_at=session_row.updated_at,
     )
 
 

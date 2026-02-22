@@ -29,6 +29,7 @@ from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
 _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
+_SERVICE_TYPE_VALUES = {"standard", "supervised_physio", "other"}
 
 
 def _ensure_client_exists(db: Session, client_id: int) -> Client:
@@ -50,6 +51,13 @@ def _ensure_session_belongs_to_client(
     if session_row.client_id != client_id:
         raise HTTPException(status_code=400, detail="invalid_session_for_client")
     return session_row
+
+
+def _ensure_therapist_exists(db: Session, therapist_id: int) -> Therapist:
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="therapist_not_found")
+    return therapist
 
 
 def _ensure_invoice_exists(db: Session, invoice_id: int) -> Receipt:
@@ -98,6 +106,10 @@ def _to_invoice_list_item(invoice: Receipt) -> InvoiceListItem:
         id=invoice.id,
         client_id=invoice.client_id,
         session_id=invoice.session_id,
+        therapist_id=invoice.therapist_id,
+        service_type=invoice.service_type,  # type: ignore[arg-type]
+        trainer_name=invoice.trainer_name,
+        reference_note=invoice.reference_note,
         amount_cents=invoice.amount_cents,
         currency=invoice.currency,
         description=invoice.description,
@@ -134,9 +146,7 @@ def list_invoices(
 
     stmt = select(Receipt)
     if therapist_id is not None:
-        stmt = stmt.join(TherapySession, TherapySession.id == Receipt.session_id).where(
-            TherapySession.therapist_id == therapist_id
-        )
+        stmt = stmt.where(Receipt.therapist_id == therapist_id)
     if client_id is not None:
         stmt = stmt.where(Receipt.client_id == client_id)
     if status:
@@ -178,34 +188,62 @@ def generate_invoice(
         return cleaned or None
 
     client = _ensure_client_exists(db, payload.client_id)
-    session_row = _ensure_session_belongs_to_client(
-        db,
-        session_id=payload.session_id,
-        client_id=payload.client_id,
-    )
-    plan_map = load_active_plan_map(db, client_ids={payload.client_id})
-    default_amount_cents, _, _ = resolve_expected_charge(session_row, plan_map=plan_map)
+    session_row: TherapySession | None = None
+    if payload.session_id is not None:
+        session_row = _ensure_session_belongs_to_client(
+            db,
+            session_id=payload.session_id,
+            client_id=payload.client_id,
+        )
+
+    service_type = payload.service_type.strip().lower()
+    if service_type not in _SERVICE_TYPE_VALUES:
+        raise HTTPException(status_code=400, detail="invalid_service_type")
+
+    default_amount_cents: int | None = None
+    if session_row is not None:
+        plan_map = load_active_plan_map(db, client_ids={payload.client_id})
+        default_amount_cents, _, _ = resolve_expected_charge(session_row, plan_map=plan_map)
+
     amount_cents = payload.amount_cents if payload.amount_cents is not None else default_amount_cents
     if amount_cents is None or amount_cents <= 0:
         raise HTTPException(status_code=400, detail="amount_cents_required")
-    therapist = db.get(Therapist, session_row.therapist_id)
+
+    if (
+        session_row is not None
+        and payload.therapist_id is not None
+        and payload.therapist_id != session_row.therapist_id
+    ):
+        raise HTTPException(status_code=400, detail="therapist_session_mismatch")
+
+    therapist_id = payload.therapist_id
+    if therapist_id is None and session_row is not None:
+        therapist_id = session_row.therapist_id
+
+    therapist = _ensure_therapist_exists(db, therapist_id) if therapist_id is not None else None
     therapist_name = therapist.display_name if therapist else None
     therapist_license_number = therapist.license_number if therapist else None
-    payment_record = db.exec(
-        select(PaymentRecord)
-        .where(PaymentRecord.session_id == payload.session_id)
-        .order_by(PaymentRecord.created_at.desc())
-    ).first()
+
+    payment_record = None
+    latest_note = None
+    if session_row is not None and session_row.id is not None:
+        payment_record = db.exec(
+            select(PaymentRecord)
+            .where(PaymentRecord.session_id == session_row.id)
+            .order_by(PaymentRecord.created_at.desc())
+        ).first()
+        latest_note = db.exec(
+            select(SessionNote)
+            .where(SessionNote.session_id == session_row.id)
+            .order_by(SessionNote.created_at.desc())
+        ).first()
+
     payment_mode = _clean_optional_text(payload.payment_mode)
     if payment_mode is None and payment_record and payment_record.payment_method:
         payment_mode = payment_record.payment_method.replace("_", " ").title()
     if payment_mode is None:
         payment_mode = "N/A"
-    latest_note = db.exec(
-        select(SessionNote)
-        .where(SessionNote.session_id == payload.session_id)
-        .order_by(SessionNote.created_at.desc())
-    ).first()
+
     extracted_diagnosis = None
     if latest_note and latest_note.note_text:
         match = _DIAGNOSIS_PATTERN.search(latest_note.note_text)
@@ -213,6 +251,8 @@ def generate_invoice(
             extracted_diagnosis = match.group(1).strip()
     diagnosis = _clean_optional_text(payload.diagnosis) or extracted_diagnosis or "-"
     special_notes = _clean_optional_text(payload.special_notes) or "-"
+    trainer_name = _clean_optional_text(payload.trainer_name)
+    reference_note = _clean_optional_text(payload.reference_note)
     description = payload.description.strip()
 
     currency = payload.currency.upper()
@@ -231,7 +271,11 @@ def generate_invoice(
     now = datetime.now(timezone.utc)
     invoice = Receipt(
         client_id=payload.client_id,
-        session_id=payload.session_id,
+        session_id=session_row.id if session_row else None,
+        therapist_id=therapist_id,
+        service_type=service_type,
+        trainer_name=trainer_name,
+        reference_note=reference_note,
         amount_cents=amount_cents,
         currency=currency,
         description=description,
@@ -255,7 +299,7 @@ def generate_invoice(
             currency=currency,
             description=description,
             diagnosis=diagnosis,
-            session_start_at=session_row.start_time,
+            session_start_at=session_row.start_time if session_row else now,
             therapist_name=therapist_name,
             therapist_license_number=therapist_license_number,
             payment_mode=payment_mode,

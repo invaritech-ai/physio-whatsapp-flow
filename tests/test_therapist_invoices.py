@@ -76,6 +76,9 @@ def _create_client_session_and_receipt(
     phone: str,
     amount_cents: int,
     status: str = "issued",
+    service_type: str = "standard",
+    trainer_name: str | None = None,
+    reference_note: str | None = None,
     payment_mode: str | None = None,
     diagnosis: str | None = None,
     special_notes: str | None = None,
@@ -103,6 +106,10 @@ def _create_client_session_and_receipt(
     receipt = Receipt(
         client_id=client_row.id,
         session_id=session_row.id,
+        therapist_id=therapist_id,
+        service_type=service_type,
+        trainer_name=trainer_name,
+        reference_note=reference_note,
         amount_cents=amount_cents,
         currency="HKD",
         description="Therapist invoice",
@@ -150,6 +157,8 @@ def test_list_therapist_invoices_returns_scoped_results(client, db_session: Sess
     assert len(data) == 1
     assert data[0]["id"] == own_receipt.id
     assert data[0]["client_phone_e164"] == "+85290200001"
+    assert data[0]["therapist_id"] == therapist_a.id
+    assert data[0]["service_type"] == "standard"
     assert data[0]["payment_mode"] == "Cash"
     assert data[0]["diagnosis"] == "Bilateral plantar fasciitis"
     assert data[0]["special_notes"] == "Bring reports"

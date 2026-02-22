@@ -46,6 +46,10 @@ class Receipt(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     client_id: int = Field(foreign_key="client.id", index=True)
     session_id: int | None = Field(default=None, foreign_key="session.id")  # Nullable for multi-session receipts
+    therapist_id: int | None = Field(default=None, foreign_key="therapist.id", index=True)
+    service_type: str = Field(default="standard", max_length=40)
+    trainer_name: str | None = Field(default=None, max_length=120)
+    reference_note: str | None = Field(default=None, sa_column=sa.Column(sa.Text(), nullable=True))
     amount_cents: int
     currency: str = Field(default="HKD")
     description: str = Field(sa_column=sa.Column(sa.Text(), nullable=False))

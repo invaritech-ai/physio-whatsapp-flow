@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.schemas.pricing import AssignedPlanSummary
 
@@ -54,3 +54,19 @@ class SessionSummary(BaseModel):
     cancelled: int
     no_show: int
     next_session: SessionListItem | None
+
+
+class SessionStatusUpdateRequest(BaseModel):
+    """Mutation payload for therapist session status updates."""
+
+    status: str = Field(
+        pattern="^(scheduled|started|completed|cancelled|no_show)$",
+    )
+
+
+class SessionStatusUpdateResponse(BaseModel):
+    """Response payload for therapist session status updates."""
+
+    session_id: int
+    status: str
+    updated_at: datetime
