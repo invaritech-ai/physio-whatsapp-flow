@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     # Optional override for faster testing; if set, this takes precedence over hours.
     celery_sync_interval_minutes: int | None = None
     celery_sync_interval_hours: int = 4
+    celery_availability_sync_interval_minutes: int = 30
+    celery_availability_cache_ttl_minutes: int = 45
     celery_booking_followup_enabled: bool = False
     booking_followup_first_delay_seconds: int = 3600
     booking_followup_second_delay_seconds: int = 21600
@@ -85,6 +87,10 @@ class Settings(BaseSettings):
             return self.celery_sync_interval_minutes * 60
         return self.celery_sync_interval_hours * 60 * 60
 
+    @property
+    def celery_availability_sync_interval_seconds(self) -> int:
+        return self.celery_availability_sync_interval_minutes * 60
+
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         env = self.app_env.strip().lower()
@@ -94,6 +100,10 @@ class Settings(BaseSettings):
             raise ValueError("CELERY_SYNC_INTERVAL_HOURS must be >= 1.")
         if self.celery_sync_interval_minutes is not None and self.celery_sync_interval_minutes < 1:
             raise ValueError("CELERY_SYNC_INTERVAL_MINUTES must be >= 1 when set.")
+        if self.celery_availability_sync_interval_minutes < 1:
+            raise ValueError("CELERY_AVAILABILITY_SYNC_INTERVAL_MINUTES must be >= 1.")
+        if self.celery_availability_cache_ttl_minutes < 1:
+            raise ValueError("CELERY_AVAILABILITY_CACHE_TTL_MINUTES must be >= 1.")
         return self
 
 

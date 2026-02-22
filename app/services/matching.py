@@ -12,6 +12,7 @@ from sqlmodel import Session, func, select
 from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.models import (
+    AuthEvent,
     MatchingDecision,
     Session as TherapySession,
     Therapist,
@@ -30,6 +31,7 @@ WEIGHT_LOAD_MAX = 9  # max load bonus (0 sessions = 9 points)
 TIME_BAND_WEEKDAY_DAY = "weekday_day"
 TIME_BAND_WEEKDAY_EVENING = "weekday_evening"
 TIME_BAND_WEEKEND = "weekend"
+AVAILABILITY_CACHE_EVENT_TYPE = "system.calendly.availability.cache"
 
 # Fallback cascade configuration
 FALLBACK_LEVELS = [
@@ -366,6 +368,16 @@ def _get_therapist_time_band_matches(
         if therapist_id is None:
             continue
 
+        cached_match = _read_cached_time_band_match(
+            db=db,
+            therapist_id=therapist_id,
+            duration=duration,
+            requested_time_band=requested_time_band,
+        )
+        if cached_match is not None:
+            result[therapist_id] = cached_match
+            continue
+
         event_type = db.exec(
             select(TherapistEventType).where(
                 TherapistEventType.therapist_id == therapist_id,
@@ -404,6 +416,59 @@ def _get_therapist_time_band_matches(
         result[therapist_id] = has_match
 
     return result
+
+
+def _cache_reason(therapist_id: int, duration: int) -> str:
+    return f"therapist:{therapist_id}:duration:{duration}"
+
+
+def _parse_utc_dt(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _read_cached_time_band_match(
+    *,
+    db: Session,
+    therapist_id: int,
+    duration: int,
+    requested_time_band: str,
+) -> bool | None:
+    row = db.exec(
+        select(AuthEvent).where(
+            AuthEvent.event_type == AVAILABILITY_CACHE_EVENT_TYPE,
+            AuthEvent.reason == _cache_reason(therapist_id, duration),
+        )
+    ).first()
+    if not row or not row.details_json:
+        return None
+
+    try:
+        details = json.loads(row.details_json)
+    except Exception:
+        return None
+    if not isinstance(details, dict):
+        return None
+
+    expires_at = _parse_utc_dt(details.get("expires_at"))
+    if not expires_at or expires_at <= datetime.now(timezone.utc):
+        return None
+
+    has_buckets = details.get("has_buckets")
+    if not isinstance(has_buckets, dict):
+        return None
+
+    value = has_buckets.get(requested_time_band)
+    if isinstance(value, bool):
+        return value
+    return None
 
 
 def _mark_selected(scores: list[dict], winner_id: int | None) -> list[dict]:

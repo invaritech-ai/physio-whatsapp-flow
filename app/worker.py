@@ -25,12 +25,18 @@ celery_app.conf.update(
         "tasks.generate_invoice_pdf": {"queue": "documents"},
         "tasks.process_calendly_webhook_event": {"queue": "integrations"},
         "tasks.sync_therapist_event_types": {"queue": "integrations"},
+        "tasks.sync_therapist_availability": {"queue": "integrations"},
         "tasks.send_booking_link_followup": {"queue": "notifications"},
     },
     beat_schedule={
         "sync-therapist-event-types": {
             "task": "tasks.sync_therapist_event_types",
             "schedule": settings.celery_sync_interval_seconds,
+            "options": {"queue": "integrations"},
+        },
+        "sync-therapist-availability": {
+            "task": "tasks.sync_therapist_availability",
+            "schedule": settings.celery_availability_sync_interval_seconds,
             "options": {"queue": "integrations"},
         },
     },
