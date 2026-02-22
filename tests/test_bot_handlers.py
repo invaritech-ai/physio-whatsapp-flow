@@ -24,14 +24,14 @@ class TestHandleIdle:
     """Tests for handle_idle — processes main menu numbered choices."""
 
     def test_new_client_valid_name_saves_and_proceeds(self, db_session):
-        """New client input is treated as name — valid name proceeds to duration."""
+        """New client input is treated as name — valid name proceeds to booking path."""
         client = Client(phone_e164="+85212345678", conversation_state=states.IDLE)
         db_session.add(client)
         db_session.commit()
 
         next_state, response = handle_idle(client, "john smith", db_session)
 
-        assert next_state == states.AWAITING_DURATION
+        assert next_state == states.AWAITING_BOOKING_PATH
         assert client.name == "John Smith"
 
     def test_new_client_invalid_name_stays_for_name(self, db_session):
@@ -60,8 +60,8 @@ class TestHandleIdle:
         assert next_state == states.AWAITING_DURATION
         assert "John" in response
 
-    def test_returning_client_choice_2_reschedules(self, db_session):
-        """Returning client (no preferred therapist) choice 2 shows reschedule."""
+    def test_returning_client_choice_2_opens_by_name_flow(self, db_session, sample_therapist):
+        """Returning client (no preferred therapist) choice 2 opens therapist-pick flow."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -72,8 +72,8 @@ class TestHandleIdle:
 
         next_state, response = handle_idle(client, "2", db_session)
 
-        assert next_state == states.IDLE
-        assert "appointment" in response.lower()
+        assert next_state == states.AWAITING_THERAPIST_PICK
+        assert sample_therapist.display_name in response
 
     def test_returning_client_invalid_choice_reshows_menu(self, db_session):
         """Returning client with invalid choice re-shows main menu."""
@@ -131,10 +131,10 @@ class TestHandleIdle:
         conv_data = json.loads(client.conversation_data)
         assert conv_data["exclude_therapist_id"] == sample_therapist.id
 
-    def test_preferred_therapist_choice_3_reschedules(
+    def test_preferred_therapist_choice_3_opens_by_name(
         self, db_session, sample_therapist
     ):
-        """Client with preferred therapist choice 3 shows reschedule."""
+        """Client with preferred therapist choice 3 opens by-name flow."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -146,8 +146,8 @@ class TestHandleIdle:
 
         next_state, response = handle_idle(client, "3", db_session)
 
-        assert next_state == states.IDLE
-        assert "appointment" in response.lower()
+        assert next_state == states.AWAITING_THERAPIST_PICK
+        assert sample_therapist.display_name in response
 
     def test_preferred_therapist_invalid_choice_reshows_menu(
         self, db_session, sample_therapist
@@ -167,12 +167,30 @@ class TestHandleIdle:
         assert next_state == states.IDLE
         assert sample_therapist.display_name in response
 
+    def test_preferred_therapist_choice_4_reschedules(
+        self, db_session, sample_therapist
+    ):
+        """Client with preferred therapist choice 4 shows reschedule."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.IDLE,
+            preferred_therapist_id=sample_therapist.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "4", db_session)
+
+        assert next_state == states.IDLE
+        assert "appointment" in response.lower()
+
 
 class TestHandleAwaitingName:
     """Tests for handle_awaiting_name function."""
 
     def test_valid_name_saves_and_proceeds(self, db_session):
-        """Valid name should be saved and proceed to duration."""
+        """Valid name should be saved and proceed to booking path."""
         client = Client(
             phone_e164="+85212345678", conversation_state=states.AWAITING_NAME
         )
@@ -181,7 +199,7 @@ class TestHandleAwaitingName:
 
         next_state, response = handle_awaiting_name(client, "john smith", db_session)
 
-        assert next_state == states.AWAITING_DURATION
+        assert next_state == states.AWAITING_BOOKING_PATH
         assert client.name == "John Smith"  # Should be title-cased
         assert "John Smith" in response
 
@@ -197,7 +215,7 @@ class TestHandleAwaitingName:
             client, "I am Avi. Nice to meet you", db_session
         )
 
-        assert next_state == states.AWAITING_DURATION
+        assert next_state == states.AWAITING_BOOKING_PATH
         assert client.name == "Avi"
         assert "Avi" in response
 
@@ -212,7 +230,7 @@ class TestHandleAwaitingName:
         next_state, response = handle_awaiting_name(client, "j", db_session)
 
         assert next_state == states.AWAITING_NAME
-        assert "valid name" in response.lower()
+        assert "valid full name" in response.lower()
         assert client.name is None
 
     def test_numeric_name_rejects(self, db_session):
@@ -284,25 +302,7 @@ class TestHandleAwaitingDuration:
         next_state, response = handle_awaiting_duration(client, "1,3", db_session)
 
         assert next_state == states.AWAITING_DURATION
-        assert "1" in response and "2" in response and "3" in response
-
-    def test_valid_duration_choice_3_saves_60min(
-        self, db_session, sample_specialties
-    ):
-        """Choice 3 should save 60 minutes."""
-        client = Client(
-            phone_e164="+85212345678",
-            name="John",
-            conversation_state=states.AWAITING_DURATION,
-        )
-        db_session.add(client)
-        db_session.commit()
-
-        next_state, response = handle_awaiting_duration(client, "3", db_session)
-
-        assert next_state == states.AWAITING_SPECIALTY
-        conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("duration") == 60
+        assert "1" in response and "2" in response
 
     def test_invalid_duration_choice_rejects(self, db_session):
         """Invalid choice should be rejected."""
@@ -317,7 +317,7 @@ class TestHandleAwaitingDuration:
         next_state, response = handle_awaiting_duration(client, "4", db_session)
 
         assert next_state == states.AWAITING_DURATION
-        assert "1" in response and "2" in response and "3" in response
+        assert "1" in response and "2" in response
 
 
 class TestHandleAwaitingSpecialty:
@@ -377,8 +377,8 @@ class TestHandleAwaitingSpecialty:
 class TestHandleAwaitingTimeBand:
     """Tests for handle_awaiting_time_band function."""
 
-    def test_choice_1_saves_morning(self, db_session):
-        """Choice 1 should save morning time band."""
+    def test_choice_1_saves_weekday_day(self, db_session, sample_therapist):
+        """Choice 1 should save weekday-day time band."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -390,12 +390,12 @@ class TestHandleAwaitingTimeBand:
 
         next_state, response = handle_awaiting_time_band(client, "1", db_session)
 
-        assert next_state == states.AWAITING_DAYS
+        assert next_state == states.AWAITING_MATCH_CONFIRM
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("time_band") == states.TIME_BAND_MORNING
+        assert conv_data.get("time_band") == states.TIME_BAND_WEEKDAY_DAY
 
-    def test_choice_2_saves_afternoon(self, db_session):
-        """Choice 2 should save afternoon time band."""
+    def test_choice_2_saves_weekday_evening(self, db_session, sample_therapist):
+        """Choice 2 should save weekday-evening time band."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -407,12 +407,12 @@ class TestHandleAwaitingTimeBand:
 
         next_state, response = handle_awaiting_time_band(client, "2", db_session)
 
-        assert next_state == states.AWAITING_DAYS
+        assert next_state == states.AWAITING_MATCH_CONFIRM
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("time_band") == states.TIME_BAND_AFTERNOON
+        assert conv_data.get("time_band") == states.TIME_BAND_WEEKDAY_EVENING
 
-    def test_choice_3_saves_evening(self, db_session):
-        """Choice 3 should save evening time band."""
+    def test_choice_3_saves_weekend(self, db_session, sample_therapist):
+        """Choice 3 should save weekend time band."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -424,9 +424,9 @@ class TestHandleAwaitingTimeBand:
 
         next_state, response = handle_awaiting_time_band(client, "3", db_session)
 
-        assert next_state == states.AWAITING_DAYS
+        assert next_state == states.AWAITING_MATCH_CONFIRM
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("time_band") == states.TIME_BAND_EVENING
+        assert conv_data.get("time_band") == states.TIME_BAND_WEEKEND
 
 
 class TestHandleAwaitingTimeBandInvalid:
@@ -507,7 +507,7 @@ class TestHandleAwaitingDays:
             conversation_state=states.AWAITING_DAYS,
         )
         update_conversation_data(
-            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_MORNING
+            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_WEEKDAY_DAY
         )
         db_session.add(client)
         db_session.commit()
@@ -527,7 +527,7 @@ class TestHandleAwaitingDays:
             conversation_state=states.AWAITING_DAYS,
         )
         update_conversation_data(
-            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_MORNING
+            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_WEEKDAY_DAY
         )
         db_session.add(client)
         db_session.commit()
@@ -598,7 +598,7 @@ class TestHandleAwaitingMatchConfirm:
 
         next_state, response = handle_awaiting_match_confirm(client, "2", db_session)
 
-        assert next_state == states.AWAITING_DURATION
+        assert next_state == states.AWAITING_BOOKING_PATH
         assert client.conversation_data is None  # Reset
 
 
@@ -716,7 +716,7 @@ class TestCheckGlobalKeywords:
 
         assert result is not None
         next_state, response = result
-        assert next_state == states.AWAITING_DURATION
+        assert next_state == states.AWAITING_BOOKING_PATH
         assert "John" in response
 
     def test_book_keyword_without_name_asks_for_name(self, db_session):
@@ -839,8 +839,7 @@ class TestNoSpecialtiesAvailable:
 
         next_state, response = handle_awaiting_duration(client, "1", db_session)
 
-        assert next_state == states.IDLE
-        assert "wrong" in response.lower() or "error" in response.lower()
+        assert next_state == states.AWAITING_TIME_BAND
 
     def test_specialty_handler_resets_when_no_specialties(self, db_session):
         """Specialty handler should reset to IDLE when no specialties exist."""
@@ -855,8 +854,7 @@ class TestNoSpecialtiesAvailable:
 
         next_state, response = handle_awaiting_specialty(client, "1", db_session)
 
-        assert next_state == states.IDLE
-        assert "wrong" in response.lower() or "error" in response.lower()
+        assert next_state == states.AWAITING_TIME_BAND
 
 
 class TestNoTherapistMatch:
@@ -871,7 +869,7 @@ class TestNoTherapistMatch:
             conversation_state=states.AWAITING_DAYS,
         )
         update_conversation_data(
-            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_MORNING
+            client, duration=30, specialty_id=1, time_band=states.TIME_BAND_WEEKDAY_DAY
         )
         db_session.add(client)
         db_session.commit()

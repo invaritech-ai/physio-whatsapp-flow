@@ -4,6 +4,7 @@ set -euo pipefail
 # Unified local dev launcher:
 # - FastAPI API server (uvicorn via uv)
 # - Celery worker (via uv)
+# - Celery beat scheduler (via uv)
 # - Optional local Redis process
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,8 +16,10 @@ API_RELOAD="${API_RELOAD:-1}"
 
 CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-1}"
+CELERY_BEAT_LOGLEVEL="${CELERY_BEAT_LOGLEVEL:-info}"
 
 START_REDIS="${START_REDIS:-0}" # set to 1 to auto-start redis-server
+START_BEAT="${START_BEAT:-1}"   # set to 0 to disable celery beat
 
 PIDS=()
 NAMES=()
@@ -29,6 +32,7 @@ Starts API + Celery worker in one terminal.
 
 Options:
   --with-redis        Start local redis-server in this script
+  --no-beat           Disable celery beat scheduler process
   --no-reload         Disable uvicorn --reload
   --host <host>       API host (default: 0.0.0.0)
   --port <port>       API port (default: 8000)
@@ -36,8 +40,8 @@ Options:
 
 Environment overrides:
   API_HOST, API_PORT, API_RELOAD
-  CELERY_LOGLEVEL, CELERY_CONCURRENCY
-  START_REDIS
+  CELERY_LOGLEVEL, CELERY_CONCURRENCY, CELERY_BEAT_LOGLEVEL
+  START_REDIS, START_BEAT
 USAGE
 }
 
@@ -49,6 +53,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-reload)
       API_RELOAD=0
+      shift
+      ;;
+    --no-beat)
+      START_BEAT=0
       shift
       ;;
     --host)
@@ -139,6 +147,9 @@ if [[ "$START_REDIS" == "1" ]]; then
 fi
 
 start_bg "celery-worker" uv run celery -A app.worker:celery_app worker --loglevel="$CELERY_LOGLEVEL" --concurrency="$CELERY_CONCURRENCY"
+if [[ "$START_BEAT" == "1" ]]; then
+  start_bg "celery-beat" uv run celery -A app.worker:celery_app beat --loglevel="$CELERY_BEAT_LOGLEVEL"
+fi
 
 UVICORN_CMD=(uv run uvicorn app.main:app --host "$API_HOST" --port "$API_PORT")
 if [[ "$API_RELOAD" == "1" ]]; then

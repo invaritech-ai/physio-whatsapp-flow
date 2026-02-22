@@ -33,10 +33,13 @@ This application is a WhatsApp Bot designed to streamline the physiotherapy appo
    redis-server
 
    # Terminal 2: Celery
-   celery -A app.celery.worker.celery_app worker --loglevel=info
+   uv run celery -A app.worker:celery_app worker --loglevel=info
 
-   # Terminal 3: FastAPI
-   uvicorn app.main:app --reload
+   # Terminal 3: Celery Beat (periodic sync jobs)
+   uv run celery -A app.worker:celery_app beat --loglevel=info
+
+   # Terminal 4: FastAPI
+   uv run uvicorn app.main:app --reload
    ```
 
 5. **Verify**
@@ -176,15 +179,20 @@ DEBUG_MODE=false
 
 4.  **Start Celery Worker**:
     ```bash
-    celery -A app.worker:celery_app worker --loglevel=info
+    uv run celery -A app.worker:celery_app worker --loglevel=info
     ```
 
-5.  **Run the Application**:
+5.  **Start Celery Beat**:
     ```bash
-    uvicorn app.main:app --reload
+    uv run celery -A app.worker:celery_app beat --loglevel=info
     ```
 
-6.  **Expose Local Server (for Twilio Webhook)**:
+6.  **Run the Application**:
+    ```bash
+    uv run uvicorn app.main:app --reload
+    ```
+
+7.  **Expose Local Server (for Twilio Webhook)**:
     ```bash
     ngrok http 8000
     ```

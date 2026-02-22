@@ -1,7 +1,6 @@
 """Menu text builders for WhatsApp bot IVR."""
 
 from app.models import TherapistSpecialty
-from app.services.bot.states import DAYS_MAP
 
 
 def build_main_menu(client_name: str | None, therapist_name: str | None) -> str:
@@ -11,28 +10,43 @@ def build_main_menu(client_name: str | None, therapist_name: str | None) -> str:
             f"Welcome back, {client_name}! 👋\n\n"
             "How can we help you today?\n\n"
             f"1️⃣ Book again with {therapist_name}\n"
-            "2️⃣ Book with a different therapist\n"
-            "3️⃣ Reschedule or cancel\n\n"
+            "2️⃣ Smart match (different therapist)\n"
+            "3️⃣ Book therapist by name\n"
+            "4️⃣ Reschedule or cancel\n\n"
             "Reply with a number, or type 'book' anytime."
         )
     elif client_name:
         return (
             f"Welcome back, {client_name}! 👋\n\n"
             "How can we help you today?\n\n"
-            "1️⃣ Book a session\n"
-            "2️⃣ Reschedule or cancel\n\n"
+            "1️⃣ Smart match (recommended)\n"
+            "2️⃣ Book therapist by name\n"
+            "3️⃣ Reschedule or cancel\n\n"
             "Reply with a number, or type 'book' anytime."
         )
     else:
-        return (
-            "Welcome to Movement Clinic! 👋\n\n"
-            "To get started, please tell us your name."
-        )
+        return "Welcome to Movement Clinic! 👋\n\nTo get started, please tell us your full official name as per HKID (for receipts)."
 
 
 def build_welcome_menu() -> str:
     """Build welcome message asking for user's name."""
-    return "Welcome to Movement Clinic! 👋\n\nTo get started, please tell us your name."
+    return (
+        "Welcome to Movement Clinic! 👋\n\n"
+        "Please tell us your full official name as per HKID "
+        "(this is used for receipt generation)."
+    )
+
+
+def build_booking_path_menu(name: str) -> str:
+    """Build booking-path menu for clients without a preferred therapist shortcut."""
+    return (
+        f"Thanks, {name}! 😊\n\n"
+        "How would you like to book?\n\n"
+        "1️⃣ Smart match (recommended)\n"
+        "2️⃣ Book therapist by name\n"
+        "3️⃣ Reschedule or cancel\n\n"
+        "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
+    )
 
 
 def build_duration_menu(name: str) -> str:
@@ -42,8 +56,7 @@ def build_duration_menu(name: str) -> str:
         "How long would you like your session to be?\n\n"
         "1️⃣ 30 minutes\n"
         "2️⃣ 45 minutes\n"
-        "3️⃣ 60 minutes\n\n"
-        "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
+        "Please reply with 1 or 2. `Menu` to go back to main menu."
     )
 
 
@@ -60,7 +73,12 @@ def build_specialty_menu(specialties: list[TherapistSpecialty]) -> str:
         if specialty.description:
             lines.append(f"   {specialty.description}")
 
-    lines.append(f"\nPlease reply with a number (1-{len(specialties)}). `Menu` to go back to main menu.")
+    no_pref_idx = len(specialties) + 1
+    lines.append(f"{_get_specialty_emoji(no_pref_idx)} No special request")
+
+    lines.append(
+        f"\nPlease reply with a number (1-{no_pref_idx}). `Menu` to go back to main menu."
+    )
 
     return "\n".join(lines)
 
@@ -69,27 +87,10 @@ def build_time_band_menu() -> str:
     """Build menu for time preference selection."""
     return (
         "When would you prefer your appointment?\n\n"
-        "1️⃣ Morning (8:00 AM - 11:00 AM)\n"
-        "2️⃣ Afternoon (11:00 AM - 4:00 PM)\n"
-        "3️⃣ Evening (4:00 PM - 8:00 PM)\n\n"
+        "1️⃣ Weekday day session (9:00 AM - 5:00 PM)\n"
+        "2️⃣ Weekday evening session (5:00 PM onwards)\n"
+        "3️⃣ Weekend session\n\n"
         "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
-    )
-
-
-def build_days_menu() -> str:
-    """Build menu for day of week selection."""
-    return (
-        "Which days work best for you?\n\n"
-        "1️⃣ Monday\n"
-        "2️⃣ Tuesday\n"
-        "3️⃣ Wednesday\n"
-        "4️⃣ Thursday\n"
-        "5️⃣ Friday\n"
-        "6️⃣ Saturday\n"
-        "7️⃣ Sunday\n\n"
-        "You can select multiple days by separating them with commas.\n"
-        "Example: 1,3,5 for Monday, Wednesday, Friday\n\n"
-        "`Menu` to go back to main menu."
     )
 
 
@@ -107,30 +108,25 @@ def build_rebook_menu(client_name: str, therapist_name: str) -> str:
 def build_match_confirmation_menu(
     therapist_name: str,
     duration: int,
-    specialty: str,
+    specialty: str | None,
     time_band: str,
-    days: list[int],
     fallback_level: int = 0,
 ) -> str:
     """Build menu showing matched therapist and asking for confirmation."""
-    # Build days string
-    day_names = [DAYS_MAP[d] for d in sorted(days)]
-    days_str = ", ".join(day_names)
-
     # Build time band string
     time_map = {
-        "morning": "Morning (8-11 AM)",
-        "afternoon": "Afternoon (11 AM-4 PM)",
-        "evening": "Evening (4-8 PM)",
+        "weekday_day": "Weekday day (9 AM-5 PM)",
+        "weekday_evening": "Weekday evening (5 PM onwards)",
+        "weekend": "Weekend",
     }
     time_str = time_map.get(time_band, time_band)
+    specialty_str = specialty or "No special request"
 
     message = f"Great! We've found a therapist for you:\n\n"
     message += f"👨‍⚕️ Therapist: {therapist_name}\n"
-    message += f"📋 Specialty: {specialty}\n"
+    message += f"📋 Specialty: {specialty_str}\n"
     message += f"⏱️ Duration: {duration} minutes\n"
     message += f"🕐 Preferred time: {time_str}\n"
-    message += f"📅 Preferred days: {days_str}\n"
 
     if fallback_level > 0:
         message += (
@@ -181,6 +177,21 @@ def build_booking_complete_message(calendly_link: str, therapist_name: str) -> s
         f"You'll receive a confirmation once your appointment is booked.\n\n"
         f"Need help? Send 'menu' for options or 'reschedule' to manage appointments."
     )
+
+
+def build_therapist_pick_menu(therapists: list[tuple[int, str]]) -> str:
+    """Build deterministic therapist selection menu for book-by-name flow."""
+    if not therapists:
+        return "Sorry, there are no active therapists available right now."
+
+    lines = ["Choose your therapist:\n"]
+    for idx, (_, display_name) in enumerate(therapists, 1):
+        lines.append(f"{_get_specialty_emoji(idx)} {display_name}")
+
+    lines.append(
+        f"\nPlease reply with a number (1-{len(therapists)}). `Menu` to go back to main menu."
+    )
+    return "\n".join(lines)
 
 
 def build_error_message() -> str:

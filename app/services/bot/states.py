@@ -3,24 +3,16 @@
 # State constants
 IDLE = "IDLE"
 AWAITING_NAME = "AWAITING_NAME"
+AWAITING_BOOKING_PATH = "AWAITING_BOOKING_PATH"
 AWAITING_DURATION = "AWAITING_DURATION"
 AWAITING_SPECIALTY = "AWAITING_SPECIALTY"
 AWAITING_TIME_BAND = "AWAITING_TIME_BAND"
-AWAITING_DAYS = "AWAITING_DAYS"
+AWAITING_THERAPIST_PICK = "AWAITING_THERAPIST_PICK"
 AWAITING_MATCH_CONFIRM = "AWAITING_MATCH_CONFIRM"
+# Legacy state kept for in-flight conversations; new flow no longer prompts for days.
+AWAITING_DAYS = "AWAITING_DAYS"
 
 # Time band constants
-TIME_BAND_MORNING = "morning"  # 8-11
-TIME_BAND_AFTERNOON = "afternoon"  # 11-16
-TIME_BAND_EVENING = "evening"  # 16-20
-
-# Day mapping (for menu display)
-DAYS_MAP = {
-    1: "Monday",
-    2: "Tuesday",
-    3: "Wednesday",
-    4: "Thursday",
-    5: "Friday",
-    6: "Saturday",
-    7: "Sunday",
-}
+TIME_BAND_WEEKDAY_DAY = "weekday_day"  # 09:00-17:00
+TIME_BAND_WEEKDAY_EVENING = "weekday_evening"  # 17:00+
+TIME_BAND_WEEKEND = "weekend"  # Saturday/Sunday

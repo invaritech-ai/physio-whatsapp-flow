@@ -1,12 +1,18 @@
 import requests
 import os
 import time
+import pytest
 from dotenv import load_dotenv
+
+# Manual integration scenarios only (run this file directly when needed).
+pytestmark = pytest.mark.skip(
+    reason="Manual integration scenarios; excluded from automated pytest runs."
+)
 
 # Load env vars to get the special phone numbers
 load_dotenv()
 
-BASE_URL = "http://localhost:8000/whatsapp"
+BASE_URL = "http://localhost:8000/api/v1/whatsapp"
 
 # Default mock numbers if env vars are missing
 ADMIN_NUMBER = os.getenv("ADMIN_PHONE_NUMBER", "whatsapp:+1234567890")

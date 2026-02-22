@@ -1,8 +1,11 @@
 """Admin endpoints for invoice management."""
 
 import re
+import logging
 from datetime import datetime, timezone
+from typing import cast
 
+from celery import Task
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
@@ -13,6 +16,7 @@ from app.api.v1.schemas.invoice import (
     InvoiceListItem,
 )
 from app.core.auth import get_current_admin
+from app.core.config import settings
 from app.db.session import get_session
 from app.models import (
     Client,
@@ -28,6 +32,7 @@ from app.services.invoice_generation import generate_and_store_invoice_pdf_url
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
+logger = logging.getLogger(__name__)
 _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
 _SERVICE_TYPE_VALUES = {"standard", "supervised_physio", "other"}
 
@@ -128,6 +133,58 @@ def _to_invoice_detail(invoice: Receipt) -> InvoiceDetailResponse:
         **list_item.model_dump(),
         issued_by_user_id=invoice.issued_by_user_id,
     )
+
+
+def _generate_invoice_pdf_url(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    client_address: str | None,
+    client_phone: str,
+    amount_cents: int,
+    currency: str,
+    description: str,
+    diagnosis: str | None,
+    session_start_at: datetime | None,
+    therapist_name: str | None,
+    therapist_license_number: str | None,
+    payment_mode: str | None,
+    special_notes: str | None,
+    issued_at: datetime | None,
+) -> str:
+    kwargs = {
+        "invoice_id": invoice_id,
+        "client_name": client_name,
+        "client_address": client_address,
+        "client_phone": client_phone,
+        "amount_cents": amount_cents,
+        "currency": currency,
+        "description": description,
+        "diagnosis": diagnosis,
+        "session_start_at": session_start_at,
+        "therapist_name": therapist_name,
+        "therapist_license_number": therapist_license_number,
+        "payment_mode": payment_mode,
+        "special_notes": special_notes,
+        "issued_at": issued_at,
+    }
+    if not settings.celery_invoice_pdf_task_enabled:
+        return generate_and_store_invoice_pdf_url(**kwargs)
+
+    from app.tasks.invoice_documents import generate_invoice_pdf
+
+    try:
+        task = cast(Task, generate_invoice_pdf).delay(**kwargs)
+        result = task.get(timeout=settings.celery_invoice_task_timeout_seconds)
+        if isinstance(result, str) and result.strip():
+            return result
+        raise RuntimeError("invoice_pdf_url_empty")
+    except Exception:
+        logger.exception(
+            "celery invoice generation failed invoice_id=%s; falling back to inline",
+            invoice_id,
+        )
+        return generate_and_store_invoice_pdf_url(**kwargs)
 
 
 @router.get("", response_model=list[InvoiceListItem])
@@ -290,7 +347,7 @@ def generate_invoice(
     db.flush()
 
     try:
-        invoice.pdf_url = generate_and_store_invoice_pdf_url(
+        invoice.pdf_url = _generate_invoice_pdf_url(
             invoice_id=invoice.id,
             client_name=client.name,
             client_address=client.address,

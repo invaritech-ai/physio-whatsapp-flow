@@ -1,18 +1,24 @@
 """Webhook endpoints for external service integrations."""
 
+import json
 import hashlib
 import hmac
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any, cast
 
+from celery import Task
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlmodel import Session, select
 
 from app.core.encryption import decrypt_string
+from app.core.config import settings
 from app.db.session import get_session
-from app.models import Client, Session as TherapySession, Therapist, TherapistEventType
+from app.models import AuthEvent, Client, Session as TherapySession, Therapist, TherapistEventType
 from app.services.calendly import get_scheduled_event_with_pat
+from app.services.bot.helpers import send_and_log
+from app.services.timezone_utils import to_preferred_timezone
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -125,17 +131,111 @@ async def calendly_webhook(
 
     logger.info(f"Received Calendly webhook: {event_type}")
 
+    if settings.celery_webhook_async_enabled:
+        from app.tasks.calendly import process_calendly_webhook_event
+
+        task = cast(Task, process_calendly_webhook_event).delay(
+            event_type=event_type,
+            payload=payload,
+        )
+        return {"status": "queued", "event": event_type, "task_id": task.id}
+
+    return await process_calendly_event(db=db, event_type=event_type, payload=payload)
+
+
+async def process_calendly_event(
+    *,
+    db: Session,
+    event_type: str | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Process verified Calendly webhook payload by event type."""
     if event_type == "invitee.created":
         return await handle_invitee_created(db, payload)
-    elif event_type == "invitee.rescheduled":
+    if event_type == "invitee.rescheduled":
         # Kept as a compatibility fallback. Current subscription setup relies on
         # invitee.created + invitee.canceled for reschedule flows.
         return await handle_invitee_rescheduled(db, payload)
-    elif event_type == "invitee.canceled":
+    if event_type == "invitee.canceled":
         return await handle_invitee_canceled(db, payload)
-    else:
-        logger.warning(f"Unhandled Calendly event type: {event_type}")
-        return {"status": "ignored", "event": event_type}
+    logger.warning("Unhandled Calendly event type: %s", event_type)
+    return {"status": "ignored", "event": event_type}
+
+
+def _format_local_timestamp(value: datetime, preferred_timezone: str | None) -> str:
+    local_value = to_preferred_timezone(value, preferred_timezone)
+    # Keep formatting portable by avoiding %-d / %-I.
+    date_part = local_value.strftime("%a, %b %d, %Y")
+    time_part = local_value.strftime("%I:%M %p").lstrip("0")
+    return f"{date_part} {time_part}"
+
+
+def _notify_booking_confirmed(
+    *,
+    db: Session,
+    session: TherapySession,
+    client: Client,
+    therapist: Therapist,
+) -> None:
+    """
+    Send booking-confirmed notifications.
+
+    - Client: WhatsApp confirmation message (idempotent via session.reminder_sent).
+    - Therapist: in-app notification row (idempotent via session.therapist_notified).
+    """
+    dirty = False
+    local_start_text = _format_local_timestamp(session.start_time, therapist.preferred_timezone)
+    therapist_tz = therapist.preferred_timezone or settings.invoice_timezone or "UTC"
+
+    if not session.reminder_sent:
+        try:
+            client_name = client.name or "there"
+            message = (
+                f"Booking confirmed, {client_name}! ✅\n\n"
+                f"Therapist: {therapist.display_name}\n"
+                f"Time: {local_start_text} ({therapist_tz})\n\n"
+                "If you need to reschedule or cancel, reply with 'reschedule'."
+            )
+            send_and_log(
+                db=db,
+                phone_e164=client.phone_e164,
+                body=message,
+                client_id=client.id,
+            )
+            session.reminder_sent = True
+            dirty = True
+        except Exception:
+            logger.exception(
+                "Failed to send client booking confirmation session_id=%s client_id=%s",
+                session.id,
+                client.id,
+            )
+
+    if not session.therapist_notified:
+        details = {
+            "session_id": session.id,
+            "client_id": client.id,
+            "client_name": client.name,
+            "therapist_name": therapist.display_name,
+            "start_time_utc": session.start_time.isoformat(),
+            "start_time_local": local_start_text,
+            "timezone": therapist_tz,
+            "duration_minutes": session.duration_minutes,
+        }
+        event = AuthEvent(
+            event_type="therapist.notification.booking_confirmed",
+            user_id=therapist.user_id,
+            reason="booking_confirmed",
+            details_json=json.dumps(details, default=str),
+        )
+        db.add(event)
+        session.therapist_notified = True
+        dirty = True
+
+    if dirty:
+        session.updated_at = datetime.now(timezone.utc)
+        db.add(session)
+        db.commit()
 
 
 def _extract_uri(value: object) -> str | None:
@@ -459,6 +559,7 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             )
 
         if session:
+            previous_event_uri = session.calendly_event_uri
             session.client_id = client.id
             session.therapist_id = therapist.id
             session.start_time = start_time
@@ -469,6 +570,10 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 session.calendly_invitee_uri = invitee_uri
             session.source = "calendly"
             session.status = "scheduled"
+            if previous_event_uri != event_uri:
+                # Re-notify on a newly confirmed event after reschedule/rebook changes.
+                session.reminder_sent = False
+                session.therapist_notified = False
             session.updated_at = datetime.now(timezone.utc)
             db.add(session)
             db.commit()
@@ -499,6 +604,14 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 f"Created session {session.id} for client {client.id} "
                 f"with therapist {therapist.id} (duration: {session.duration_minutes}min)"
             )
+
+        # Best-effort notifications (idempotent).
+        _notify_booking_confirmed(
+            db=db,
+            session=session,
+            client=client,
+            therapist=therapist,
+        )
 
         return {
             "status": "success",

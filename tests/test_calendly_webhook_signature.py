@@ -102,3 +102,40 @@ def test_calendly_webhook_rejects_when_db_signing_key_missing(client):
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid signature"
+
+
+def test_calendly_webhook_queues_event_when_async_enabled(client):
+    data = {
+        "event": "invitee.unknown",
+        "payload": {
+            "event_memberships": [
+                {"user": "https://api.calendly.com/users/ASYNC"}
+            ]
+        },
+    }
+    payload = json.dumps(data).encode()
+
+    class _FakeAsyncResult:
+        id = "task-calendly-1"
+
+    with (
+        patch.object(webhooks.settings, "celery_webhook_async_enabled", True),
+        patch.object(webhooks, "_resolve_calendly_signing_secrets", return_value=["secret"]),
+        patch.object(webhooks, "verify_calendly_signature", return_value=True),
+        patch(
+            "app.tasks.calendly.process_calendly_webhook_event.delay",
+            return_value=_FakeAsyncResult(),
+        ),
+    ):
+        response = client.post(
+            "/api/v1/webhooks/calendly",
+            headers=_auth_headers("t=1700000000,v1=fake"),
+            content=payload,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "queued",
+        "event": "invitee.unknown",
+        "task_id": "task-calendly-1",
+    }

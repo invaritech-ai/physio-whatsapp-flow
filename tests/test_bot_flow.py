@@ -36,42 +36,42 @@ class TestNewClientFlow:
         assert client is not None
         assert client.conversation_state == states.IDLE
 
-        # Message 2: Provide name → proceeds to duration
+        # Message 2: Provide name → proceeds to booking-path selection
         form_data["Body"] = "John Smith"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_DURATION
+        assert result["next_state"] == states.AWAITING_BOOKING_PATH
         db_session.refresh(client)
         assert client.name == "John Smith"
 
-        # Message 3: Select duration (30 min)
+        # Message 3: Choose smart match path
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM003"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_SPECIALTY
+        assert result["next_state"] == states.AWAITING_DURATION
 
-        # Message 4: Select specialty (first one)
+        # Message 4: Select duration (30 min)
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM004"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_TIME_BAND
+        assert result["next_state"] == states.AWAITING_SPECIALTY
 
-        # Message 5: Select time band (morning)
+        # Message 5: Select specialty (first one)
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM005"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_DAYS
+        assert result["next_state"] == states.AWAITING_TIME_BAND
 
-        # Message 6: Select days (Monday, Wednesday, Friday)
-        form_data["Body"] = "1,3,5"
+        # Message 6: Select time band
+        form_data["Body"] = "1"
         form_data["MessageSid"] = "SM006"
         result = process_message(form_data, db_session)
 
@@ -118,9 +118,14 @@ class TestNewClientFlow:
         form_data["MessageSid"] = "SM002"
         process_message(form_data, db_session)
 
+        # Choose smart-match path first
+        form_data["Body"] = "1"
+        form_data["MessageSid"] = "SM003"
+        process_message(form_data, db_session)
+
         # Invalid duration choice
         form_data["Body"] = "99"
-        form_data["MessageSid"] = "SM003"
+        form_data["MessageSid"] = "SM004"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
@@ -128,7 +133,7 @@ class TestNewClientFlow:
 
         # Valid duration choice (should work)
         form_data["Body"] = "2"
-        form_data["MessageSid"] = "SM004"
+        form_data["MessageSid"] = "SM005"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
@@ -383,7 +388,7 @@ class TestGlobalKeywordMidFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_DURATION
+        assert result["next_state"] == states.AWAITING_BOOKING_PATH
 
     def test_reschedule_keyword_from_mid_flow(
         self, db_session, mock_send_whatsapp
@@ -436,7 +441,7 @@ class TestStartOverFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_DURATION
+        assert result["next_state"] == states.AWAITING_BOOKING_PATH
 
         # Verify conversation data reset
         db_session.refresh(client)
@@ -609,26 +614,8 @@ class TestMediaAndEmptyMessages:
         result = process_message(form_data, db_session)
         assert result["next_state"] == states.AWAITING_DURATION
 
-        # Complete booking flow
-        form_data["Body"] = "1"  # 30 min
-        form_data["MessageSid"] = "SM003"
-        process_message(form_data, db_session)
-
-        form_data["Body"] = "1"  # First specialty (alphabetically)
-        form_data["MessageSid"] = "SM004"
-        process_message(form_data, db_session)
-
-        form_data["Body"] = "1"  # Morning
-        form_data["MessageSid"] = "SM005"
-        process_message(form_data, db_session)
-
-        form_data["Body"] = "1,3,5"  # Mon, Wed, Fri
-        form_data["MessageSid"] = "SM006"
-        result = process_message(form_data, db_session)
-        assert result["next_state"] == states.AWAITING_MATCH_CONFIRM
-
-        # Verify matched therapist is therapist2 (preferred), not therapist1 (first active)
+        # Verify preferred therapist has been pinned for direct duration->link path.
         db_session.refresh(client)
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("matched_therapist_id") == therapist2.id
-        assert conv_data.get("matched_therapist_id") != therapist1.id
+        assert conv_data.get("selected_therapist_id") == therapist2.id
+        assert conv_data.get("book_by_name") is True

@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # Celery + Redis
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
+    celery_webhook_async_enabled: bool = False
+    celery_invoice_pdf_task_enabled: bool = False
+    celery_invoice_task_timeout_seconds: int = 60
+    celery_sync_interval_hours: int = 4
+    celery_booking_followup_enabled: bool = False
+    booking_followup_first_delay_seconds: int = 3600
+    booking_followup_second_delay_seconds: int = 21600
 
     @model_validator(mode="after")
     def validate_production_cors_config(self) -> "Settings":

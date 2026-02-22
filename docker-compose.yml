@@ -16,3 +16,11 @@ services:
       INVOICE_LATEX_ENGINE: ${INVOICE_LATEX_ENGINE:-tectonic}
     command: celery -A app.worker:celery_app worker --loglevel=info
     restart: unless-stopped
+
+  beat:
+    build: .
+    env_file: .env
+    environment:
+      INVOICE_LATEX_ENGINE: ${INVOICE_LATEX_ENGINE:-tectonic}
+    command: celery -A app.worker:celery_app beat --loglevel=info
+    restart: unless-stopped
