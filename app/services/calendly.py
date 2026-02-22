@@ -239,3 +239,45 @@ def get_event_types_with_pat(user_uri: str, calendly_pat: str) -> list[dict[str,
         pass
 
     return []
+
+
+def get_event_type_available_times_with_pat(
+    event_type_uri: str,
+    calendly_pat: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> list[dict[str, Any]]:
+    """Fetch available times for a Calendly event type within a future time window.
+
+    Calendly currently limits this API window to 7 days.
+
+    Args:
+        event_type_uri: Full event type URI.
+        calendly_pat: Therapist PAT for scoped API calls.
+        start_time: Inclusive window start (timezone-aware datetime).
+        end_time: Exclusive window end (timezone-aware datetime).
+
+    Returns:
+        List of available-time resources (possibly empty).
+    """
+    url = f"{BASE_URL}/event_type_available_times"
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+    params = {
+        "event_type": event_type_uri,
+        "start_time": start_time.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "end_time": end_time.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+    try:
+        response = requests.get(url, headers=pat_headers, params=params, timeout=20)
+        if response.status_code == 200:
+            data = response.json()
+            collection = data.get("collection", [])
+            return collection if isinstance(collection, list) else []
+    except Exception:
+        pass
+
+    return []
