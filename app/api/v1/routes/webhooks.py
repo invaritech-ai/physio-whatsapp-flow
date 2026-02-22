@@ -235,6 +235,105 @@ def _notify_therapist_session_update(
         db.commit()
 
 
+_CALENDLY_OPERATIONAL_EVENT_MAP = {
+    "invitee.created": (
+        "admin.calendly.queue.invitee.created",
+        "therapist.calendly.feed.created",
+        "created",
+    ),
+    "invitee.canceled": (
+        "admin.calendly.queue.invitee.canceled",
+        "therapist.calendly.feed.canceled",
+        "canceled",
+    ),
+    "invitee.rescheduled": (
+        "admin.calendly.queue.invitee.rescheduled",
+        "therapist.calendly.feed.rescheduled",
+        "rescheduled",
+    ),
+}
+
+
+def _append_calendly_operational_events(
+    *,
+    db: Session,
+    webhook_event_type: str,
+    session: TherapySession,
+    therapist: Therapist,
+    client: Client | None,
+) -> None:
+    """Write admin queue + therapist feed rows for Calendly workflow observability."""
+    mapped = _CALENDLY_OPERATIONAL_EVENT_MAP.get(webhook_event_type)
+    if not mapped:
+        return
+
+    admin_event_type, therapist_event_type, action = mapped
+    reason = f"session:{session.id}:calendly:{action}"
+
+    base_details: dict[str, Any] = {
+        "session_id": session.id,
+        "calendly_event_uri": session.calendly_event_uri,
+        "calendly_invitee_uri": session.calendly_invitee_uri,
+        "client_id": client.id if client else session.client_id,
+        "client_name": client.name if client else None,
+        "therapist_id": therapist.id,
+        "therapist_name": therapist.display_name,
+        "start_time_utc": session.start_time.isoformat(),
+        "end_time_utc": session.end_time.isoformat(),
+        "duration_minutes": session.duration_minutes,
+        "session_status": session.status,
+    }
+
+    wrote_any = False
+
+    existing_admin = db.exec(
+        select(AuthEvent).where(
+            AuthEvent.event_type == admin_event_type,
+            AuthEvent.reason == reason,
+        )
+    ).first()
+    if not existing_admin:
+        admin_details = {
+            **base_details,
+            "queue_status": "new",
+            "queue_updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        db.add(
+            AuthEvent(
+                event_type=admin_event_type,
+                reason=reason,
+                details_json=json.dumps(admin_details, default=str),
+            )
+        )
+        wrote_any = True
+
+    existing_feed = db.exec(
+        select(AuthEvent).where(
+            AuthEvent.event_type == therapist_event_type,
+            AuthEvent.user_id == therapist.user_id,
+            AuthEvent.reason == reason,
+        )
+    ).first()
+    if not existing_feed:
+        therapist_details = {
+            **base_details,
+            "feed_status": "new",
+            "feed_updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        db.add(
+            AuthEvent(
+                event_type=therapist_event_type,
+                user_id=therapist.user_id,
+                reason=reason,
+                details_json=json.dumps(therapist_details, default=str),
+            )
+        )
+        wrote_any = True
+
+    if wrote_any:
+        db.commit()
+
+
 def _notify_booking_confirmed(
     *,
     db: Session,
@@ -677,6 +776,20 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             client=client,
             therapist=therapist,
         )
+        try:
+            _append_calendly_operational_events(
+                db=db,
+                webhook_event_type="invitee.rescheduled" if is_rescheduled else "invitee.created",
+                session=session,
+                therapist=therapist,
+                client=client,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to append Calendly operational events session_id=%s therapist_id=%s",
+                session.id,
+                therapist.id,
+            )
 
         return {
             "status": "success",
@@ -752,6 +865,20 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
             except Exception:
                 logger.exception(
                     "Failed to create therapist cancellation notification session_id=%s therapist_id=%s",
+                    session.id,
+                    therapist.id,
+                )
+            try:
+                _append_calendly_operational_events(
+                    db=db,
+                    webhook_event_type="invitee.canceled",
+                    session=session,
+                    therapist=therapist,
+                    client=client,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to append Calendly cancel operational events session_id=%s therapist_id=%s",
                     session.id,
                     therapist.id,
                 )
@@ -892,6 +1019,20 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
                     existing_new_session.id,
                     therapist.id,
                 )
+            try:
+                _append_calendly_operational_events(
+                    db=db,
+                    webhook_event_type="invitee.rescheduled",
+                    session=existing_new_session,
+                    therapist=therapist,
+                    client=client,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to append Calendly reschedule operational events session_id=%s therapist_id=%s",
+                    existing_new_session.id,
+                    therapist.id,
+                )
 
             logger.info(
                 "Rescheduled session merged: old_session=%s new_session=%s",
@@ -928,6 +1069,20 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
         except Exception:
             logger.exception(
                 "Failed to create therapist reschedule notification session_id=%s therapist_id=%s",
+                session.id,
+                therapist.id,
+            )
+        try:
+            _append_calendly_operational_events(
+                db=db,
+                webhook_event_type="invitee.rescheduled",
+                session=session,
+                therapist=therapist,
+                client=client,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to append Calendly reschedule operational events session_id=%s therapist_id=%s",
                 session.id,
                 therapist.id,
             )

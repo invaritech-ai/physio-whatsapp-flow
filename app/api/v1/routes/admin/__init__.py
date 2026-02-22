@@ -6,6 +6,7 @@ from app.api.v1.routes.admin import (
     access_requests,
     action_center,
     auth_events,
+    calendly_queue,
     clients,
     invoices,
     me,
@@ -24,6 +25,7 @@ router = APIRouter()
 router.include_router(access_requests.router)
 router.include_router(action_center.router)
 router.include_router(auth_events.router)
+router.include_router(calendly_queue.router)
 router.include_router(clients.router)
 router.include_router(invoices.router)
 router.include_router(me.router)
