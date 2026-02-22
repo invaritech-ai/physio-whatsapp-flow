@@ -18,6 +18,7 @@ from app.core.auth import get_current_admin
 from app.db.session import get_session
 from app.models import BillingPlan, Client, ClientPlanAssignment, SessionNote, Therapist, User
 from app.models import Session as TherapySession
+from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/sessions", tags=["Admin - Sessions"])
@@ -43,6 +44,7 @@ def _build_list_item(
     *,
     client_name: str | None,
     therapist_name: str | None,
+    preferred_timezone: str | None,
     plan_map: dict[tuple[int, int], dict[str, object]],
 ) -> AdminSessionListItem:
     expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
@@ -55,8 +57,8 @@ def _build_list_item(
         client_name=client_name,
         therapist_id=row.therapist_id,
         therapist_name=therapist_name,
-        start_time=row.start_time,
-        end_time=row.end_time,
+        start_time=to_preferred_timezone(row.start_time, preferred_timezone),
+        end_time=to_preferred_timezone(row.end_time, preferred_timezone),
         duration_minutes=row.duration_minutes,
         status=row.status,
         source=row.source,
@@ -73,6 +75,7 @@ def _build_detail_response(
     *,
     client_name: str | None,
     therapist_name: str | None,
+    preferred_timezone: str | None,
     plan_map: dict[tuple[int, int], dict[str, object]],
 ) -> AdminSessionDetailResponse:
     expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
@@ -85,8 +88,8 @@ def _build_detail_response(
         client_name=client_name,
         therapist_id=row.therapist_id,
         therapist_name=therapist_name,
-        start_time=row.start_time,
-        end_time=row.end_time,
+        start_time=to_preferred_timezone(row.start_time, preferred_timezone),
+        end_time=to_preferred_timezone(row.end_time, preferred_timezone),
         duration_minutes=row.duration_minutes,
         status=row.status,
         source=row.source,
@@ -97,8 +100,8 @@ def _build_detail_response(
         assigned_plan=assigned_plan,
         calendly_event_uri=row.calendly_event_uri,
         calendly_invitee_uri=row.calendly_invitee_uri,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+        created_at=to_preferred_timezone(row.created_at, preferred_timezone),
+        updated_at=to_preferred_timezone(row.updated_at, preferred_timezone),
     )
 
 
@@ -146,6 +149,8 @@ def list_sessions(
     db: Session = Depends(get_session),
 ):
     _ = admin
+    from_date = normalize_query_datetime(from_date)
+    to_date = normalize_query_datetime(to_date)
     filters = []
     if status:
         filters.append(TherapySession.status == status)
@@ -192,6 +197,7 @@ def list_sessions(
             row,
             client_name=client_map.get(row.client_id).name if client_map.get(row.client_id) else None,
             therapist_name=therapist_map.get(row.therapist_id).display_name if therapist_map.get(row.therapist_id) else None,
+            preferred_timezone=admin.preferred_timezone,
             plan_map=plan_map,
         )
         for row in rows
@@ -220,6 +226,7 @@ def get_session_detail(
         row,
         client_name=client.name if client else None,
         therapist_name=therapist.display_name if therapist else None,
+        preferred_timezone=admin.preferred_timezone,
         plan_map=plan_map,
     )
 
@@ -291,6 +298,7 @@ def update_session(
         row,
         client_name=client.name if client else None,
         therapist_name=therapist.display_name if therapist else None,
+        preferred_timezone=admin.preferred_timezone,
         plan_map=plan_map,
     )
 

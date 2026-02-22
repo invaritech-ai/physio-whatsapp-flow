@@ -8,6 +8,7 @@ from app.api.v1.routes.admin import (
     auth_events,
     clients,
     invoices,
+    me,
     payments,
     plans,
     sessions,
@@ -24,6 +25,7 @@ router.include_router(action_center.router)
 router.include_router(auth_events.router)
 router.include_router(clients.router)
 router.include_router(invoices.router)
+router.include_router(me.router)
 router.include_router(plans.router)
 router.include_router(payments.router)
 router.include_router(sessions.router)

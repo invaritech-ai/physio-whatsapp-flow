@@ -31,6 +31,23 @@ def _create_admin(db_session: Session) -> User:
         display_name="Admin Sessions",
         role="admin",
         is_active=True,
+        preferred_timezone=None,
+    )
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
+    return admin
+
+
+def _create_admin_with_timezone(db_session: Session, preferred_timezone: str) -> User:
+    safe = preferred_timezone.replace("/", "-")
+    admin = User(
+        neon_auth_sub=f"admin-sessions-{safe}-sub",
+        email=f"admin-sessions-{safe}@test.com",
+        display_name="Admin Sessions TZ",
+        role="admin",
+        is_active=True,
+        preferred_timezone=preferred_timezone,
     )
     db_session.add(admin)
     db_session.commit()
@@ -158,6 +175,33 @@ def test_list_admin_sessions_returns_paginated_response(client, db_session: Sess
     filtered_payload = filtered.json()
     assert filtered_payload["total"] == 1
     assert filtered_payload["items"][0]["status"] == "completed"
+
+
+def test_admin_sessions_serialize_in_admin_preferred_timezone(client, db_session: Session):
+    admin = _create_admin_with_timezone(db_session, "Asia/Hong_Kong")
+    therapist = _create_therapist(db_session, suffix="tz")
+    client_row = _create_client(db_session, phone="+85295550099", name="TZ Client")
+    utc_start = datetime(2026, 2, 22, 7, 0, tzinfo=timezone.utc)
+    _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=utc_start,
+        duration_minutes=45,
+        status="scheduled",
+    )
+
+    with _admin_auth_context(admin):
+        response = client.get("/api/v1/admin/sessions?limit=20&offset=0", headers=_auth_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    session_start = datetime.fromisoformat(payload["items"][0]["start_time"])
+    session_end = datetime.fromisoformat(payload["items"][0]["end_time"])
+    assert session_start.utcoffset() == timedelta(hours=8)
+    assert session_start.hour == 15
+    assert session_end.utcoffset() == timedelta(hours=8)
 
 
 def test_get_admin_session_detail_includes_assigned_plan(client, db_session: Session):

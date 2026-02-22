@@ -15,14 +15,9 @@ from app.core.auth import get_current_therapist
 from app.db.session import get_session
 from app.models import Client, Session as TherapySession, Therapist
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
+from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/therapist/patients", tags=["Therapist Patients"])
-
-
-def _as_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _ensure_patient_for_therapist(
@@ -53,7 +48,7 @@ def _build_patient_metrics(
     completed_count = sum(1 for s in sessions if s.status == "completed")
     upcoming = [
         s for s in sessions
-        if _as_utc(s.start_time) >= now and s.status in {"scheduled", "started"}
+        if as_utc(s.start_time) >= now and s.status in {"scheduled", "started"}
     ]
     upcoming_count = len(upcoming)
     last_session_at = max((s.start_time for s in sessions), default=None)
@@ -120,8 +115,16 @@ def list_therapist_patients(
                 address=client.address,
                 session_count=session_count,
                 upcoming_session_count=upcoming_count,
-                last_session_at=last_session_at,
-                next_session_at=next_session_at,
+                last_session_at=(
+                    to_preferred_timezone(last_session_at, therapist.preferred_timezone)
+                    if last_session_at
+                    else None
+                ),
+                next_session_at=(
+                    to_preferred_timezone(next_session_at, therapist.preferred_timezone)
+                    if next_session_at
+                    else None
+                ),
             )
         )
 
@@ -157,8 +160,16 @@ def get_therapist_patient_detail(
         session_count=session_count,
         completed_session_count=completed_count,
         upcoming_session_count=upcoming_count,
-        last_session_at=last_session_at,
-        next_session_at=next_session_at,
+        last_session_at=(
+            to_preferred_timezone(last_session_at, therapist.preferred_timezone)
+            if last_session_at
+            else None
+        ),
+        next_session_at=(
+            to_preferred_timezone(next_session_at, therapist.preferred_timezone)
+            if next_session_at
+            else None
+        ),
         plan_30=plan_30,
         plan_45=plan_45,
     )
@@ -184,6 +195,8 @@ def list_therapist_patient_sessions(
     )
     if status:
         stmt = stmt.where(TherapySession.status == status)
+    from_date = normalize_query_datetime(from_date)
+    to_date = normalize_query_datetime(to_date)
     if from_date:
         stmt = stmt.where(TherapySession.start_time >= from_date)
     if to_date:
@@ -200,8 +213,8 @@ def list_therapist_patient_sessions(
         rows.append(
             TherapistPatientSessionItem(
                 id=session.id,
-                start_time=session.start_time,
-                end_time=session.end_time,
+                start_time=to_preferred_timezone(session.start_time, therapist.preferred_timezone),
+                end_time=to_preferred_timezone(session.end_time, therapist.preferred_timezone),
                 duration_minutes=session.duration_minutes,
                 status=session.status,
                 source=session.source,

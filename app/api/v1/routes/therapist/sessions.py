@@ -22,6 +22,7 @@ from app.api.v1.schemas.session import (
     SessionSummary,
 )
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
+from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/sessions", tags=["Therapist Sessions"])
 _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
@@ -49,6 +50,7 @@ def _build_list_item(
     session: TherapySession,
     client: Client,
     *,
+    preferred_timezone: str | None,
     plan_map: dict[tuple[int, int], dict[str, object]],
 ) -> SessionListItem:
     expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
@@ -59,8 +61,8 @@ def _build_list_item(
         id=session.id,
         client_name=client.name,
         client_phone=client.phone_e164,
-        start_time=session.start_time,
-        end_time=session.end_time,
+        start_time=to_preferred_timezone(session.start_time, preferred_timezone),
+        end_time=to_preferred_timezone(session.end_time, preferred_timezone),
         duration_minutes=session.duration_minutes,
         status=session.status,
         expected_charge_cents=expected_charge_cents,
@@ -150,8 +152,8 @@ def list_sessions(
 ):
     """List current therapist's sessions, with optional date range and scope filter."""
     now = datetime.now(timezone.utc)
-    from_date = _parse_datetime_query(from_date_raw)
-    to_date = _parse_datetime_query(to_date_raw)
+    from_date = normalize_query_datetime(_parse_datetime_query(from_date_raw))
+    to_date = normalize_query_datetime(_parse_datetime_query(to_date_raw))
 
     stmt = select(TherapySession).where(
         TherapySession.therapist_id == therapist.id
@@ -183,7 +185,15 @@ def list_sessions(
         clients = {c.id: c for c in client_rows}
 
     plan_map = load_active_plan_map(db, client_ids=client_ids)
-    return [_build_list_item(s, clients.get(s.client_id, Client(phone_e164="")), plan_map=plan_map) for s in sessions]
+    return [
+        _build_list_item(
+            s,
+            clients.get(s.client_id, Client(phone_e164="")),
+            preferred_timezone=therapist.preferred_timezone,
+            plan_map=plan_map,
+        )
+        for s in sessions
+    ]
 
 
 @router.get("/summary", response_model=SessionSummary)
@@ -194,9 +204,9 @@ def session_summary(
     to_date_raw: str | None = Query(None, alias="to"),
 ):
     """Get session counts and next upcoming session."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    from_date = _parse_datetime_query(from_date_raw)
-    to_date = _parse_datetime_query(to_date_raw)
+    now = datetime.now(timezone.utc)
+    from_date = normalize_query_datetime(_parse_datetime_query(from_date_raw))
+    to_date = normalize_query_datetime(_parse_datetime_query(to_date_raw))
 
     # Base query for this therapist
     base = select(TherapySession).where(
@@ -210,7 +220,7 @@ def session_summary(
     sessions = db.exec(base).all()
     plan_map = load_active_plan_map(db, client_ids={s.client_id for s in sessions})
 
-    upcoming = sum(1 for s in sessions if s.start_time >= now and s.status == "scheduled")
+    upcoming = sum(1 for s in sessions if as_utc(s.start_time) >= now and s.status == "scheduled")
     completed = sum(1 for s in sessions if s.status == "completed")
     cancelled = sum(1 for s in sessions if s.status == "cancelled")
     no_show = sum(1 for s in sessions if s.status == "no_show")
@@ -218,13 +228,18 @@ def session_summary(
     # Next upcoming session
     next_session = None
     upcoming_sessions = [
-        s for s in sessions if s.start_time >= now and s.status == "scheduled"
+        s for s in sessions if as_utc(s.start_time) >= now and s.status == "scheduled"
     ]
     if upcoming_sessions:
-        upcoming_sessions.sort(key=lambda s: s.start_time)
+        upcoming_sessions.sort(key=lambda s: as_utc(s.start_time))
         ns = upcoming_sessions[0]
         client = db.get(Client, ns.client_id)
-        next_session = _build_list_item(ns, client or Client(phone_e164=""), plan_map=plan_map)
+        next_session = _build_list_item(
+            ns,
+            client or Client(phone_e164=""),
+            preferred_timezone=therapist.preferred_timezone,
+            plan_map=plan_map,
+        )
 
     return SessionSummary(
         upcoming=upcoming,
@@ -266,8 +281,8 @@ def get_session_detail(
         id=session.id,
         client_name=client.name if client else None,
         client_phone=client.phone_e164 if client else None,
-        start_time=session.start_time,
-        end_time=session.end_time,
+        start_time=to_preferred_timezone(session.start_time, therapist.preferred_timezone),
+        end_time=to_preferred_timezone(session.end_time, therapist.preferred_timezone),
         duration_minutes=session.duration_minutes,
         status=session.status,
         source=session.source,
@@ -277,7 +292,7 @@ def get_session_detail(
         expected_charge_currency=expected_charge_currency,
         assigned_plan=assigned_plan,
         calendly_event_uri=session.calendly_event_uri,
-        created_at=session.created_at,
+        created_at=to_preferred_timezone(session.created_at, therapist.preferred_timezone),
     )
 
 
@@ -305,7 +320,7 @@ def update_session_status(
     return SessionStatusUpdateResponse(
         session_id=session_row.id,
         status=session_row.status,
-        updated_at=session_row.updated_at,
+        updated_at=to_preferred_timezone(session_row.updated_at, therapist.preferred_timezone),
     )
 
 
