@@ -11,6 +11,7 @@ from app.api.v1.routes.admin import (
     me,
     payments,
     plans,
+    reports,
     sessions,
     specialties,
     therapists,
@@ -28,6 +29,7 @@ router.include_router(invoices.router)
 router.include_router(me.router)
 router.include_router(plans.router)
 router.include_router(payments.router)
+router.include_router(reports.router)
 router.include_router(sessions.router)
 router.include_router(specialties.router)
 router.include_router(therapists.router)
