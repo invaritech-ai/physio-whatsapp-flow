@@ -19,6 +19,7 @@ class ClientListItem(BaseModel):
     date_of_birth: date | None
     address: str | None
     preferred_therapist_id: int | None
+    default_receipt_amount_cents: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -59,6 +60,7 @@ class ClientCreate(BaseModel):
     date_of_birth: date | None = None
     address: str | None = Field(default=None, max_length=1000)
     preferred_therapist_id: int | None = Field(default=None, gt=0)
+    default_receipt_amount_cents: int | None = Field(default=None, ge=1)
 
 
 class ClientUpdate(BaseModel):
@@ -70,6 +72,7 @@ class ClientUpdate(BaseModel):
     date_of_birth: date | None = None
     address: str | None = Field(default=None, max_length=1000)
     preferred_therapist_id: int | None = Field(default=None, gt=0)
+    default_receipt_amount_cents: int | None = Field(default=None, ge=1)
 
 
 class ClientSessionListItem(BaseModel):

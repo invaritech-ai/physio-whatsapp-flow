@@ -9,6 +9,7 @@ from typing import AsyncIterator
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
@@ -17,7 +18,9 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.exceptions import AppException
 from app.core.rate_limit import limiter
+from app.middleware.request_context import RequestContextMiddleware, get_request_id
 
 # DEV: enable DEBUG logging for app modules to trace webhook issues
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +46,20 @@ def _rate_limit_exception_handler(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, RateLimitExceeded):
         raise exc
     return _rate_limit_exceeded_handler(request, exc)
+
+
+def _app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    """
+    Centralized handler for AppException.
+    Returns standardized error response with request tracing.
+    """
+    request_id = get_request_id() or "unknown"
+    error_response = exc.to_error_response(request_id)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_response.model_dump(mode="json"),
+        headers={"X-Request-ID": request_id},
+    )
 
 
 @asynccontextmanager
@@ -106,7 +123,12 @@ app.add_middleware(
     allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID", "X-Response-Time-Ms"],
 )
+
+app.add_middleware(RequestContextMiddleware)
+
+app.add_exception_handler(AppException, _app_exception_handler)
 
 app.include_router(api_router)

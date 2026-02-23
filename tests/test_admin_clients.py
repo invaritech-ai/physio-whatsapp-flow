@@ -122,7 +122,7 @@ def test_create_client_duplicate_phone_returns_400(client, db_session: Session):
         )
 
     assert response.status_code == 400
-    assert "already exists" in response.json()["detail"].lower()
+    assert response.json()["error"]["code"] == "client_phone_already_exists"
 
 
 def test_list_clients_filters(client, db_session: Session):

@@ -53,7 +53,9 @@ class InvoiceGenerateRequest(BaseModel):
                 "currency": "HKD",
                 "description": "Physio session invoice",
                 "payment_mode": "cash",
+                "diagnosis_preset_id": None,
                 "diagnosis": "Bilateral plantar fasciitis",
+                "special_note_preset_id": None,
                 "special_notes": "Please submit to insurer within 30 days.",
             }
         }
@@ -69,7 +71,9 @@ class InvoiceGenerateRequest(BaseModel):
     currency: str = Field(default="HKD", min_length=3, max_length=8)
     description: str = Field(min_length=1, max_length=2000)
     payment_mode: str | None = Field(default=None, min_length=1, max_length=120)
+    diagnosis_preset_id: int | None = Field(default=None, gt=0)
     diagnosis: str | None = Field(default=None, min_length=1, max_length=2000)
+    special_note_preset_id: int | None = Field(default=None, gt=0)
     special_notes: str | None = Field(default=None, min_length=1, max_length=4000)
 
 

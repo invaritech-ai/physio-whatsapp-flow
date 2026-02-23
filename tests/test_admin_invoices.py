@@ -248,6 +248,7 @@ def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_sessio
     )
     db_session.add(
         PaymentRecord(
+            client_id=client_row.id,
             session_id=session_row.id,
             amount_cents=65000,
             currency="HKD",
@@ -374,7 +375,7 @@ def test_generate_invoice_rejects_amount_exceeding_available_balance(client, db_
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "amount_exceeds_available_to_receipt"
+    assert response.json()["error"]["code"] == "amount_exceeds_available_to_receipt"
 
 
 def test_generate_invoice_rejects_session_client_mismatch(client, db_session: Session):
@@ -417,7 +418,7 @@ def test_generate_invoice_rejects_session_client_mismatch(client, db_session: Se
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "invalid_session_for_client"
+    assert response.json()["error"]["code"] == "invalid_session_for_client"
 
 
 def test_list_invoices_filters_by_therapist_id(client, db_session: Session):
@@ -482,7 +483,7 @@ def test_get_invoice_detail_returns_404_when_missing(client, db_session: Session
         response = client.get("/api/v1/admin/invoices/999999", headers=_auth_headers())
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "invoice_not_found"
+    assert response.json()["error"]["code"] == "invoice_not_found"
 
 
 def test_generate_invoice_latex_falls_back_to_basic_when_engine_missing(client, db_session: Session):
@@ -675,3 +676,49 @@ def test_get_client_receipting_summary_returns_running_totals_and_pagination(cli
     page_2_payload = page_2.json()
     assert page_2_payload["has_more"] is False
     assert len(page_2_payload["receipts"]) == 1
+
+
+def test_generate_invoice_uses_invoice_presets(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-presets")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100012",
+    )
+    
+    from app.models import InvoicePreset
+    diag_preset = InvoicePreset(preset_type="diagnosis", label="Test Diag", value="Lumbar Spine Injury")
+    note_preset = InvoicePreset(preset_type="special_note", label="Test Note", value="Please follow up in 2 weeks")
+    db_session.add_all([diag_preset, note_preset])
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=100000,
+            total_receipted_cents=0,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+    db_session.refresh(diag_preset)
+    db_session.refresh(note_preset)
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "amount_cents": 10000,
+                "currency": "HKD",
+                "description": "Invoice with presets",
+                "diagnosis_preset_id": diag_preset.id,
+                "special_note_preset_id": note_preset.id,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["diagnosis"] == "Lumbar Spine Injury"
+    assert data["special_notes"] == "Please follow up in 2 weeks"

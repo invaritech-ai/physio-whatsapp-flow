@@ -1,12 +1,14 @@
 """Admin endpoints for invoice management."""
 
+import json
 import re
 import logging
 from datetime import datetime, timezone
 from typing import cast
 
 from celery import Task
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -17,10 +19,18 @@ from app.api.v1.schemas.invoice import (
 )
 from app.core.auth import get_current_admin
 from app.core.config import settings
+from app.core.exceptions import (
+    AppException,
+    AuthorizationError,
+    BusinessLogicError,
+    ConflictError,
+    NotFoundError,
+)
 from app.db.session import get_session
 from app.models import (
     Client,
     ClientFinancial,
+    InvoicePreset,
     PaymentRecord,
     Receipt,
     Session as TherapySession,
@@ -28,8 +38,14 @@ from app.models import (
     Therapist,
     User,
 )
+from app.services.idempotency import (
+    complete_idempotency_record,
+    fail_idempotency_record,
+    get_or_create_idempotency_record,
+)
 from app.services.invoice_generation import generate_and_store_invoice_pdf_url
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
+from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
 logger = logging.getLogger(__name__)
@@ -40,7 +56,7 @@ _SERVICE_TYPE_VALUES = {"standard", "supervised_physio", "other"}
 def _ensure_client_exists(db: Session, client_id: int) -> Client:
     client = db.get(Client, client_id)
     if not client:
-        raise HTTPException(status_code=404, detail="client_not_found")
+        raise NotFoundError("client_not_found", resource_type="client", resource_id=client_id)
     return client
 
 
@@ -52,23 +68,23 @@ def _ensure_session_belongs_to_client(
 ) -> TherapySession:
     session_row = db.get(TherapySession, session_id)
     if not session_row:
-        raise HTTPException(status_code=404, detail="session_not_found")
+        raise NotFoundError("session_not_found", resource_type="session", resource_id=session_id)
     if session_row.client_id != client_id:
-        raise HTTPException(status_code=400, detail="invalid_session_for_client")
+        raise BusinessLogicError("invalid_session_for_client", details={"session_id": session_id, "client_id": client_id})
     return session_row
 
 
 def _ensure_therapist_exists(db: Session, therapist_id: int) -> Therapist:
     therapist = db.get(Therapist, therapist_id)
     if not therapist:
-        raise HTTPException(status_code=404, detail="therapist_not_found")
+        raise NotFoundError("therapist_not_found", resource_type="therapist", resource_id=therapist_id)
     return therapist
 
 
 def _ensure_invoice_exists(db: Session, invoice_id: int) -> Receipt:
     invoice = db.get(Receipt, invoice_id)
     if not invoice:
-        raise HTTPException(status_code=404, detail="invoice_not_found")
+        raise NotFoundError("invoice_not_found", resource_type="invoice", resource_id=invoice_id)
     return invoice
 
 
@@ -102,11 +118,15 @@ def _get_or_create_client_financial_locked(
             select(ClientFinancial).where(ClientFinancial.client_id == client_id)
         ).first()
         if not record:
-            raise HTTPException(status_code=409, detail="invoice_generation_conflict")
+            raise ConflictError("invoice_generation_conflict")
     return record
 
 
-def _to_invoice_list_item(invoice: Receipt) -> InvoiceListItem:
+def _to_invoice_list_item(
+    invoice: Receipt,
+    *,
+    preferred_timezone: str | None,
+) -> InvoiceListItem:
     return InvoiceListItem(
         id=invoice.id,
         client_id=invoice.client_id,
@@ -123,16 +143,37 @@ def _to_invoice_list_item(invoice: Receipt) -> InvoiceListItem:
         special_notes=invoice.special_notes,
         pdf_url=invoice.pdf_url,
         status=invoice.status,
-        created_at=invoice.created_at,
+        created_at=to_preferred_timezone(invoice.created_at, preferred_timezone),
     )
 
 
-def _to_invoice_detail(invoice: Receipt) -> InvoiceDetailResponse:
-    list_item = _to_invoice_list_item(invoice)
+def _to_invoice_detail(
+    invoice: Receipt,
+    *,
+    preferred_timezone: str | None,
+) -> InvoiceDetailResponse:
+    list_item = _to_invoice_list_item(invoice, preferred_timezone=preferred_timezone)
     return InvoiceDetailResponse(
         **list_item.model_dump(),
         issued_by_user_id=invoice.issued_by_user_id,
     )
+
+
+def _resolve_invoice_preset_value(
+    *,
+    db: Session,
+    preset_id: int | None,
+    preset_type: str,
+    invalid_detail: str,
+) -> str | None:
+    if preset_id is None:
+        return None
+    preset = db.get(InvoicePreset, preset_id)
+    if not preset:
+        raise BusinessLogicError(invalid_detail, details={"preset_id": preset_id})
+    if preset.preset_type != preset_type or not preset.is_active:
+        raise BusinessLogicError(invalid_detail, details={"preset_id": preset_id, "preset_type": preset_type, "is_active": False})
+    return preset.value
 
 
 def _generate_invoice_pdf_url(
@@ -199,7 +240,9 @@ def list_invoices(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
-    _ = admin
+    preferred_timezone = admin.preferred_timezone
+    from_date = normalize_query_datetime(from_date)
+    to_date = normalize_query_datetime(to_date)
 
     stmt = select(Receipt)
     if therapist_id is not None:
@@ -215,7 +258,7 @@ def list_invoices(
 
     stmt = stmt.order_by(Receipt.created_at.desc(), Receipt.id.desc()).offset(offset).limit(limit)
     invoices = db.exec(stmt).all()
-    return [_to_invoice_list_item(invoice) for invoice in invoices]
+    return [_to_invoice_list_item(invoice, preferred_timezone=preferred_timezone) for invoice in invoices]
 
 
 @router.get("/{invoice_id}", response_model=InvoiceDetailResponse)
@@ -224,9 +267,9 @@ def get_invoice_detail(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
-    _ = admin
+    preferred_timezone = admin.preferred_timezone
     invoice = _ensure_invoice_exists(db, invoice_id)
-    return _to_invoice_detail(invoice)
+    return _to_invoice_detail(invoice, preferred_timezone=preferred_timezone)
 
 
 @router.post("/generate", response_model=InvoiceDetailResponse, status_code=201)
@@ -234,9 +277,46 @@ def generate_invoice(
     payload: InvoiceGenerateRequest,
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if admin.id is None:
-        raise HTTPException(status_code=403, detail="access_denied")
+        raise AuthorizationError("access_denied")
+
+    if idempotency_key:
+        existing_record, is_existing = get_or_create_idempotency_record(
+            db,
+            idempotency_key=idempotency_key,
+            endpoint="POST /admin/invoices/generate",
+            request_body=payload.model_dump(mode="json"),
+        )
+        if is_existing and existing_record:
+            return JSONResponse(
+                status_code=existing_record.response_status,
+                content=json.loads(existing_record.response_json),
+            )
+        try:
+            result = _generate_invoice_impl(payload, admin, db)
+            if idempotency_key:
+                complete_idempotency_record(
+                    db,
+                    idempotency_key=idempotency_key,
+                    response_status=201,
+                    response_json=result.model_dump_json(),
+                )
+            return result
+        except Exception as exc:
+            if idempotency_key:
+                fail_idempotency_record(db, idempotency_key=idempotency_key)
+            raise
+
+    return _generate_invoice_impl(payload, admin, db)
+
+
+def _generate_invoice_impl(
+    payload: InvoiceGenerateRequest,
+    admin: User,
+    db: Session,
+) -> InvoiceDetailResponse:
 
     def _clean_optional_text(value: str | None) -> str | None:
         if value is None:
@@ -255,7 +335,7 @@ def generate_invoice(
 
     service_type = payload.service_type.strip().lower()
     if service_type not in _SERVICE_TYPE_VALUES:
-        raise HTTPException(status_code=400, detail="invalid_service_type")
+        raise BusinessLogicError("invalid_service_type", field="service_type")
 
     default_amount_cents: int | None = None
     if session_row is not None:
@@ -264,14 +344,14 @@ def generate_invoice(
 
     amount_cents = payload.amount_cents if payload.amount_cents is not None else default_amount_cents
     if amount_cents is None or amount_cents <= 0:
-        raise HTTPException(status_code=400, detail="amount_cents_required")
+        raise BusinessLogicError("amount_cents_required", field="amount_cents")
 
     if (
         session_row is not None
         and payload.therapist_id is not None
         and payload.therapist_id != session_row.therapist_id
     ):
-        raise HTTPException(status_code=400, detail="therapist_session_mismatch")
+        raise BusinessLogicError("therapist_session_mismatch", details={"therapist_id": payload.therapist_id, "session_therapist_id": session_row.therapist_id})
 
     therapist_id = payload.therapist_id
     if therapist_id is None and session_row is not None:
@@ -306,8 +386,20 @@ def generate_invoice(
         match = _DIAGNOSIS_PATTERN.search(latest_note.note_text)
         if match:
             extracted_diagnosis = match.group(1).strip()
-    diagnosis = _clean_optional_text(payload.diagnosis) or extracted_diagnosis or "-"
-    special_notes = _clean_optional_text(payload.special_notes) or "-"
+    diagnosis_preset_value = _resolve_invoice_preset_value(
+        db=db,
+        preset_id=payload.diagnosis_preset_id,
+        preset_type="diagnosis",
+        invalid_detail="invalid_diagnosis_preset_id",
+    )
+    special_note_preset_value = _resolve_invoice_preset_value(
+        db=db,
+        preset_id=payload.special_note_preset_id,
+        preset_type="special_note",
+        invalid_detail="invalid_special_note_preset_id",
+    )
+    diagnosis = _clean_optional_text(payload.diagnosis) or diagnosis_preset_value or extracted_diagnosis or "-"
+    special_notes = _clean_optional_text(payload.special_notes) or special_note_preset_value or "-"
     trainer_name = _clean_optional_text(payload.trainer_name)
     reference_note = _clean_optional_text(payload.reference_note)
     description = payload.description.strip()
@@ -323,7 +415,7 @@ def generate_invoice(
         0,
     )
     if amount_cents > available_to_receipt_cents:
-        raise HTTPException(status_code=400, detail="amount_exceeds_available_to_receipt")
+        raise BusinessLogicError("amount_exceeds_available_to_receipt", details={"amount_cents": amount_cents, "available_to_receipt_cents": available_to_receipt_cents})
 
     now = datetime.now(timezone.utc)
     invoice = Receipt(
@@ -368,7 +460,7 @@ def generate_invoice(
         error_code = "invoice_pdf_generation_failed"
         if "s3" in str(exc).lower() or "upload" in str(exc).lower():
             error_code = "invoice_upload_failed"
-        raise HTTPException(status_code=500, detail=error_code) from exc
+        raise AppException(error_code, status_code=500) from exc
 
     invoice.status = "issued"
     financial.total_receipted_cents += amount_cents
@@ -380,7 +472,7 @@ def generate_invoice(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="invoice_generation_conflict") from exc
+        raise ConflictError("invoice_generation_conflict") from exc
 
     db.refresh(invoice)
-    return _to_invoice_detail(invoice)
+    return _to_invoice_detail(invoice, preferred_timezone=admin.preferred_timezone)

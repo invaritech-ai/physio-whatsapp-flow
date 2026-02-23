@@ -125,6 +125,7 @@ class PaymentRecordCreateRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "client_id": 101,
+                "source": "session_linked",
                 "session_id": 501,
                 "amount_cents": 75000,
                 "currency": "HKD",
@@ -139,7 +140,8 @@ class PaymentRecordCreateRequest(BaseModel):
     )
 
     client_id: int = Field(gt=0)
-    session_id: int = Field(gt=0)
+    source: Literal["session_linked", "admin_manual"] = "session_linked"
+    session_id: int | None = Field(default=None, gt=0)
     amount_cents: int = Field(gt=0)
     currency: str = Field(default="HKD", min_length=3, max_length=8)
     method: Literal["cash", "electronic"]
@@ -149,13 +151,13 @@ class PaymentRecordCreateRequest(BaseModel):
     reference: str | None = Field(default=None, max_length=255)
     notes: str | None = Field(default=None, max_length=2000)
 
-
 class PaymentRecordItem(BaseModel):
     """Payment record response item."""
 
     id: int
     client_id: int
-    session_id: int
+    source: Literal["session_linked", "admin_manual"]
+    session_id: int | None
     amount_cents: int
     currency: str
     method: str
@@ -166,6 +168,7 @@ class PaymentRecordItem(BaseModel):
     reference: str | None
     notes: str | None
     recorded_by_user_id: int
+    updated_at: datetime
     created_at: datetime
 
 
@@ -174,3 +177,36 @@ class PaymentRecordCreateResponse(BaseModel):
 
     payment: PaymentRecordItem
     financials: ClientFinancialResponse
+
+
+class BillingQueueItem(BaseModel):
+    """Session-level billing queue row."""
+
+    session_id: int
+    client_id: int
+    client_name: str | None
+    therapist_id: int
+    therapist_name: str | None
+    start_time: datetime
+    end_time: datetime
+    duration_minutes: int
+    status: str
+    currency: str
+    expected_charge_cents: int | None
+    paid_cents: int
+    receipted_cents: int
+    outstanding_cents: int
+    needs_confirmation: bool
+    default_receipt_amount_cents: int | None
+    last_payment_at: datetime | None
+    last_receipt_at: datetime | None
+
+
+class BillingQueueResponse(BaseModel):
+    """Paginated session-level billing queue."""
+
+    items: list[BillingQueueItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

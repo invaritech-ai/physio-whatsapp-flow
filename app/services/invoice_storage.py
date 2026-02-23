@@ -50,13 +50,13 @@ def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
 
     s3 = boto3.client("s3", **client_kwargs)
     object_key = _s3_object_key(invoice_id)
-    content_length = local_pdf_path.stat().st_size
     with local_pdf_path.open("rb") as pdf_file:
+        body_bytes = pdf_file.read()
         s3.put_object(
             Bucket=bucket,
             Key=object_key,
-            Body=pdf_file,
-            ContentLength=content_length,
+            Body=body_bytes,
+            ContentLength=len(body_bytes),
             ContentType="application/pdf",
         )
 

@@ -237,6 +237,7 @@ def test_record_payment_returns_payment_and_financial_snapshot(client, db_sessio
     assert response.status_code == 201
     payload = response.json()
     assert payload["payment"]["client_id"] == client_row.id
+    assert payload["payment"]["source"] == "session_linked"
     assert payload["payment"]["session_id"] == session_row.id
     assert payload["payment"]["method"] == "electronic"
     assert payload["financials"]["total_paid_cents"] == 50000
@@ -288,7 +289,94 @@ def test_list_payments_filters_by_client_and_method(client, db_session: Session)
     data = response.json()
     assert len(data) == 1
     assert data[0]["client_id"] == client_a.id
+    assert data[0]["source"] == "session_linked"
     assert data[0]["method"] == "cash"
+
+
+def test_record_payment_rejects_session_linked_without_session_id(client, db_session: Session):
+    admin = _create_admin(db_session)
+    client_row = _create_client(db_session, phone="+85291110008")
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/payments",
+            json={
+                "client_id": client_row.id,
+                "source": "session_linked",
+                "amount_cents": 10000,
+                "currency": "HKD",
+                "method": "cash",
+                "received_by_role": "admin",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "payment_source_requires_session_id"
+
+
+def test_record_payment_rejects_admin_manual_with_session_id(client, db_session: Session):
+    admin = _create_admin(db_session)
+    _, therapist = _create_therapist_with_user(db_session, suffix="pay-three")
+    client_row = _create_client(db_session, phone="+85291110009")
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        duration_minutes=30,
+    )
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/payments",
+            json={
+                "client_id": client_row.id,
+                "source": "admin_manual",
+                "session_id": session_row.id,
+                "amount_cents": 10000,
+                "currency": "HKD",
+                "method": "cash",
+                "received_by_role": "admin",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "admin_manual_requires_null_session_id"
+
+
+def test_record_admin_manual_payment_and_list_source(client, db_session: Session):
+    admin = _create_admin(db_session)
+    client_row = _create_client(db_session, phone="+85291110010")
+
+    with _admin_auth_context(admin):
+        create_response = client.post(
+            "/api/v1/admin/payments",
+            json={
+                "client_id": client_row.id,
+                "source": "admin_manual",
+                "amount_cents": 12000,
+                "currency": "HKD",
+                "method": "electronic",
+                "received_by_role": "admin",
+                "reference": "MANUAL-001",
+            },
+            headers=_auth_headers(),
+        )
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["payment"]["source"] == "admin_manual"
+    assert created["payment"]["session_id"] is None
+
+    with _admin_auth_context(admin):
+        list_response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/payments?source=admin_manual",
+            headers=_auth_headers(),
+        )
+    assert list_response.status_code == 200
+    items = list_response.json()
+    assert len(items) == 1
+    assert items[0]["source"] == "admin_manual"
 
 
 def test_session_payloads_include_expected_charge_and_assigned_plan(client, db_session: Session):

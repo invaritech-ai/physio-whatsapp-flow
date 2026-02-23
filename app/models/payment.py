@@ -13,9 +13,11 @@ class PaymentRecord(SQLModel, table=True):
     __tablename__ = "payment_record"  # type: ignore
 
     id: int | None = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="session.id", index=True)
+    client_id: int = Field(foreign_key="client.id", index=True)
+    session_id: int | None = Field(default=None, foreign_key="session.id", index=True)
     amount_cents: int  # Amount in cents (e.g., 50000 = HKD 500.00)
     currency: str = Field(default="HKD")
+    source: str = Field(default="session_linked", max_length=40)
     payment_method: str  # e.g., "cash", "credit_card", "fps", "bank_transfer"
     status: str = Field(default="pending")  # pending|confirmed|rejected
     received_by_role: str | None = Field(default=None, max_length=20)  # admin|therapist

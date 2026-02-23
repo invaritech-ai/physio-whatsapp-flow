@@ -137,3 +137,13 @@ def client_fixture(db_session):
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def force_local_invoice_storage():
+    """Ensure all API tests use the local invoice storage backend, avoiding botocore/S3 network calls."""
+    from app.core.config import settings
+    original_backend = settings.invoice_storage_backend
+    settings.invoice_storage_backend = "local"
+    yield
+    settings.invoice_storage_backend = original_backend

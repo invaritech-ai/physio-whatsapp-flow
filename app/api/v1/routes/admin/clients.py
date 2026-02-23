@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
@@ -21,6 +21,7 @@ from app.api.v1.schemas.invoice import (
 )
 from app.core.auth import get_current_admin
 from app.core.config import settings
+from app.core.exceptions import BusinessLogicError, NotFoundError
 from app.db.session import get_session
 from app.models import Client, ClientFinancial, MessageLog, Receipt, Session as TherapySession, Therapist, User
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/admin/clients", tags=["Admin - Clients"])
 def _ensure_client_exists(db: Session, client_id: int) -> Client:
     client = db.get(Client, client_id)
     if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+        raise NotFoundError("client_not_found", resource_type="client", resource_id=client_id)
     return client
 
 
@@ -41,7 +42,7 @@ def _ensure_preferred_therapist_exists(db: Session, therapist_id: int | None) ->
         return
     therapist = db.get(Therapist, therapist_id)
     if not therapist:
-        raise HTTPException(status_code=400, detail="Preferred therapist not found")
+        raise BusinessLogicError("therapist_not_found", field="preferred_therapist_id", details={"therapist_id": therapist_id})
 
 
 def _ensure_unique_phone(
@@ -52,7 +53,7 @@ def _ensure_unique_phone(
 ) -> None:
     existing = db.exec(select(Client).where(Client.phone_e164 == phone_e164)).first()
     if existing and existing.id != ignore_client_id:
-        raise HTTPException(status_code=400, detail="Client phone already exists")
+        raise BusinessLogicError("client_phone_already_exists", field="phone_e164", details={"phone_e164": phone_e164})
 
 
 def _to_receipting_summary_item(receipt: Receipt) -> ReceiptingSummaryReceiptItem:
@@ -139,6 +140,7 @@ def create_client(
         date_of_birth=data.date_of_birth,
         address=data.address,
         preferred_therapist_id=data.preferred_therapist_id,
+        default_receipt_amount_cents=data.default_receipt_amount_cents,
     )
     db.add(client)
     db.commit()
@@ -182,6 +184,8 @@ def update_client(
     if "preferred_therapist_id" in data.model_fields_set:
         _ensure_preferred_therapist_exists(db, data.preferred_therapist_id)
         client.preferred_therapist_id = data.preferred_therapist_id
+    if "default_receipt_amount_cents" in data.model_fields_set:
+        client.default_receipt_amount_cents = data.default_receipt_amount_cents
 
     client.updated_at = datetime.now(timezone.utc)
     db.add(client)
@@ -271,7 +275,7 @@ def get_client_financials(
     db: Session = Depends(get_session),
 ):
     """Return current financial totals for a client."""
-    _ = admin
+    preferred_timezone = admin.preferred_timezone
     client = _ensure_client_exists(db, client_id)
     record = db.exec(
         select(ClientFinancial).where(ClientFinancial.client_id == client_id)
@@ -284,7 +288,7 @@ def get_client_financials(
             total_paid_cents=0,
             total_receipted_cents=0,
             available_to_receipt_cents=0,
-            updated_at=client.updated_at,
+            updated_at=to_preferred_timezone(client.updated_at, preferred_timezone),
         )
 
     available = max(record.total_paid_cents - record.total_receipted_cents, 0)
@@ -294,7 +298,7 @@ def get_client_financials(
         total_paid_cents=record.total_paid_cents,
         total_receipted_cents=record.total_receipted_cents,
         available_to_receipt_cents=available,
-        updated_at=record.updated_at,
+        updated_at=to_preferred_timezone(record.updated_at, preferred_timezone),
     )
 
 
