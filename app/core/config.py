@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     # Celery + Redis
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
+    whatsapp_webhook_sync_enabled: bool = True
     celery_webhook_async_enabled: bool = False
     celery_invoice_pdf_task_enabled: bool = False
     celery_invoice_task_timeout_seconds: int = 60

@@ -280,6 +280,52 @@ def test_list_client_sessions_with_status_filter(client, db_session: Session):
     assert data[0]["status"] == "completed"
 
 
+def test_list_client_sessions_serializes_in_admin_preferred_timezone(client, db_session: Session):
+    admin = _create_admin(db_session)
+    admin.preferred_timezone = "Asia/Hong_Kong"
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
+
+    therapist = _create_therapist(db_session, suffix="sessions-tz")
+    client_row = Client(phone_e164="+85294444445", name="Session TZ Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    # DB stores UTC-naive; 06:00 UTC should serialize as 14:00 +08:00.
+    db_session.add(
+        TherapySession(
+            client_id=client_row.id,
+            therapist_id=therapist.id,
+            start_time=datetime(2026, 2, 23, 6, 0),
+            end_time=datetime(2026, 2, 23, 6, 30),
+            duration_minutes=30,
+            status="scheduled",
+            source="calendly",
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/sessions",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+
+    start_time = datetime.fromisoformat(data[0]["start_time"])
+    end_time = datetime.fromisoformat(data[0]["end_time"])
+    assert start_time.utcoffset() == timedelta(hours=8)
+    assert start_time.hour == 14
+    assert end_time.utcoffset() == timedelta(hours=8)
+    assert end_time.hour == 14
+
+
 def test_list_client_messages_with_direction_filter(client, db_session: Session):
     admin = _create_admin(db_session)
     client_row = Client(phone_e164="+85295555555", name="Message Client")

@@ -24,6 +24,7 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.models import Client, ClientFinancial, MessageLog, Receipt, Session as TherapySession, Therapist, User
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
+from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/admin/clients", tags=["Admin - Clients"])
 
@@ -201,7 +202,9 @@ def list_client_sessions(
     db: Session = Depends(get_session),
 ):
     """List sessions for a client."""
-    _ = admin
+    preferred_timezone = admin.preferred_timezone
+    from_date = normalize_query_datetime(from_date)
+    to_date = normalize_query_datetime(to_date)
     _ensure_client_exists(db, client_id)
 
     stmt = select(TherapySession).where(TherapySession.client_id == client_id)
@@ -225,8 +228,8 @@ def list_client_sessions(
             ClientSessionListItem(
                 id=session.id,
                 therapist_id=session.therapist_id,
-                start_time=session.start_time,
-                end_time=session.end_time,
+                start_time=to_preferred_timezone(session.start_time, preferred_timezone),
+                end_time=to_preferred_timezone(session.end_time, preferred_timezone),
                 duration_minutes=session.duration_minutes,
                 status=session.status,
                 source=session.source,
