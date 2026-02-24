@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.invoice import (
@@ -12,6 +13,7 @@ from app.api.v1.schemas.invoice import (
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
 from app.models import Client, Receipt, Therapist
+from app.services.invoice_storage import resolve_invoice_pdf_url
 
 router = APIRouter(prefix="/therapist/invoices", tags=["Therapist Invoices"])
 
@@ -35,7 +37,7 @@ def _build_therapist_invoice_item(
         payment_mode=invoice.payment_mode,
         diagnosis=invoice.diagnosis,
         special_notes=invoice.special_notes,
-        pdf_url=invoice.pdf_url,
+        pdf_url=resolve_invoice_pdf_url(invoice.pdf_url),
         status=invoice.status,
         created_at=invoice.created_at,
         client_name=client.name,
@@ -96,3 +98,22 @@ def get_therapist_invoice_detail(
         **item.model_dump(),
         issued_by_user_id=invoice.issued_by_user_id,
     )
+
+
+@router.get("/{invoice_id}/pdf")
+def download_therapist_invoice_pdf(
+    invoice_id: int,
+    therapist: Therapist = Depends(get_current_therapist),
+    db: Session = Depends(get_session),
+):
+    """Redirect to a fresh pre-signed PDF download URL. Safe to link directly — never expires."""
+    row = db.exec(
+        select(Receipt)
+        .where(Receipt.therapist_id == therapist.id, Receipt.id == invoice_id)
+    ).first()
+    if not row or not row.pdf_url:
+        raise HTTPException(status_code=404, detail="invoice_not_found")
+    url = resolve_invoice_pdf_url(row.pdf_url)
+    if not url:
+        raise HTTPException(status_code=404, detail="invoice_not_found")
+    return RedirectResponse(url=url, status_code=307)

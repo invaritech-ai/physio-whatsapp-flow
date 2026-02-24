@@ -64,6 +64,14 @@ def _format_payment_datetime(value: datetime | None) -> str:
     return f"{local.strftime('%A')} {local.strftime('%B')} {local.day}, {local.year} - {hour_12}:{minute}{suffix}"
 
 
+def _strip_dr_prefix(name: str | None) -> str:
+    """Remove leading 'Dr.' / 'Dr ' honorific from a therapist name."""
+    if not name:
+        return "-"
+    import re
+    return re.sub(r"^Dr\.?\s+", "", name, flags=re.IGNORECASE).strip() or name
+
+
 def _currency_amount(amount_cents: int) -> str:
     return f"{amount_cents / 100:,.2f}"
 
@@ -97,7 +105,8 @@ def _build_template_context(
     payment_at = _format_payment_datetime(session_start_at)
     payer_name = client_name or "Client"
     payment_label = payment_mode or "N/A"
-    provider_line = f"{therapist_name or '-'}, License #{therapist_license_number or '-'}"
+    clean_therapist_name = _strip_dr_prefix(therapist_name)
+    provider_line = f"{clean_therapist_name}, License #{therapist_license_number or '-'}"
     return {
         "business_name": _latex_escape(settings.business_name),
         "business_address": _latex_escape(settings.business_address),
@@ -105,13 +114,14 @@ def _build_template_context(
         "business_email": _latex_escape(settings.business_email),
         "printed_at": _latex_escape(printed_at),
         "client_name": _latex_escape(payer_name),
-        "client_address": _latex_escape(client_address or ""),
+        "client_address": _latex_escape(client_address or "Sai Ying Pun, Hong Kong Island"),
         "client_phone": _latex_escape(client_phone),
         "receipt_title": _latex_escape("Receipt"),
         "items_payments_title": _latex_escape("Items and Payments"),
         "item_datetime_line": _latex_escape(session_at),
         "item_description": _latex_escape(description),
         "provider_line": _latex_escape(provider_line),
+        "therapist_name_only": _latex_escape(clean_therapist_name),
         "invoice_number": _latex_escape(f"{invoice_id}-P{client_id:02d}"),
         "diagnosis_line": _latex_escape(diagnosis or ""),
         "special_notes_line": _latex_escape(special_notes or ""),

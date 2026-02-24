@@ -8,7 +8,7 @@ from typing import cast
 
 from celery import Task
 from fastapi import APIRouter, Depends, Header, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -44,6 +44,7 @@ from app.services.idempotency import (
     get_or_create_idempotency_record,
 )
 from app.services.invoice_generation import generate_and_store_invoice_pdf_url
+from app.services.invoice_storage import resolve_invoice_pdf_url
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
@@ -141,7 +142,7 @@ def _to_invoice_list_item(
         payment_mode=invoice.payment_mode,
         diagnosis=invoice.diagnosis,
         special_notes=invoice.special_notes,
-        pdf_url=invoice.pdf_url,
+        pdf_url=resolve_invoice_pdf_url(invoice.pdf_url),
         status=invoice.status,
         created_at=to_preferred_timezone(invoice.created_at, preferred_timezone),
     )
@@ -272,6 +273,22 @@ def get_invoice_detail(
     preferred_timezone = admin.preferred_timezone
     invoice = _ensure_invoice_exists(db, invoice_id)
     return _to_invoice_detail(invoice, preferred_timezone=preferred_timezone)
+
+
+@router.get("/{invoice_id}/pdf")
+def download_invoice_pdf(
+    invoice_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Redirect to a fresh pre-signed PDF download URL. Safe to link directly — never expires."""
+    invoice = _ensure_invoice_exists(db, invoice_id)
+    if not invoice.pdf_url:
+        raise NotFoundError("invoice_not_found", resource_type="invoice_pdf", resource_id=invoice_id)
+    url = resolve_invoice_pdf_url(invoice.pdf_url)
+    if not url:
+        raise NotFoundError("invoice_not_found", resource_type="invoice_pdf", resource_id=invoice_id)
+    return RedirectResponse(url=url, status_code=307)
 
 
 @router.post("/generate", response_model=InvoiceDetailResponse, status_code=201)

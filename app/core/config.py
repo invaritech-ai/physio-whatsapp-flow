@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     invoice_s3_access_key_id: str | None = None
     invoice_s3_secret_access_key: str | None = None
     invoice_s3_public_base_url: str | None = None
-    invoice_s3_presign_ttl_seconds: int = 900
+    invoice_s3_presign_ttl_seconds: int = 3600  # TTL for on-demand pre-signed download URLs
 
     # Invoice renderer
     invoice_renderer: str = "basic"  # basic|latex
