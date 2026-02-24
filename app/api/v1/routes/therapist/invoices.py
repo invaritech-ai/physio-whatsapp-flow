@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.invoice import (
+    InvoicePdfUrlResponse,
     TherapistInvoiceDetailResponse,
     TherapistInvoiceListItem,
 )
@@ -16,6 +17,15 @@ from app.models import Client, Receipt, Therapist
 from app.services.invoice_storage import resolve_invoice_pdf_url
 
 router = APIRouter(prefix="/therapist/invoices", tags=["Therapist Invoices"])
+
+
+def _resolve_invoice_download_url(invoice: Receipt) -> str:
+    if not invoice.pdf_url:
+        raise HTTPException(status_code=404, detail="invoice_not_found")
+    url = resolve_invoice_pdf_url(invoice.pdf_url)
+    if not url:
+        raise HTTPException(status_code=404, detail="invoice_not_found")
+    return url
 
 
 def _build_therapist_invoice_item(
@@ -111,9 +121,25 @@ def download_therapist_invoice_pdf(
         select(Receipt)
         .where(Receipt.therapist_id == therapist.id, Receipt.id == invoice_id)
     ).first()
-    if not row or not row.pdf_url:
+    if not row:
         raise HTTPException(status_code=404, detail="invoice_not_found")
-    url = resolve_invoice_pdf_url(row.pdf_url)
-    if not url:
-        raise HTTPException(status_code=404, detail="invoice_not_found")
+    url = _resolve_invoice_download_url(row)
     return RedirectResponse(url=url, status_code=307)
+
+
+@router.get("/{invoice_id}/pdf-url", response_model=InvoicePdfUrlResponse)
+def get_therapist_invoice_pdf_url(
+    invoice_id: int,
+    therapist: Therapist = Depends(get_current_therapist),
+    db: Session = Depends(get_session),
+):
+    row = db.exec(
+        select(Receipt)
+        .where(Receipt.therapist_id == therapist.id, Receipt.id == invoice_id)
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="invoice_not_found")
+    return InvoicePdfUrlResponse(
+        invoice_id=invoice_id,
+        pdf_url=_resolve_invoice_download_url(row),
+    )

@@ -486,6 +486,76 @@ def test_get_invoice_detail_returns_404_when_missing(client, db_session: Session
     assert response.json()["error"]["code"] == "invoice_not_found"
 
 
+def test_get_invoice_pdf_url_returns_fresh_download_url(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-pdf-url")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100012",
+    )
+
+    invoice = Receipt(
+        client_id=client_row.id,
+        session_id=session_row.id,
+        therapist_id=therapist.id,
+        amount_cents=12000,
+        currency="HKD",
+        description="Invoice URL",
+        pdf_url="/generated/invoices/invoice-pdf-url.pdf",
+        status="issued",
+        issued_by_user_id=admin.id,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    db_session.refresh(invoice)
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/invoices/{invoice.id}/pdf-url",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["invoice_id"] == invoice.id
+    assert payload["pdf_url"] == "/generated/invoices/invoice-pdf-url.pdf"
+
+
+def test_get_invoice_pdf_url_returns_404_when_pdf_missing(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-pdf-missing")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100013",
+    )
+
+    invoice = Receipt(
+        client_id=client_row.id,
+        session_id=session_row.id,
+        therapist_id=therapist.id,
+        amount_cents=12000,
+        currency="HKD",
+        description="Invoice URL missing",
+        pdf_url=None,
+        status="issued",
+        issued_by_user_id=admin.id,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    db_session.refresh(invoice)
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/invoices/{invoice.id}/pdf-url",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "invoice_not_found"
+
+
 def test_generate_invoice_latex_falls_back_to_basic_when_engine_missing(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, suffix="invoice-latex-fallback")

@@ -237,6 +237,11 @@ def get_action_center_summary(
             clients_missing_any_plan_assignment_ids=clients_missing_any_plan_assignment_ids,
             past_sessions_missing_payment_record_ids=past_sessions_missing_payment_record_ids,
             active_clients_missing_financial_profile_ids=active_clients_missing_financial_profile_ids,
+            clients_missing_plan_30=clients_missing_plan_30_ids,
+            clients_missing_plan_45=clients_missing_plan_45_ids,
+            active_clients_missing_any_plan_assignment=clients_missing_any_plan_assignment_ids,
+            past_sessions_missing_payment_record=past_sessions_missing_payment_record_ids,
+            active_clients_missing_financial_profile=active_clients_missing_financial_profile_ids,
         )
 
     return AdminActionCenterSummaryResponse(

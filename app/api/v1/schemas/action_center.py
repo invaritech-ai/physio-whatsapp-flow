@@ -2,18 +2,24 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AdminActionCenterDebugIds(BaseModel):
     """Optional debug IDs for card-to-table parity verification."""
 
-    pending_access_request_ids: list[int]
-    clients_missing_plan_30_ids: list[int]
-    clients_missing_plan_45_ids: list[int]
-    clients_missing_any_plan_assignment_ids: list[int]
-    past_sessions_missing_payment_record_ids: list[int]
-    active_clients_missing_financial_profile_ids: list[int]
+    pending_access_request_ids: list[int] = Field(default_factory=list)
+    clients_missing_plan_30_ids: list[int] = Field(default_factory=list)
+    clients_missing_plan_45_ids: list[int] = Field(default_factory=list)
+    clients_missing_any_plan_assignment_ids: list[int] = Field(default_factory=list)
+    past_sessions_missing_payment_record_ids: list[int] = Field(default_factory=list)
+    active_clients_missing_financial_profile_ids: list[int] = Field(default_factory=list)
+    # Backward-compatible aliases used by some FE surfaces.
+    clients_missing_plan_30: list[int] = Field(default_factory=list)
+    clients_missing_plan_45: list[int] = Field(default_factory=list)
+    active_clients_missing_any_plan_assignment: list[int] = Field(default_factory=list)
+    past_sessions_missing_payment_record: list[int] = Field(default_factory=list)
+    active_clients_missing_financial_profile: list[int] = Field(default_factory=list)
 
 
 class AdminActionCenterSummaryResponse(BaseModel):

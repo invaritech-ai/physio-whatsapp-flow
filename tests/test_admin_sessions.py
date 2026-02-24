@@ -465,3 +465,31 @@ def test_get_admin_session_clinical_note_normalizes_escaped_newlines(client, db_
     payload = response.json()
     assert payload["note_text"] == "Test Notes\n\nDiagnosis: Test Diag"
     assert payload["diagnosis"] == "Test Diag"
+
+
+def test_get_admin_session_clinical_note_without_existing_note_returns_empty_state(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="clinical-empty")
+    client_row = _create_client(db_session, phone="+85295550010", name="Clinical Empty State")
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=datetime.now(timezone.utc),
+        duration_minutes=45,
+        status="completed",
+    )
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/sessions/{session_row.id}/clinical-note",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_row.id
+    assert payload["note_id"] == 0
+    assert payload["note_text"] == ""
+    assert payload["diagnosis"] is None
+    assert payload["author_user_id"] == 0

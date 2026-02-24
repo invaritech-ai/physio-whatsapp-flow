@@ -123,7 +123,8 @@ app.add_middleware(
     allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    # Idempotency-Key is required for FE retries on payment/invoice POSTs.
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key"],
     expose_headers=["X-Request-ID", "X-Response-Time-Ms"],
 )
 

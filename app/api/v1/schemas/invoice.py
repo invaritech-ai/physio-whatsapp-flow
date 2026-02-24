@@ -37,6 +37,13 @@ class InvoiceDetailResponse(InvoiceListItem):
     issued_by_user_id: int
 
 
+class InvoicePdfUrlResponse(BaseModel):
+    """Fresh downloadable PDF URL for an existing invoice."""
+
+    invoice_id: int
+    pdf_url: str
+
+
 class InvoiceGenerateRequest(BaseModel):
     """Admin request payload to generate a session-linked or sessionless invoice."""
 

@@ -204,6 +204,45 @@ def test_get_therapist_invoice_detail_scoped(client, db_session: Session):
     assert other_response.json()["detail"] == "invoice_not_found"
 
 
+def test_get_therapist_invoice_pdf_url_scoped(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist_user_a, therapist_a = _create_therapist_user(db_session, suffix="pdf-url-a")
+    _, therapist_b = _create_therapist_user(db_session, suffix="pdf-url-b")
+
+    _, _, own_receipt = _create_client_session_and_receipt(
+        db_session,
+        therapist_id=therapist_a.id,
+        issued_by_user_id=admin.id,
+        phone="+85290200007",
+        amount_cents=35000,
+    )
+    _, _, other_receipt = _create_client_session_and_receipt(
+        db_session,
+        therapist_id=therapist_b.id,
+        issued_by_user_id=admin.id,
+        phone="+85290200008",
+        amount_cents=25000,
+    )
+
+    with _auth_context(therapist_user_a):
+        own_response = client.get(
+            f"/api/v1/therapist/invoices/{own_receipt.id}/pdf-url",
+            headers=_auth_headers(),
+        )
+    assert own_response.status_code == 200
+    own_data = own_response.json()
+    assert own_data["invoice_id"] == own_receipt.id
+    assert own_data["pdf_url"].startswith("/generated/invoices/invoice-")
+
+    with _auth_context(therapist_user_a):
+        other_response = client.get(
+            f"/api/v1/therapist/invoices/{other_receipt.id}/pdf-url",
+            headers=_auth_headers(),
+        )
+    assert other_response.status_code == 404
+    assert other_response.json()["detail"] == "invoice_not_found"
+
+
 def test_list_therapist_invoices_supports_status_filter(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist_user, therapist = _create_therapist_user(db_session, suffix="status")

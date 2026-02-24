@@ -309,13 +309,23 @@ def get_admin_session_clinical_note(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
-    _ = admin
-    _ensure_session_exists(db, session_id)
+    session_row = _ensure_session_exists(db, session_id)
     note = db.exec(
         select(SessionNote)
         .where(SessionNote.session_id == session_id)
         .order_by(SessionNote.created_at.desc())
     ).first()
     if not note:
-        raise HTTPException(status_code=404, detail="clinical_note_not_found")
+        # For admin session workflows, absence of a clinical note is a valid
+        # empty state and should not hard-fail the entire session details flow.
+        fallback_ts = session_row.updated_at or session_row.created_at
+        return ClinicalNoteResponse(
+            session_id=session_id,
+            note_id=0,
+            note_text="",
+            diagnosis=None,
+            author_user_id=0,
+            created_at=fallback_ts,
+            updated_at=fallback_ts,
+        )
     return _build_clinical_note_response(note)

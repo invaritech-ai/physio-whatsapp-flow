@@ -399,3 +399,34 @@ def test_action_center_summary_debug_ids_payload(client, db_session: Session):
     assert payload["debug_ids"]["clients_missing_any_plan_assignment_ids"] == [client_row.id]
     assert payload["debug_ids"]["past_sessions_missing_payment_record_ids"] != []
     assert payload["debug_ids"]["active_clients_missing_financial_profile_ids"] == [client_row.id]
+    # Backward-compatible keys (without _ids suffix) are always present.
+    assert payload["debug_ids"]["clients_missing_plan_30"] == [client_row.id]
+    assert payload["debug_ids"]["clients_missing_plan_45"] == [client_row.id]
+    assert payload["debug_ids"]["active_clients_missing_any_plan_assignment"] == [client_row.id]
+    assert payload["debug_ids"]["past_sessions_missing_payment_record"] != []
+    assert payload["debug_ids"]["active_clients_missing_financial_profile"] == [client_row.id]
+
+
+def test_action_center_summary_debug_ids_empty_lists_are_serialized(client, db_session: Session):
+    admin = _create_admin(db_session)
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            "/api/v1/admin/action-center/summary?include_debug_ids=true",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    debug = response.json()["debug_ids"]
+    assert debug is not None
+    assert debug["pending_access_request_ids"] == []
+    assert debug["clients_missing_plan_30_ids"] == []
+    assert debug["clients_missing_plan_45_ids"] == []
+    assert debug["clients_missing_any_plan_assignment_ids"] == []
+    assert debug["past_sessions_missing_payment_record_ids"] == []
+    assert debug["active_clients_missing_financial_profile_ids"] == []
+    assert debug["clients_missing_plan_30"] == []
+    assert debug["clients_missing_plan_45"] == []
+    assert debug["active_clients_missing_any_plan_assignment"] == []
+    assert debug["past_sessions_missing_payment_record"] == []
+    assert debug["active_clients_missing_financial_profile"] == []

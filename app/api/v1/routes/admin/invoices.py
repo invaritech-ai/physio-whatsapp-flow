@@ -16,6 +16,7 @@ from app.api.v1.schemas.invoice import (
     InvoiceDetailResponse,
     InvoiceGenerateRequest,
     InvoiceListItem,
+    InvoicePdfUrlResponse,
 )
 from app.core.auth import get_current_admin
 from app.core.config import settings
@@ -87,6 +88,23 @@ def _ensure_invoice_exists(db: Session, invoice_id: int) -> Receipt:
     if not invoice:
         raise NotFoundError("invoice_not_found", resource_type="invoice", resource_id=invoice_id)
     return invoice
+
+
+def _resolve_invoice_download_url(invoice: Receipt, *, invoice_id: int) -> str:
+    if not invoice.pdf_url:
+        raise NotFoundError(
+            "invoice_not_found",
+            resource_type="invoice_pdf",
+            resource_id=invoice_id,
+        )
+    url = resolve_invoice_pdf_url(invoice.pdf_url)
+    if not url:
+        raise NotFoundError(
+            "invoice_not_found",
+            resource_type="invoice_pdf",
+            resource_id=invoice_id,
+        )
+    return url
 
 
 def _get_or_create_client_financial_locked(
@@ -275,6 +293,20 @@ def get_invoice_detail(
     return _to_invoice_detail(invoice, preferred_timezone=preferred_timezone)
 
 
+@router.get("/{invoice_id}/pdf-url", response_model=InvoicePdfUrlResponse)
+def get_invoice_pdf_url(
+    invoice_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    _ = admin
+    invoice = _ensure_invoice_exists(db, invoice_id)
+    return InvoicePdfUrlResponse(
+        invoice_id=invoice_id,
+        pdf_url=_resolve_invoice_download_url(invoice, invoice_id=invoice_id),
+    )
+
+
 @router.get("/{invoice_id}/pdf")
 def download_invoice_pdf(
     invoice_id: int,
@@ -283,11 +315,7 @@ def download_invoice_pdf(
 ):
     """Redirect to a fresh pre-signed PDF download URL. Safe to link directly — never expires."""
     invoice = _ensure_invoice_exists(db, invoice_id)
-    if not invoice.pdf_url:
-        raise NotFoundError("invoice_not_found", resource_type="invoice_pdf", resource_id=invoice_id)
-    url = resolve_invoice_pdf_url(invoice.pdf_url)
-    if not url:
-        raise NotFoundError("invoice_not_found", resource_type="invoice_pdf", resource_id=invoice_id)
+    url = _resolve_invoice_download_url(invoice, invoice_id=invoice_id)
     return RedirectResponse(url=url, status_code=307)
 
 
