@@ -29,8 +29,12 @@ def test_upload_to_s3_sends_content_length_header(monkeypatch, tmp_path):
     pdf_path.write_bytes(payload)
 
     fake_s3 = _FakeS3Client()
+    fake_config = lambda **kwargs: SimpleNamespace()
     fake_boto3 = SimpleNamespace(client=lambda _service, **_kwargs: fake_s3)
+    fake_botocore = SimpleNamespace(config=SimpleNamespace(Config=fake_config))
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
+    monkeypatch.setitem(sys.modules, "botocore.config", fake_botocore.config)
 
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_bucket", "my-bucket")
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_endpoint_url", "https://example.compat.objectstorage.test")
@@ -47,7 +51,6 @@ def test_upload_to_s3_sends_content_length_header(monkeypatch, tmp_path):
     assert call["Key"] == "invoices/invoice-3.pdf"
     assert call["ContentType"] == "application/pdf"
     assert call["ContentLength"] == len(payload)
-    assert hasattr(call["Body"], "read")
     assert len(fake_s3.generate_presigned_url_calls) == 1
 
 
@@ -56,8 +59,12 @@ def test_upload_to_s3_uses_public_base_url_when_configured(monkeypatch, tmp_path
     pdf_path.write_bytes(b"%PDF-1.4\n")
 
     fake_s3 = _FakeS3Client()
+    fake_config = lambda **kwargs: SimpleNamespace()
     fake_boto3 = SimpleNamespace(client=lambda _service, **_kwargs: fake_s3)
+    fake_botocore = SimpleNamespace(config=SimpleNamespace(Config=fake_config))
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
+    monkeypatch.setitem(sys.modules, "botocore.config", fake_botocore.config)
 
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_bucket", "my-bucket")
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_endpoint_url", "https://example.compat.objectstorage.test")

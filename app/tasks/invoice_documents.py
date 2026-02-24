@@ -20,6 +20,7 @@ def generate_invoice_pdf(
     self,
     *,
     invoice_id: int,
+    client_id: int,
     client_name: str | None,
     client_address: str | None,
     client_phone: str,
@@ -37,6 +38,7 @@ def generate_invoice_pdf(
     """Generate and store invoice PDF, returning a public URL."""
     return generate_and_store_invoice_pdf_url(
         invoice_id=invoice_id,
+        client_id=client_id,
         client_name=client_name,
         client_address=client_address,
         client_phone=client_phone,

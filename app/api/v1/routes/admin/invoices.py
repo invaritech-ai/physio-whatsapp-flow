@@ -179,6 +179,7 @@ def _resolve_invoice_preset_value(
 def _generate_invoice_pdf_url(
     *,
     invoice_id: int,
+    client_id: int,
     client_name: str | None,
     client_address: str | None,
     client_phone: str,
@@ -195,6 +196,7 @@ def _generate_invoice_pdf_url(
 ) -> str:
     kwargs = {
         "invoice_id": invoice_id,
+        "client_id": client_id,
         "client_name": client_name,
         "client_address": client_address,
         "client_phone": client_phone,
@@ -441,6 +443,7 @@ def _generate_invoice_impl(
     try:
         invoice.pdf_url = _generate_invoice_pdf_url(
             invoice_id=invoice.id,
+            client_id=client.id,
             client_name=client.name,
             client_address=client.address,
             client_phone=client.phone_e164,

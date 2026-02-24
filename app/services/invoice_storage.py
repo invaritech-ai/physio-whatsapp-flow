@@ -48,17 +48,32 @@ def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
     if settings.invoice_s3_secret_access_key:
         client_kwargs["aws_secret_access_key"] = settings.invoice_s3_secret_access_key
 
-    s3 = boto3.client("s3", **client_kwargs)
+    from botocore.config import Config
+
+    # OCI requires SigV4 (default) — do NOT set signature_version="s3" (SigV2).
+    # boto3 >= 1.36 changed request_checksum_calculation default to "when_supported",
+    # which sends Transfer-Encoding: chunked + x-amz-sdk-checksum-algorithm on every
+    # PutObject. OCI rejects chunked uploads with MissingContentLength.
+    # "when_required" disables that for PutObject (no checksum required by the operation).
+    # addressing_style="path" is required because the OCI endpoint is namespace-scoped.
+    s3 = boto3.client(
+        "s3",
+        config=Config(
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+            s3={"addressing_style": "path"},
+        ),
+        **client_kwargs,
+    )
     object_key = _s3_object_key(invoice_id)
-    with local_pdf_path.open("rb") as pdf_file:
-        body_bytes = pdf_file.read()
-        s3.put_object(
-            Bucket=bucket,
-            Key=object_key,
-            Body=body_bytes,
-            ContentLength=len(body_bytes),
-            ContentType="application/pdf",
-        )
+    pdf_bytes = local_pdf_path.read_bytes()
+    s3.put_object(
+        Bucket=bucket,
+        Key=object_key,
+        Body=pdf_bytes,
+        ContentLength=len(pdf_bytes),
+        ContentType="application/pdf",
+    )
 
     if settings.invoice_s3_public_base_url:
         base = settings.invoice_s3_public_base_url.rstrip("/")

@@ -78,6 +78,7 @@ def _resolve_template_path() -> Path:
 def _build_template_context(
     *,
     invoice_id: int,
+    client_id: int,
     client_name: str | None,
     client_address: str | None,
     client_phone: str,
@@ -111,9 +112,9 @@ def _build_template_context(
         "item_datetime_line": _latex_escape(session_at),
         "item_description": _latex_escape(description),
         "provider_line": _latex_escape(provider_line),
-        "invoice_number": _latex_escape(f"{invoice_id}-P01"),
-        "diagnosis_line": _latex_escape(diagnosis or "-"),
-        "special_notes_line": _latex_escape(special_notes or "-"),
+        "invoice_number": _latex_escape(f"{invoice_id}-P{client_id:02d}"),
+        "diagnosis_line": _latex_escape(diagnosis or ""),
+        "special_notes_line": _latex_escape(special_notes or ""),
         "amount_display": _latex_escape(_currency_amount(amount_cents)),
         "payment_datetime_method": _latex_escape(f"{payment_at} {payment_label}"),
         "payment_payer_name": _latex_escape(payer_name),
@@ -165,6 +166,7 @@ def _compile_latex(tex_file: Path, output_dir: Path) -> Path:
 def write_latex_invoice_pdf_file(
     *,
     invoice_id: int,
+    client_id: int,
     client_name: str | None,
     client_address: str | None,
     client_phone: str,
@@ -184,6 +186,7 @@ def write_latex_invoice_pdf_file(
 
     context = _build_template_context(
         invoice_id=invoice_id,
+        client_id=client_id,
         client_name=client_name,
         client_address=client_address,
         client_phone=client_phone,

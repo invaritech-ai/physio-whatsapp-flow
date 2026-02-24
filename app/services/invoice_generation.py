@@ -12,6 +12,7 @@ from app.services.invoice_storage import store_invoice_pdf
 def _render_invoice_pdf_file(
     *,
     invoice_id: int,
+    client_id: int,
     client_name: str | None,
     client_address: str | None,
     client_phone: str,
@@ -31,6 +32,7 @@ def _render_invoice_pdf_file(
         try:
             return write_latex_invoice_pdf_file(
                 invoice_id=invoice_id,
+                client_id=client_id,
                 client_name=client_name,
                 client_address=client_address,
                 client_phone=client_phone,
@@ -69,6 +71,7 @@ def _render_invoice_pdf_file(
 def generate_and_store_invoice_pdf_url(
     *,
     invoice_id: int,
+    client_id: int,
     client_name: str | None,
     client_address: str | None,
     client_phone: str,
@@ -85,6 +88,7 @@ def generate_and_store_invoice_pdf_url(
 ) -> str:
     pdf_path = _render_invoice_pdf_file(
         invoice_id=invoice_id,
+        client_id=client_id,
         client_name=client_name,
         client_address=client_address,
         client_phone=client_phone,
