@@ -91,6 +91,7 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
         display_name=therapist.display_name,
         license_number=therapist.license_number,
         is_active=therapist.is_active,
+        is_female=therapist.is_female,
         calendly_user_uri=therapist.calendly_user_uri,
         specialties=[],
         created_at=therapist.created_at,
@@ -157,6 +158,7 @@ def get_therapist(therapist_id: int, admin: User = Depends(get_current_admin), d
         display_name=therapist.display_name,
         license_number=therapist.license_number,
         is_active=therapist.is_active,
+        is_female=therapist.is_female,
         calendly_user_uri=therapist.calendly_user_uri,
         specialties=[
             SpecialtyResponse(
@@ -190,6 +192,8 @@ def update_therapist(
         therapist.license_number = normalized_license
     if data.is_active is not None:
         therapist.is_active = data.is_active
+    if data.is_female is not None:
+        therapist.is_female = data.is_female
     if data.calendly_user_uri is not None:
         therapist.calendly_user_uri = data.calendly_user_uri
 

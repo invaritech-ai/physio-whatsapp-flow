@@ -61,6 +61,7 @@ def match_therapist(
     preferred_days: list[int] | None,
     preferred_therapist_id: int | None = None,
     exclude_therapist_id: int | None = None,
+    prefer_female: bool = False,
 ) -> MatchResult | None:
     """
     Run 4-factor scoring engine with fallback cascade.
@@ -76,6 +77,10 @@ def match_therapist(
             .order_by(Therapist.id)
         ).all()
     )
+
+    # Hard-filter to female therapists when client requested Women's Health / female match
+    if prefer_female:
+        therapists = [t for t in therapists if t.is_female]
 
     # Remove excluded therapist (e.g. "different therapist" flow)
     if exclude_therapist_id is not None:
@@ -336,9 +341,9 @@ def _bucket_for_local_time(local_start: datetime) -> str | None:
     hour = local_start.hour
     if weekday >= 5:
         return TIME_BAND_WEEKEND
-    if 9 <= hour < 17:
+    if 9 <= hour < 18:
         return TIME_BAND_WEEKDAY_DAY
-    if hour >= 17:
+    if hour >= 18:
         return TIME_BAND_WEEKDAY_EVENING
     return None
 

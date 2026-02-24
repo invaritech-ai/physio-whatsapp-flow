@@ -13,6 +13,6 @@ AWAITING_MATCH_CONFIRM = "AWAITING_MATCH_CONFIRM"
 AWAITING_DAYS = "AWAITING_DAYS"
 
 # Time band constants
-TIME_BAND_WEEKDAY_DAY = "weekday_day"  # 09:00-17:00
-TIME_BAND_WEEKDAY_EVENING = "weekday_evening"  # 17:00+
+TIME_BAND_WEEKDAY_DAY = "weekday_day"  # 09:00-18:00
+TIME_BAND_WEEKDAY_EVENING = "weekday_evening"  # 18:00+
 TIME_BAND_WEEKEND = "weekend"  # Saturday/Sunday

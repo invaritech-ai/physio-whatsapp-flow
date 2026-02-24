@@ -54,8 +54,8 @@ def build_duration_menu(name: str) -> str:
     return (
         f"Thanks, {name}! 😊\n\n"
         "How long would you like your session to be?\n\n"
-        "1️⃣ 30 minutes\n"
-        "2️⃣ 45 minutes\n"
+        "1️⃣ 45 minutes - Standard Appointment\n"
+        "2️⃣ 30 minutes\n"
         "Please reply with 1 or 2. `Menu` to go back to main menu."
     )
 
@@ -87,8 +87,8 @@ def build_time_band_menu() -> str:
     """Build menu for time preference selection."""
     return (
         "When would you prefer your appointment?\n\n"
-        "1️⃣ Weekday day session (9:00 AM - 5:00 PM)\n"
-        "2️⃣ Weekday evening session (5:00 PM onwards)\n"
+        "1️⃣ Weekday day session (9:00 AM - 6:00 PM)\n"
+        "2️⃣ Weekday evening session (6:00 PM onwards)\n"
         "3️⃣ Weekend session\n\n"
         "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
     )
@@ -115,8 +115,8 @@ def build_match_confirmation_menu(
     """Build menu showing matched therapist and asking for confirmation."""
     # Build time band string
     time_map = {
-        "weekday_day": "Weekday day (9 AM-5 PM)",
-        "weekday_evening": "Weekday evening (5 PM onwards)",
+        "weekday_day": "Weekday day (9 AM-6 PM)",
+        "weekday_evening": "Weekday evening (6 PM onwards)",
         "weekend": "Weekend",
     }
     time_str = time_map.get(time_band, time_band)

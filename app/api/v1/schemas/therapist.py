@@ -35,6 +35,7 @@ class TherapistUpdate(BaseModel):
     display_name: str | None = Field(None, min_length=1, max_length=100)
     license_number: str | None = Field(default=None, min_length=3, max_length=64)
     is_active: bool | None = None
+    is_female: bool | None = None
     calendly_user_uri: str | None = None
 
 
@@ -54,6 +55,7 @@ class TherapistResponse(BaseModel):
     display_name: str | None
     license_number: str | None
     is_active: bool
+    is_female: bool
     calendly_user_uri: str | None
     specialties: list[SpecialtyResponse]
     created_at: datetime

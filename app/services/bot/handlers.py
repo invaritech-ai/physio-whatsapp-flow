@@ -176,6 +176,7 @@ def _run_matching_and_build_confirmation(client, db: Session) -> tuple[str, str]
             preferred_days=conv_data.get("days"),
             preferred_therapist_id=client.preferred_therapist_id,
             exclude_therapist_id=conv_data.get("exclude_therapist_id"),
+            prefer_female=conv_data.get("prefer_female", False),
         )
         if result is None:
             reset_conversation(client, db)
@@ -425,7 +426,7 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
             menus.build_invalid_input_message(["1", "2"]),
         )
 
-    duration_map = {1: 30, 2: 45}
+    duration_map = {1: 45, 2: 30}
     duration = duration_map[choice]
     conv_data = update_conversation_data(client, duration=duration)
     db.add(client)
@@ -457,7 +458,7 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
         if not event_type:
             return (
                 states.AWAITING_DURATION,
-                "This therapist does not currently offer that duration. Please reply 1 (30m) or 2 (45m).",
+                "This therapist does not currently offer that duration. Please reply 1 (45m) or 2 (30m).",
             )
 
         return _direct_booking_completion(
@@ -515,10 +516,13 @@ def handle_awaiting_specialty(client, body: str, db: Session) -> tuple[str, str]
 
     if choice == no_pref_choice:
         specialty_id = None
+        prefer_female = False
     else:
-        specialty_id = specialty_list[choice - 1].id
+        selected_specialty = specialty_list[choice - 1]
+        specialty_id = selected_specialty.id
+        prefer_female = "women" in (selected_specialty.name or "").lower()
 
-    update_conversation_data(client, specialty_id=specialty_id)
+    update_conversation_data(client, specialty_id=specialty_id, prefer_female=prefer_female)
     db.add(client)
     db.commit()
     return (states.AWAITING_TIME_BAND, menus.build_time_band_menu())
