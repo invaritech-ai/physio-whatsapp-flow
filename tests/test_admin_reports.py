@@ -8,9 +8,7 @@ from unittest.mock import patch
 from sqlmodel import Session
 
 from app.models import (
-    BillingPlan,
     Client,
-    ClientPlanAssignment,
     Session as TherapySession,
     Therapist,
     User,
@@ -217,7 +215,7 @@ def test_admin_reports_utilization_pagination_and_filter(client, db_session: Ses
     assert item["utilized_minutes"] == 90
 
 
-def test_admin_reports_payroll_uses_charge_and_plan_fallback(client, db_session: Session):
+def test_admin_reports_payroll_estimate_is_zero_for_now(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, "pay")
     client_row = _create_client(db_session, "+85296660003", "Payroll Client")
@@ -225,28 +223,7 @@ def test_admin_reports_payroll_uses_charge_and_plan_fallback(client, db_session:
     period_from = now - timedelta(days=1)
     period_to = now + timedelta(days=1)
 
-    plan = BillingPlan(
-        name="Plan 45",
-        duration_minutes=45,
-        amount_cents=100000,
-        currency="HKD",
-        is_active=True,
-    )
-    db_session.add(plan)
-    db_session.commit()
-    db_session.refresh(plan)
-    db_session.add(
-        ClientPlanAssignment(
-            client_id=client_row.id,
-            duration_minutes=45,
-            billing_plan_id=plan.id,
-            assigned_by_user_id=admin.id,
-            is_active=True,
-        )
-    )
-    db_session.commit()
-
-    # Fallback to plan amount (charge is null)
+    # Completed session with null explicit charge.
     _create_session(
         db_session,
         client_id=client_row.id,
@@ -256,7 +233,7 @@ def test_admin_reports_payroll_uses_charge_and_plan_fallback(client, db_session:
         status="completed",
         charge_amount_cents=None,
     )
-    # Use explicit charge amount
+    # Completed session with explicit charge.
     _create_session(
         db_session,
         client_id=client_row.id,
@@ -295,7 +272,7 @@ def test_admin_reports_payroll_uses_charge_and_plan_fallback(client, db_session:
     assert item["therapist_id"] == therapist.id
     assert item["completed_sessions"] == 2
     assert item["payable_minutes"] == 90
-    assert item["estimated_payable_cents"] == 220000
+    assert item["estimated_payable_cents"] == 0
     assert item["currency"] == "HKD"
 
 

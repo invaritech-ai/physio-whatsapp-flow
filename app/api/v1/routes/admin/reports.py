@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, func
+from sqlalchemy import case, func
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.reports import (
@@ -17,7 +17,7 @@ from app.api.v1.schemas.reports import (
 from app.core.auth import get_current_admin
 from app.core.config import settings
 from app.db.session import get_session
-from app.models import BillingPlan, ClientPlanAssignment, Session as TherapySession, Therapist, User
+from app.models import Session as TherapySession, Therapist, User
 
 router = APIRouter(prefix="/admin/reports", tags=["Admin - Reports"])
 
@@ -122,33 +122,9 @@ def list_therapist_payroll_summary(
                     else_=0,
                 )
             ),
-            func.sum(
-                case(
-                    (
-                        TherapySession.status == "completed",
-                        func.coalesce(TherapySession.charge_amount_cents, BillingPlan.amount_cents, 0),
-                    ),
-                    else_=0,
-                )
-            ),
         )
         .select_from(TherapySession)
         .join(Therapist, Therapist.id == TherapySession.therapist_id)
-        .outerjoin(
-            ClientPlanAssignment,
-            and_(
-                ClientPlanAssignment.client_id == TherapySession.client_id,
-                ClientPlanAssignment.duration_minutes == TherapySession.duration_minutes,
-                ClientPlanAssignment.is_active == True,  # noqa: E712
-            ),
-        )
-        .outerjoin(
-            BillingPlan,
-            and_(
-                BillingPlan.id == ClientPlanAssignment.billing_plan_id,
-                BillingPlan.is_active == True,  # noqa: E712
-            ),
-        )
         .where(
             TherapySession.start_time >= period_from,
             TherapySession.start_time <= period_to,
@@ -166,7 +142,8 @@ def list_therapist_payroll_summary(
             therapist_name=row[1] or f"Therapist #{row[0]}",
             completed_sessions=int(row[2] or 0),
             payable_minutes=int(row[3] or 0),
-            estimated_payable_cents=int(row[4] or 0),
+            # Phase 2 will introduce therapist hourly-rate based payroll math.
+            estimated_payable_cents=0,
             currency=settings.default_currency,
             period_start=period_from,
             period_end=period_to,
