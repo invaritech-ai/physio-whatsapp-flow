@@ -26,4 +26,5 @@ dependencies = [
 dev = [
     "pytest",
     "httpx",
+    "ruff>=0.15.2",
 ]

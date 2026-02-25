@@ -3,25 +3,31 @@
 from app.models import TherapistSpecialty
 
 
-def build_main_menu(client_name: str | None, therapist_name: str | None) -> str:
+def build_main_menu(
+    client_name: str | None,
+    therapist_name: str | None,
+    can_manage_booking: bool = True,
+) -> str:
     """Build main menu based on client type."""
     if client_name and therapist_name:
+        manage_line = "4️⃣ Reschedule or cancel\n" if can_manage_booking else ""
         return (
             f"Welcome back, {client_name}! 👋\n\n"
             "How can we help you today?\n\n"
             f"1️⃣ Book again with {therapist_name}\n"
             "2️⃣ Smart match (different therapist)\n"
             "3️⃣ Book therapist by name\n"
-            "4️⃣ Reschedule or cancel\n\n"
+            f"{manage_line}\n"
             "Reply with a number, or type 'book' anytime."
         )
     elif client_name:
+        manage_line = "3️⃣ Reschedule or cancel\n" if can_manage_booking else ""
         return (
             f"Welcome back, {client_name}! 👋\n\n"
             "How can we help you today?\n\n"
             "1️⃣ Smart match (recommended)\n"
             "2️⃣ Book therapist by name\n"
-            "3️⃣ Reschedule or cancel\n\n"
+            f"{manage_line}\n"
             "Reply with a number, or type 'book' anytime."
         )
     else:
@@ -37,15 +43,17 @@ def build_welcome_menu() -> str:
     )
 
 
-def build_booking_path_menu(name: str) -> str:
+def build_booking_path_menu(name: str, can_manage_booking: bool = True) -> str:
     """Build booking-path menu for clients without a preferred therapist shortcut."""
+    manage_line = "3️⃣ Reschedule or cancel\n\n" if can_manage_booking else ""
+    valid_values = "1, 2, or 3" if can_manage_booking else "1 or 2"
     return (
         f"Thanks, {name}! 😊\n\n"
         "How would you like to book?\n\n"
         "1️⃣ Smart match (recommended)\n"
         "2️⃣ Book therapist by name\n"
-        "3️⃣ Reschedule or cancel\n\n"
-        "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
+        f"{manage_line}"
+        f"Please reply with {valid_values}. `Menu` to go back to main menu."
     )
 
 
@@ -62,18 +70,18 @@ def build_duration_menu(name: str) -> str:
 
 def build_specialty_menu(specialties: list[TherapistSpecialty]) -> str:
     """Build menu for specialty selection from active specialties."""
-    if not specialties:
-        return "Sorry, no specialties are currently available. Please try again later."
+    lines = [
+        "Are you looking for:\n",
+        "1️⃣ Female Physiotherapist / Women's Health Physiotherapist",
+    ]
 
-    lines = ["What type of physiotherapy do you need?\n"]
-
-    for idx, specialty in enumerate(specialties, 1):
+    for idx, specialty in enumerate(specialties, 2):
         emoji = _get_specialty_emoji(idx)
         lines.append(f"{emoji} {specialty.name}")
         if specialty.description:
             lines.append(f"   {specialty.description}")
 
-    no_pref_idx = len(specialties) + 1
+    no_pref_idx = len(specialties) + 2
     lines.append(f"{_get_specialty_emoji(no_pref_idx)} No special request")
 
     lines.append(
@@ -122,7 +130,7 @@ def build_match_confirmation_menu(
     time_str = time_map.get(time_band, time_band)
     specialty_str = specialty or "No special request"
 
-    message = f"Great! We've found a therapist for you:\n\n"
+    message = "Great! We've found a therapist for you:\n\n"
     message += f"👨‍⚕️ Therapist: {therapist_name}\n"
     message += f"📋 Specialty: {specialty_str}\n"
     message += f"⏱️ Duration: {duration} minutes\n"
@@ -198,6 +206,34 @@ def build_therapist_pick_menu(therapists: list[tuple[int, str]]) -> str:
 
     lines.append(
         f"\nPlease reply with a number (1-{len(therapists)}). `Menu` to go back to main menu."
+    )
+    return "\n".join(lines)
+
+
+def build_by_name_available_duration_menu(
+    therapist_name: str,
+    duration_options_minutes: list[int],
+) -> str:
+    """Build menu for durations available for a selected therapist."""
+    if not duration_options_minutes:
+        return (
+            f"Sorry, {therapist_name} does not currently have bookable durations.\n\n"
+            "Please type 'menu' to restart."
+        )
+
+    lines = [
+        f"{therapist_name} does not offer your previous duration choice right now.",
+        "",
+        "Please choose one of the available durations:",
+        "",
+    ]
+    for idx, duration in enumerate(duration_options_minutes, 1):
+        label = "45 minutes - Standard Appointment" if duration == 45 else f"{duration} minutes"
+        lines.append(f"{_get_specialty_emoji(idx)} {label}")
+
+    lines.append("")
+    lines.append(
+        f"Please reply with a number (1-{len(duration_options_minutes)}). `Menu` to go back to main menu."
     )
     return "\n".join(lines)
 

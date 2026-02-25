@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 from sqlmodel import select
 
 from app.models import Client, MessageLog, Therapist, User
@@ -17,7 +16,7 @@ class TestNewClientFlow:
         self, db_session, sample_specialties, sample_therapist, mock_send_whatsapp
     ):
         """Test full conversation flow from greeting to booking link."""
-        # Message 1: Initial greeting → main menu (asks for name)
+        # Message 1: Initial greeting -> explicit name collection
         form_data = {
             "From": "whatsapp:+85212345678",
             "Body": "Hi",
@@ -27,14 +26,14 @@ class TestNewClientFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.IDLE
+        assert result["next_state"] == states.AWAITING_NAME
 
         # Verify client created
         client = db_session.exec(
             select(Client).where(Client.phone_e164 == "+85212345678")
         ).first()
         assert client is not None
-        assert client.conversation_state == states.IDLE
+        assert client.conversation_state == states.AWAITING_NAME
 
         # Message 2: Provide name → proceeds to booking-path selection
         form_data["Body"] = "John Smith"
@@ -54,7 +53,7 @@ class TestNewClientFlow:
         assert result["status"] == "success"
         assert result["next_state"] == states.AWAITING_DURATION
 
-        # Message 4: Select duration (30 min)
+        # Message 4: Select duration (45 min standard)
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM004"
         result = process_message(form_data, db_session)
@@ -62,8 +61,8 @@ class TestNewClientFlow:
         assert result["status"] == "success"
         assert result["next_state"] == states.AWAITING_SPECIALTY
 
-        # Message 5: Select specialty (first one)
-        form_data["Body"] = "1"
+        # Message 5: Select first dynamic specialty (option 2; option 1 is female-only filter)
+        form_data["Body"] = "2"
         form_data["MessageSid"] = "SM005"
         result = process_message(form_data, db_session)
 

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import logging
 
 from sqlmodel import Session, select
+from sqlmodel import func
 
 from app.core.encryption import decrypt_string
 from app.models import Session as TherapySession
@@ -78,3 +79,17 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
         )
 
     return result
+
+
+def has_upcoming_sessions(db: Session, client_id: int | None) -> bool:
+    """Return True when client has at least one scheduled future session."""
+    if client_id is None:
+        return False
+
+    now = datetime.now(timezone.utc)
+    count_stmt = select(func.count(TherapySession.id)).where(
+        TherapySession.client_id == client_id,
+        TherapySession.start_time > now,
+        TherapySession.status == "scheduled",
+    )
+    return bool(db.exec(count_stmt).one())

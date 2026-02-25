@@ -1,13 +1,21 @@
 """Unit tests for bot state handlers."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
-import pytest
 
-from app.models import Client, Therapist, TherapistSpecialty, User
+from app.models import (
+    Client,
+    Session as TherapySession,
+    Therapist,
+    TherapistEventType,
+    TherapistSpecialty,
+    User,
+)
 from app.services.bot import states
 from app.services.bot.handlers import (
     check_global_keywords,
+    handle_awaiting_by_name_duration_options,
     handle_awaiting_days,
     handle_awaiting_duration,
     handle_awaiting_match_confirm,
@@ -23,19 +31,20 @@ from app.services.bot.helpers import update_conversation_data
 class TestHandleIdle:
     """Tests for handle_idle — processes main menu numbered choices."""
 
-    def test_new_client_valid_name_saves_and_proceeds(self, db_session):
-        """New client input is treated as name — valid name proceeds to booking path."""
+    def test_new_client_requires_explicit_name_step(self, db_session):
+        """Unnamed client should be routed to explicit name prompt first."""
         client = Client(phone_e164="+85212345678", conversation_state=states.IDLE)
         db_session.add(client)
         db_session.commit()
 
         next_state, response = handle_idle(client, "john smith", db_session)
 
-        assert next_state == states.AWAITING_BOOKING_PATH
-        assert client.name == "John Smith"
+        assert next_state == states.AWAITING_NAME
+        assert client.name is None
+        assert "official name" in response.lower()
 
     def test_new_client_invalid_name_stays_for_name(self, db_session):
-        """New client input is treated as name — invalid name re-prompts."""
+        """Unnamed client message keeps them in explicit name collection."""
         client = Client(phone_e164="+85212345678", conversation_state=states.IDLE)
         db_session.add(client)
         db_session.commit()
@@ -44,6 +53,21 @@ class TestHandleIdle:
 
         assert next_state == states.AWAITING_NAME
         assert "name" in response.lower()
+
+    def test_manage_option_hidden_without_upcoming_sessions(self, db_session):
+        """Returning client with no upcoming sessions should not see manage option in menu."""
+        client = Client(
+            phone_e164="+85212345670",
+            name="John",
+            conversation_state=states.IDLE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_idle(client, "9", db_session)
+
+        assert next_state == states.IDLE
+        assert "reschedule or cancel" not in response.lower()
 
     def test_returning_client_choice_1_books_session(self, db_session):
         """Returning client (no preferred therapist) choice 1 starts booking."""
@@ -179,6 +203,19 @@ class TestHandleIdle:
         )
         db_session.add(client)
         db_session.commit()
+        db_session.refresh(client)
+
+        upcoming = TherapySession(
+            client_id=client.id,
+            therapist_id=sample_therapist.id,
+            start_time=datetime.now(timezone.utc) + timedelta(days=2),
+            end_time=datetime.now(timezone.utc) + timedelta(days=2, minutes=45),
+            duration_minutes=45,
+            source="manual",
+            status="scheduled",
+        )
+        db_session.add(upcoming)
+        db_session.commit()
 
         next_state, response = handle_idle(client, "4", db_session)
 
@@ -251,10 +288,10 @@ class TestHandleAwaitingName:
 class TestHandleAwaitingDuration:
     """Tests for handle_awaiting_duration function."""
 
-    def test_valid_duration_choice_1_saves_30min(
+    def test_valid_duration_choice_1_saves_45min(
         self, db_session, sample_specialties
     ):
-        """Choice 1 should save 30 minutes."""
+        """Choice 1 should save 45 minutes."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -267,12 +304,12 @@ class TestHandleAwaitingDuration:
 
         assert next_state == states.AWAITING_SPECIALTY
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("duration") == 30
+        assert conv_data.get("duration") == 45
 
-    def test_valid_duration_choice_2_saves_45min(
+    def test_valid_duration_choice_2_saves_30min(
         self, db_session, sample_specialties
     ):
-        """Choice 2 should save 45 minutes."""
+        """Choice 2 should save 30 minutes."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
@@ -285,7 +322,7 @@ class TestHandleAwaitingDuration:
 
         assert next_state == states.AWAITING_SPECIALTY
         conv_data = json.loads(client.conversation_data or "{}")
-        assert conv_data.get("duration") == 45
+        assert conv_data.get("duration") == 30
 
     def test_multiple_duration_numbers_rejects(
         self, db_session, sample_specialties
@@ -319,6 +356,103 @@ class TestHandleAwaitingDuration:
         assert next_state == states.AWAITING_DURATION
         assert "1" in response and "2" in response
 
+    def test_by_name_unavailable_duration_shows_available_options(self, db_session):
+        """By-name flow should switch to duration-options state when selected duration is unavailable."""
+        user = User(
+            neon_auth_sub="auth-by-name-duration",
+            email="by-name-duration@test.com",
+            display_name="Dr. Duration",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+        therapist = Therapist(user_id=user.id, display_name="Dr. Duration", is_active=True)
+        db_session.add(therapist)
+        db_session.commit()
+        db_session.refresh(therapist)
+
+        event_type = TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri="https://api.calendly.com/event_types/duration-30",
+            duration_minutes=30,
+            scheduling_url="https://calendly.com/dr-duration/30min",
+            is_active=True,
+        )
+        db_session.add(event_type)
+        db_session.commit()
+
+        client = Client(
+            phone_e164="+85212345679",
+            name="John",
+            conversation_state=states.AWAITING_DURATION,
+        )
+        update_conversation_data(
+            client,
+            book_by_name=True,
+            selected_therapist_id=therapist.id,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_duration(client, "1", db_session)
+
+        assert next_state == states.AWAITING_BY_NAME_DURATION_OPTIONS
+        assert "available durations" in response.lower()
+        conv_data = json.loads(client.conversation_data or "{}")
+        options = conv_data.get("by_name_duration_options")
+        assert isinstance(options, list)
+        assert len(options) == 1
+        assert options[0]["duration_minutes"] == 30
+
+    def test_by_name_duration_option_choice_completes_booking(self, db_session, mock_send_whatsapp):
+        """Selecting an available by-name fallback duration should complete booking and reset state."""
+        user = User(
+            neon_auth_sub="auth-by-name-complete",
+            email="by-name-complete@test.com",
+            display_name="Dr. Complete",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+        therapist = Therapist(user_id=user.id, display_name="Dr. Complete", is_active=True)
+        db_session.add(therapist)
+        db_session.commit()
+        db_session.refresh(therapist)
+
+        client = Client(
+            phone_e164="+85212345668",
+            name="John",
+            conversation_state=states.AWAITING_BY_NAME_DURATION_OPTIONS,
+            conversation_data=json.dumps(
+                {
+                    "book_by_name": True,
+                    "selected_therapist_id": therapist.id,
+                    "by_name_duration_therapist_id": therapist.id,
+                    "by_name_duration_options": [
+                        {
+                            "duration_minutes": 30,
+                            "scheduling_url": "https://calendly.com/dr-complete/30min",
+                        }
+                    ],
+                }
+            ),
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, _ = handle_awaiting_by_name_duration_options(client, "1", db_session)
+
+        assert next_state == states.IDLE
+        db_session.refresh(client)
+        assert client.conversation_data is None
+        assert client.preferred_therapist_id == therapist.id
+
 
 class TestHandleAwaitingSpecialty:
     """Tests for handle_awaiting_specialty function."""
@@ -334,13 +468,33 @@ class TestHandleAwaitingSpecialty:
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_awaiting_specialty(client, "1", db_session)
+        next_state, response = handle_awaiting_specialty(client, "2", db_session)
 
         assert next_state == states.AWAITING_TIME_BAND
         conv_data = json.loads(client.conversation_data or "{}")
-        # Choice 1 should be the first specialty alphabetically
+        # Choice 2 should be the first specialty alphabetically.
+        # Choice 1 is dedicated female/women's health.
         sorted_specialties = sorted(sample_specialties, key=lambda s: s.name)
         assert conv_data.get("specialty_id") == sorted_specialties[0].id
+        assert conv_data.get("prefer_female") is False
+
+    def test_female_option_sets_prefer_female(self, db_session, sample_specialties):
+        """Dedicated female option should set prefer_female=True with no specialty_id."""
+        client = Client(
+            phone_e164="+85212345677",
+            name="John",
+            conversation_state=states.AWAITING_SPECIALTY,
+        )
+        update_conversation_data(client, duration=45)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, _ = handle_awaiting_specialty(client, "1", db_session)
+
+        assert next_state == states.AWAITING_TIME_BAND
+        conv_data = json.loads(client.conversation_data or "{}")
+        assert conv_data.get("prefer_female") is True
+        assert conv_data.get("specialty_id") is None
 
     def test_invalid_specialty_choice_rejects(self, db_session, sample_specialties):
         """Invalid choice should be rejected."""
@@ -827,7 +981,7 @@ class TestNoSpecialtiesAvailable:
     """Tests for edge case when no active specialties exist."""
 
     def test_duration_handler_resets_when_no_specialties(self, db_session):
-        """Duration handler should reset to IDLE when no specialties exist."""
+        """Duration handler should still proceed to specialty step (female/no request options)."""
         # No specialties seeded
         client = Client(
             phone_e164="+85212345678",
@@ -839,7 +993,9 @@ class TestNoSpecialtiesAvailable:
 
         next_state, response = handle_awaiting_duration(client, "1", db_session)
 
-        assert next_state == states.AWAITING_TIME_BAND
+        assert next_state == states.AWAITING_SPECIALTY
+        assert "female physiotherapist" in response.lower()
+        assert "no special request" in response.lower()
 
     def test_specialty_handler_resets_when_no_specialties(self, db_session):
         """Specialty handler should reset to IDLE when no specialties exist."""
@@ -914,8 +1070,8 @@ class TestSpecialtyOrderingConsistency:
         assert "Orthopedic" in menu_text
         assert "Sports Rehab" in menu_text
 
-        # Choose option 1 (should be Neurological, first alphabetically)
-        next_state, response = handle_awaiting_specialty(client, "1", db_session)
+        # Choose option 2 (option 1 is dedicated female/women's health).
+        next_state, response = handle_awaiting_specialty(client, "2", db_session)
         assert next_state == states.AWAITING_TIME_BAND
 
         # Verify correct specialty was saved

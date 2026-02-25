@@ -25,6 +25,8 @@ from app.services.matching import match_therapist
 
 logger = logging.getLogger(__name__)
 GREETING_KEYWORDS = {"hi", "hello", "hey", "menu", "reset", "start"}
+FEMALE_SPECIALTY_KEYWORDS = ("women", "female")
+SUPPORTED_BOOKING_DURATIONS = (45, 30)
 
 
 def _extract_name(body: str) -> str:
@@ -75,6 +77,29 @@ def _list_active_therapists(db: Session) -> list[Therapist]:
             .order_by(Therapist.display_name.asc(), Therapist.id.asc())
         ).all()
     )
+
+
+def _can_manage_booking(client, db: Session) -> bool:
+    """Return True if client has at least one upcoming scheduled session."""
+    if not client.id:
+        return False
+    from app.services.bot.reschedule import has_upcoming_sessions
+
+    return has_upcoming_sessions(db, client.id)
+
+
+def _list_visible_specialties(db: Session) -> list[TherapistSpecialty]:
+    """Return active specialties excluding women/female labels (covered by dedicated option)."""
+    specialties = db.exec(
+        select(TherapistSpecialty)
+        .where(TherapistSpecialty.is_active == True)  # noqa: E712
+        .order_by(TherapistSpecialty.name)
+    ).all()
+    return [
+        specialty
+        for specialty in specialties
+        if not any(keyword in (specialty.name or "").lower() for keyword in FEMALE_SPECIALTY_KEYWORDS)
+    ]
 
 
 def _schedule_booking_link_followups(
@@ -225,15 +250,22 @@ def check_global_keywords(
 
     if body_stripped in GREETING_KEYWORDS:
         client.conversation_data = None
+        if not client.name:
+            return (states.AWAITING_NAME, menus.build_welcome_menu())
         therapist_name = _get_preferred_therapist_name(client, db)
-        return (states.IDLE, menus.build_main_menu(client.name, therapist_name))
+        can_manage_booking = _can_manage_booking(client, db)
+        return (
+            states.IDLE,
+            menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking),
+        )
 
     if body_stripped == "book":
         client.conversation_data = None
         if client.name:
+            can_manage_booking = _can_manage_booking(client, db)
             return (
                 states.AWAITING_BOOKING_PATH,
-                menus.build_booking_path_menu(client.name),
+                menus.build_booking_path_menu(client.name, can_manage_booking=can_manage_booking),
             )
         return (states.AWAITING_NAME, menus.build_welcome_menu())
 
@@ -255,9 +287,11 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
     """
     has_preferred = bool(client.name and client.preferred_therapist_id)
     has_name = bool(client.name)
+    can_manage_booking = _can_manage_booking(client, db) if has_name else False
 
     if has_preferred:
-        choice = validate_numbered_choice(body, [1, 2, 3, 4])
+        valid_choices = [1, 2, 3, 4] if can_manage_booking else [1, 2, 3]
+        choice = validate_numbered_choice(body, valid_choices)
         if choice == 1:
             update_conversation_data(
                 client,
@@ -291,10 +325,11 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             db.add(client)
             db.commit()
             return (states.AWAITING_THERAPIST_PICK, menus.build_therapist_pick_menu(options))
-        if choice == 4:
+        if choice == 4 and can_manage_booking:
             return handle_reschedule_request(client, body, db)
     elif has_name:
-        choice = validate_numbered_choice(body, [1, 2, 3])
+        valid_choices = [1, 2, 3] if can_manage_booking else [1, 2]
+        choice = validate_numbered_choice(body, valid_choices)
         if choice == 1:
             update_conversation_data(client, book_by_name=False, rebooking=False)
             db.add(client)
@@ -313,22 +348,27 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             db.add(client)
             db.commit()
             return (states.AWAITING_THERAPIST_PICK, menus.build_therapist_pick_menu(options))
-        if choice == 3:
+        if choice == 3 and can_manage_booking:
             return handle_reschedule_request(client, body, db)
     else:
-        return handle_awaiting_name(client, body, db)
+        return (states.AWAITING_NAME, menus.build_welcome_menu())
 
     therapist_name = _get_preferred_therapist_name(client, db)
-    return (states.IDLE, menus.build_main_menu(client.name, therapist_name))
+    return (
+        states.IDLE,
+        menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking),
+    )
 
 
 def handle_awaiting_booking_path(client, body: str, db: Session) -> tuple[str, str]:
     """Handle booking-path choice after collecting official name."""
-    choice = validate_numbered_choice(body, [1, 2, 3])
+    can_manage_booking = _can_manage_booking(client, db)
+    valid_choices = [1, 2, 3] if can_manage_booking else [1, 2]
+    choice = validate_numbered_choice(body, valid_choices)
     if choice is None:
         return (
             states.AWAITING_BOOKING_PATH,
-            menus.build_invalid_input_message(["1", "2", "3"]),
+            menus.build_invalid_input_message([str(choice) for choice in valid_choices]),
         )
 
     if choice == 1:
@@ -351,7 +391,13 @@ def handle_awaiting_booking_path(client, body: str, db: Session) -> tuple[str, s
         db.commit()
         return (states.AWAITING_THERAPIST_PICK, menus.build_therapist_pick_menu(options))
 
-    return handle_reschedule_request(client, body, db)
+    if can_manage_booking and choice == 3:
+        return handle_reschedule_request(client, body, db)
+
+    return (
+        states.AWAITING_BOOKING_PATH,
+        menus.build_invalid_input_message([str(choice) for choice in valid_choices]),
+    )
 
 
 def handle_awaiting_name(client, body: str, db: Session) -> tuple[str, str]:
@@ -376,7 +422,11 @@ def handle_awaiting_name(client, body: str, db: Session) -> tuple[str, str]:
     client.name = name
     db.add(client)
     db.commit()
-    return (states.AWAITING_BOOKING_PATH, menus.build_booking_path_menu(name))
+    can_manage_booking = _can_manage_booking(client, db)
+    return (
+        states.AWAITING_BOOKING_PATH,
+        menus.build_booking_path_menu(name, can_manage_booking=can_manage_booking),
+    )
 
 
 def handle_awaiting_therapist_pick(client, body: str, db: Session) -> tuple[str, str]:
@@ -416,7 +466,7 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
     """
     Handle AWAITING_DURATION state - validate and save session duration.
 
-    Valid choices: 1 (30min), 2 (45min)
+    Valid choices: 1 (45min), 2 (30min)
     """
     choice = validate_numbered_choice(body, [1, 2])
 
@@ -456,9 +506,44 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
             )
         ).first()
         if not event_type:
+            event_types = list(
+                db.exec(
+                    select(TherapistEventType)
+                    .where(
+                        TherapistEventType.therapist_id == therapist.id,
+                        TherapistEventType.duration_minutes.in_(SUPPORTED_BOOKING_DURATIONS),  # type: ignore[arg-type]
+                        TherapistEventType.is_active == True,  # noqa: E712
+                    )
+                    .order_by(TherapistEventType.duration_minutes.desc(), TherapistEventType.id.asc())
+                ).all()
+            )
+            duration_option_map: dict[int, str] = {}
+            for candidate in event_types:
+                if candidate.duration_minutes not in duration_option_map:
+                    duration_option_map[candidate.duration_minutes] = candidate.scheduling_url
+
+            if not duration_option_map:
+                reset_conversation(client, db)
+                return (
+                    states.IDLE,
+                    f"Sorry, {therapist.display_name} does not currently have bookable durations. "
+                    "Please type 'menu' to restart.",
+                )
+
+            duration_options = sorted(duration_option_map.keys(), reverse=True)
+            update_conversation_data(
+                client,
+                by_name_duration_options=[
+                    {"duration_minutes": minutes, "scheduling_url": duration_option_map[minutes]}
+                    for minutes in duration_options
+                ],
+                by_name_duration_therapist_id=therapist.id,
+            )
+            db.add(client)
+            db.commit()
             return (
-                states.AWAITING_DURATION,
-                "This therapist does not currently offer that duration. Please reply 1 (45m) or 2 (30m).",
+                states.AWAITING_BY_NAME_DURATION_OPTIONS,
+                menus.build_by_name_available_duration_menu(therapist.display_name, duration_options),
             )
 
         return _direct_booking_completion(
@@ -469,42 +554,55 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
             scheduling_url=event_type.scheduling_url,
         )
 
-    specialties = db.exec(
-        select(TherapistSpecialty)
-        .where(TherapistSpecialty.is_active == True)  # noqa: E712
-        .order_by(TherapistSpecialty.name)
-    ).all()
-    specialty_list = list(specialties)
-
-    if not specialty_list:
-        update_conversation_data(client, specialty_id=None)
-        db.add(client)
-        db.commit()
-        return (states.AWAITING_TIME_BAND, menus.build_time_band_menu())
-
+    specialty_list = _list_visible_specialties(db)
     return (states.AWAITING_SPECIALTY, menus.build_specialty_menu(specialty_list))
+
+
+def handle_awaiting_by_name_duration_options(client, body: str, db: Session) -> tuple[str, str]:
+    """Handle alternate duration selection when selected therapist lacks requested duration."""
+    conv_data = get_conversation_data(client)
+    options = conv_data.get("by_name_duration_options") or []
+    therapist_id = conv_data.get("by_name_duration_therapist_id")
+    therapist = db.get(Therapist, therapist_id) if therapist_id else None
+    if not options or not therapist:
+        reset_conversation(client, db)
+        return (states.IDLE, menus.build_error_message())
+
+    valid_choices = list(range(1, len(options) + 1))
+    choice = validate_numbered_choice(body, valid_choices)
+    if choice is None:
+        durations = [int(option["duration_minutes"]) for option in options]
+        return (
+            states.AWAITING_BY_NAME_DURATION_OPTIONS,
+            menus.build_by_name_available_duration_menu(therapist.display_name, durations),
+        )
+
+    selected = options[choice - 1]
+    duration_minutes = int(selected["duration_minutes"])
+    scheduling_url = str(selected["scheduling_url"])
+
+    update_conversation_data(client, duration=duration_minutes)
+    db.add(client)
+    db.commit()
+    return _direct_booking_completion(
+        client=client,
+        db=db,
+        therapist=therapist,
+        duration_minutes=duration_minutes,
+        scheduling_url=scheduling_url,
+    )
 
 
 def handle_awaiting_specialty(client, body: str, db: Session) -> tuple[str, str]:
     """
     Handle AWAITING_SPECIALTY state - validate and save specialty selection.
 
+    First option is dedicated female/women's health preference.
     Final option is always "No special request".
     """
-    specialties = db.exec(
-        select(TherapistSpecialty)
-        .where(TherapistSpecialty.is_active == True)  # noqa: E712
-        .order_by(TherapistSpecialty.name)
-    ).all()
-    specialty_list = list(specialties)
-
-    if not specialty_list:
-        update_conversation_data(client, specialty_id=None)
-        db.add(client)
-        db.commit()
-        return (states.AWAITING_TIME_BAND, menus.build_time_band_menu())
-
-    no_pref_choice = len(specialty_list) + 1
+    specialty_list = _list_visible_specialties(db)
+    female_choice = 1
+    no_pref_choice = len(specialty_list) + 2
     valid_choices = list(range(1, no_pref_choice + 1))
     choice = validate_numbered_choice(body, valid_choices)
 
@@ -514,13 +612,16 @@ def handle_awaiting_specialty(client, body: str, db: Session) -> tuple[str, str]
             menus.build_invalid_input_message([str(i) for i in valid_choices]),
         )
 
-    if choice == no_pref_choice:
+    if choice == female_choice:
+        specialty_id = None
+        prefer_female = True
+    elif choice == no_pref_choice:
         specialty_id = None
         prefer_female = False
     else:
-        selected_specialty = specialty_list[choice - 1]
+        selected_specialty = specialty_list[choice - 2]
         specialty_id = selected_specialty.id
-        prefer_female = "women" in (selected_specialty.name or "").lower()
+        prefer_female = False
 
     update_conversation_data(client, specialty_id=specialty_id, prefer_female=prefer_female)
     db.add(client)
@@ -595,9 +696,10 @@ def handle_awaiting_match_confirm(client, body: str, db: Session) -> tuple[str, 
 
     if choice == 2:
         reset_conversation(client, db)
+        can_manage_booking = _can_manage_booking(client, db)
         return (
             states.AWAITING_BOOKING_PATH,
-            menus.build_booking_path_menu(client.name or ""),
+            menus.build_booking_path_menu(client.name or "", can_manage_booking=can_manage_booking),
         )
 
     conv_data = get_conversation_data(client)
@@ -660,9 +762,9 @@ HANDLER_MAP = {
     states.AWAITING_BOOKING_PATH: handle_awaiting_booking_path,
     states.AWAITING_THERAPIST_PICK: handle_awaiting_therapist_pick,
     states.AWAITING_DURATION: handle_awaiting_duration,
+    states.AWAITING_BY_NAME_DURATION_OPTIONS: handle_awaiting_by_name_duration_options,
     states.AWAITING_SPECIALTY: handle_awaiting_specialty,
     states.AWAITING_TIME_BAND: handle_awaiting_time_band,
     states.AWAITING_DAYS: handle_awaiting_days,  # legacy
     states.AWAITING_MATCH_CONFIRM: handle_awaiting_match_confirm,
 }
-
