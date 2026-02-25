@@ -233,6 +233,45 @@ def test_list_clients_returns_pagination_metadata(client, db_session: Session):
     assert len(payload["items"]) == 1
 
 
+def test_list_clients_includes_financials_summary(client, db_session: Session):
+    admin = _create_admin(db_session)
+    client_with_financials = Client(phone_e164="+85293331001", name="With Financials")
+    client_without_financials = Client(phone_e164="+85293331002", name="Without Financials")
+    db_session.add(client_with_financials)
+    db_session.add(client_without_financials)
+    db_session.commit()
+    db_session.refresh(client_with_financials)
+    db_session.refresh(client_without_financials)
+
+    db_session.add(
+        ClientFinancial(
+            client_id=client_with_financials.id,
+            total_paid_cents=120000,
+            total_receipted_cents=90000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get("/api/v1/admin/clients?limit=50&offset=0", headers=_auth_headers())
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.json()["items"]}
+
+    with_financials = rows[client_with_financials.id]["financials_summary"]
+    assert with_financials["total_paid_cents"] == 120000
+    assert with_financials["total_receipted_cents"] == 90000
+    assert with_financials["available_to_receipt_cents"] == 30000
+    assert with_financials["currency"] == "HKD"
+
+    without_financials = rows[client_without_financials.id]["financials_summary"]
+    assert without_financials["total_paid_cents"] is None
+    assert without_financials["total_receipted_cents"] is None
+    assert without_financials["available_to_receipt_cents"] is None
+    assert without_financials["currency"] is None
+
+
 def test_list_client_sessions_with_status_filter(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, suffix="sessions")

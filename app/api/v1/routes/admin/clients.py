@@ -10,6 +10,8 @@ from app.api.v1.schemas.client import (
     ClientCreate,
     ClientDetailResponse,
     ClientFinancialResponse,
+    ClientFinancialSummary,
+    ClientListItem,
     ClientListResponse,
     ClientMessageListItem,
     ClientSessionListItem,
@@ -104,15 +106,36 @@ def list_clients(
         )
 
     total_stmt = select(func.count()).select_from(Client)
-    items_stmt = select(Client)
+    items_stmt = (
+        select(Client, ClientFinancial)
+        .outerjoin(ClientFinancial, ClientFinancial.client_id == Client.id)
+    )
     for condition in filters:
         total_stmt = total_stmt.where(condition)
         items_stmt = items_stmt.where(condition)
 
     total = db.exec(total_stmt).one()
-    items = db.exec(
+    rows = db.exec(
         items_stmt.order_by(Client.created_at.desc()).offset(offset).limit(limit)
     ).all()
+    items = []
+    for client, financial in rows:
+        summary = ClientFinancialSummary(
+            total_paid_cents=None if financial is None else financial.total_paid_cents,
+            total_receipted_cents=None if financial is None else financial.total_receipted_cents,
+            available_to_receipt_cents=(
+                None
+                if financial is None
+                else max(financial.total_paid_cents - financial.total_receipted_cents, 0)
+            ),
+            currency=None if financial is None else financial.currency,
+        )
+        items.append(
+            ClientListItem.model_validate(client).model_copy(
+                update={"financials_summary": summary}
+            )
+        )
+
     return ClientListResponse(
         items=items,
         total=total,

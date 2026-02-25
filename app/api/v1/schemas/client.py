@@ -7,6 +7,15 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from app.api.v1.schemas.pricing import AssignedPlanSummary
 
 
+class ClientFinancialSummary(BaseModel):
+    """Financial summary fields embedded in admin client list rows."""
+
+    total_paid_cents: int | None
+    total_receipted_cents: int | None
+    available_to_receipt_cents: int | None
+    currency: str | None
+
+
 class ClientListItem(BaseModel):
     """Client item for list/search responses."""
 
@@ -20,6 +29,7 @@ class ClientListItem(BaseModel):
     address: str | None
     preferred_therapist_id: int | None
     default_receipt_amount_cents: int | None
+    financials_summary: ClientFinancialSummary | None = None
     created_at: datetime
     updated_at: datetime
 
