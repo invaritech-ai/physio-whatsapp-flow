@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from sqlmodel import Session
 
-from app.models import Client, ClientFinancial, MessageLog, Session as TherapySession, Therapist, User
+from app.models import Client, ClientFinancial, MessageLog, PaymentRecord, Receipt, Session as TherapySession, Therapist, User
 
 
 def _auth_headers() -> dict[str, str]:
@@ -365,6 +365,86 @@ def test_list_client_sessions_serializes_in_admin_preferred_timezone(client, db_
     assert end_time.hour == 14
 
 
+def test_list_client_sessions_uses_confirmed_payment_total_when_session_charge_is_null(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="receipt-total")
+    client_row = Client(phone_e164="+85294444446", name="Receipt Total Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    session_row = TherapySession(
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=datetime(2026, 2, 23, 6, 0),
+        end_time=datetime(2026, 2, 23, 6, 45),
+        duration_minutes=45,
+        status="completed",
+        source="manual",
+        charge_amount_cents=None,
+        currency="HKD",
+    )
+    db_session.add(session_row)
+    db_session.commit()
+    db_session.refresh(session_row)
+
+    db_session.add(
+        PaymentRecord(
+            client_id=client_row.id,
+            session_id=session_row.id,
+            source="session_linked",
+            amount_cents=50000,
+            currency="HKD",
+            payment_method="cash",
+            status="confirmed",
+            received_by_role="therapist",
+            recorded_by_user_id=admin.id,
+        )
+    )
+    db_session.add(
+        PaymentRecord(
+            client_id=client_row.id,
+            session_id=session_row.id,
+            source="session_linked",
+            amount_cents=15000,
+            currency="HKD",
+            payment_method="cash",
+            status="confirmed",
+            received_by_role="therapist",
+            recorded_by_user_id=admin.id,
+        )
+    )
+    db_session.add(
+        Receipt(
+            client_id=client_row.id,
+            session_id=session_row.id,
+            therapist_id=therapist.id,
+            service_type="standard",
+            amount_cents=10000,
+            currency="HKD",
+            description="Session partial receipt",
+            payment_mode="Cash",
+            diagnosis="-",
+            special_notes="-",
+            status="issued",
+            issued_by_user_id=admin.id,
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/sessions",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["charge_amount_cents"] == 65000
+    assert data[0]["currency"] == "HKD"
+
+
 def test_list_client_messages_with_direction_filter(client, db_session: Session):
     admin = _create_admin(db_session)
     client_row = Client(phone_e164="+85295555555", name="Message Client")
@@ -400,8 +480,64 @@ def test_list_client_messages_with_direction_filter(client, db_session: Session)
 
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["direction"] == "inbound"
+    assert len(data["items"]) == 1
+    assert data["items"][0]["direction"] == "inbound"
+    assert data["has_more"] is False
+
+
+def test_list_client_messages_supports_before_id_cursor_with_ascending_page_order(client, db_session: Session):
+    admin = _create_admin(db_session)
+    client_row = Client(phone_e164="+85297777777", name="Message Cursor Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    inserted_ids: list[int] = []
+    for idx in range(120):
+        row = MessageLog(
+            direction="inbound",
+            phone_e164=client_row.phone_e164,
+            body=f"msg-{idx + 1:03d}",
+            twilio_sid=f"SMCURSOR{idx + 1:03d}",
+            client_id=client_row.id,
+        )
+        db_session.add(row)
+        db_session.flush()
+        inserted_ids.append(row.id)
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        page_1_response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/messages?limit=50",
+            headers=_auth_headers(),
+        )
+    assert page_1_response.status_code == 200
+    page_1 = page_1_response.json()
+    page_1_ids = [item["id"] for item in page_1["items"]]
+    assert page_1_ids == inserted_ids[-50:]
+    assert page_1["has_more"] is True
+
+    with _admin_auth_context(admin):
+        page_2_response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/messages?limit=50&before_id={page_1_ids[0]}",
+            headers=_auth_headers(),
+        )
+    assert page_2_response.status_code == 200
+    page_2 = page_2_response.json()
+    page_2_ids = [item["id"] for item in page_2["items"]]
+    assert page_2_ids == inserted_ids[-100:-50]
+    assert page_2["has_more"] is True
+
+    with _admin_auth_context(admin):
+        page_3_response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/messages?limit=50&before_id={page_2_ids[0]}",
+            headers=_auth_headers(),
+        )
+    assert page_3_response.status_code == 200
+    page_3 = page_3_response.json()
+    page_3_ids = [item["id"] for item in page_3["items"]]
+    assert page_3_ids == inserted_ids[:20]
+    assert page_3["has_more"] is False
 
 
 def test_get_client_financials_defaults_to_zero(client, db_session: Session):

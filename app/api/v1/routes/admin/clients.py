@@ -14,6 +14,7 @@ from app.api.v1.schemas.client import (
     ClientListItem,
     ClientListResponse,
     ClientMessageListItem,
+    ClientMessageListResponse,
     ClientSessionListItem,
     ClientUpdate,
 )
@@ -25,7 +26,7 @@ from app.core.auth import get_current_admin
 from app.core.config import settings
 from app.core.exceptions import BusinessLogicError, NotFoundError
 from app.db.session import get_session
-from app.models import Client, ClientFinancial, MessageLog, Receipt, Session as TherapySession, Therapist, User
+from app.models import Client, ClientFinancial, MessageLog, PaymentRecord, Receipt, Session as TherapySession, Therapist, User
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
@@ -68,6 +69,40 @@ def _to_receipting_summary_item(receipt: Receipt) -> ReceiptingSummaryReceiptIte
         description=receipt.description,
         created_at=receipt.created_at,
     )
+
+
+def _load_confirmed_payment_totals_by_session(
+    db: Session,
+    *,
+    client_id: int,
+    session_ids: set[int],
+) -> dict[int, tuple[int, str]]:
+    if not session_ids:
+        return {}
+
+    rows = db.exec(
+        select(
+            PaymentRecord.session_id,
+            func.coalesce(func.sum(PaymentRecord.amount_cents), 0),
+            func.max(PaymentRecord.currency),
+        )
+        .where(
+            PaymentRecord.client_id == client_id,
+            PaymentRecord.status == "confirmed",
+            PaymentRecord.session_id.in_(session_ids),  # type: ignore[arg-type]
+        )
+        .group_by(PaymentRecord.session_id)
+    ).all()
+
+    result: dict[int, tuple[int, str]] = {}
+    for session_id, total_amount_cents, currency in rows:
+        if session_id is None:
+            continue
+        amount_cents = int(total_amount_cents or 0)
+        if amount_cents <= 0:
+            continue
+        result[session_id] = (amount_cents, currency or settings.default_currency)
+    return result
 
 
 @router.get("", response_model=ClientListResponse)
@@ -245,12 +280,23 @@ def list_client_sessions(
     stmt = stmt.order_by(TherapySession.start_time.desc()).offset(offset).limit(limit)
     sessions = db.exec(stmt).all()
     plan_map = load_active_plan_map(db, client_ids={client_id})
+    payment_totals_by_session = _load_confirmed_payment_totals_by_session(
+        db,
+        client_id=client_id,
+        session_ids={session.id for session in sessions if session.id is not None},
+    )
     rows: list[ClientSessionListItem] = []
     for session in sessions:
         expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
             session,
             plan_map=plan_map,
         )
+        charge_amount_cents = session.charge_amount_cents
+        currency = session.currency
+        if charge_amount_cents is None and session.id is not None:
+            payment_total = payment_totals_by_session.get(session.id)
+            if payment_total is not None:
+                charge_amount_cents, currency = payment_total
         rows.append(
             ClientSessionListItem(
                 id=session.id,
@@ -260,8 +306,8 @@ def list_client_sessions(
                 duration_minutes=session.duration_minutes,
                 status=session.status,
                 source=session.source,
-                charge_amount_cents=session.charge_amount_cents,
-                currency=session.currency,
+                charge_amount_cents=charge_amount_cents,
+                currency=currency,
                 expected_charge_cents=expected_charge_cents,
                 expected_charge_currency=expected_charge_currency,
                 assigned_plan=assigned_plan,
@@ -270,25 +316,37 @@ def list_client_sessions(
     return rows
 
 
-@router.get("/{client_id}/messages", response_model=list[ClientMessageListItem])
+@router.get("/{client_id}/messages", response_model=ClientMessageListResponse)
 def list_client_messages(
     client_id: int,
     direction: str | None = Query(None, pattern="^(inbound|outbound)$"),
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    before_id: int | None = Query(default=None, gt=0),
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
 ):
-    """List message history for a client."""
+    """List message history for a client with cursor pagination."""
     _ = admin
     _ensure_client_exists(db, client_id)
 
     stmt = select(MessageLog).where(MessageLog.client_id == client_id)
     if direction:
         stmt = stmt.where(MessageLog.direction == direction)
+    if before_id is not None:
+        stmt = stmt.where(MessageLog.id < before_id)
 
-    stmt = stmt.order_by(MessageLog.created_at.desc()).offset(offset).limit(limit)
-    return db.exec(stmt).all()
+    page_size = limit + 1
+    rows = db.exec(
+        stmt.order_by(MessageLog.created_at.desc(), MessageLog.id.desc()).limit(page_size)
+    ).all()
+    has_more = len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+    rows.reverse()
+    return ClientMessageListResponse(
+        items=[ClientMessageListItem.model_validate(row) for row in rows],
+        has_more=has_more,
+    )
 
 
 @router.get("/{client_id}/financials", response_model=ClientFinancialResponse)

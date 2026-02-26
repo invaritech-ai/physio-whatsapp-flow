@@ -118,6 +118,13 @@ class ClientMessageListItem(BaseModel):
     created_at: datetime
 
 
+class ClientMessageListResponse(BaseModel):
+    """Cursor-paginated message list response."""
+
+    items: list[ClientMessageListItem]
+    has_more: bool
+
+
 class ClientFinancialResponse(BaseModel):
     """Financial summary for a client."""
 
