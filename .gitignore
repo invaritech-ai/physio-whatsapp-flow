@@ -1,0 +1,6 @@
+celerybeat-schedule
+.agents/skills/*
+*.pyc
+.claude/skills/senior-backend
+.cline/skills/senior-backend
+data/imports/unresolved_preferred_therapists.csv
