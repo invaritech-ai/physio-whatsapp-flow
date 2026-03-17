@@ -13,6 +13,7 @@ from app.models import (
     TherapistSpecialtyMap,
     User,
 )
+from app.services.therapist_onboarding import sync_event_types
 
 
 # Mock encryption functions for tests (we don't need to test actual encryption)
@@ -686,6 +687,63 @@ class TestSaveCalendly:
         assert response.status_code == 422
         assert "Missing required durations: 45" in str(response.json())
 
+    def test_save_calendly_allows_same_calendly_uri_for_30_and_45(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        user_info = {
+            "uri": "https://api.calendly.com/users/TESTUSER123",
+            "name": "Dr. Test",
+            "email": "test@test.com",
+        }
+        event_types = [
+            {
+                "uri": "https://api.calendly.com/event_types/SHARED",
+                "duration": 45,
+                "name": "Shared Demo Session",
+                "scheduling_url": "https://calendly.com/test/shared",
+                "active": True,
+            },
+        ]
+
+        with patch("app.services.therapist_onboarding.get_user_info_with_pat") as mock_user, \
+             patch("app.services.therapist_onboarding.get_event_types_with_pat") as mock_events:
+            mock_user.return_value = user_info
+            mock_events.return_value = event_types
+
+            response = client.post(
+                "/api/v1/therapist/onboarding/calendly",
+                json={
+                    "calendly_pat": "valid_token_123",
+                    "slot_mapping": {
+                        "30": "https://api.calendly.com/event_types/SHARED",
+                        "45": "https://api.calendly.com/event_types/SHARED",
+                    },
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [item["duration_minutes"] for item in data["slot_mapping"]] == [30, 45]
+        assert [item["calendly_event_type_uri"] for item in data["slot_mapping"]] == [
+            "https://api.calendly.com/event_types/SHARED",
+            "https://api.calendly.com/event_types/SHARED",
+        ]
+
+        stmt = select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist_no_uri.id
+        ).order_by(TherapistEventType.duration_minutes.asc())
+        mapped_event_types = db_session.exec(stmt).all()
+        assert [item.duration_minutes for item in mapped_event_types] == [30, 45]
+        assert [item.calendly_event_type_uri for item in mapped_event_types] == [
+            "https://api.calendly.com/event_types/SHARED",
+            "https://api.calendly.com/event_types/SHARED",
+        ]
+
 
 class TestUpdateProfile:
     """Tests for PATCH /therapist/onboarding/profile"""
@@ -753,6 +811,65 @@ class TestUpdateProfile:
 
         assert response.status_code == 400
         assert response.json()["detail"] == "license_number_already_exists"
+
+
+class TestSyncEventTypesSharedUri:
+    """Tests for Calendly event-type resync behavior after explicit slot mapping."""
+
+    def test_sync_event_types_preserves_business_durations_for_shared_uri(
+        self,
+        db_session: Session,
+        therapist_with_uri: Therapist,
+    ):
+        therapist_with_uri.calendly_pat_encrypted = "encrypted_pat"
+        db_session.add(therapist_with_uri)
+        db_session.commit()
+
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist_with_uri.id,
+                calendly_event_type_uri="https://api.calendly.com/event_types/SHARED_SYNC",
+                duration_minutes=30,
+                scheduling_url="https://calendly.com/test/shared-old",
+                is_active=True,
+            )
+        )
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist_with_uri.id,
+                calendly_event_type_uri="https://api.calendly.com/event_types/SHARED_SYNC",
+                duration_minutes=45,
+                scheduling_url="https://calendly.com/test/shared-old",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        with patch("app.services.therapist_onboarding.decrypt_string", return_value="plain_pat"), \
+             patch(
+                 "app.services.therapist_onboarding.get_event_types_with_pat",
+                 return_value=[
+                     {
+                         "uri": "https://api.calendly.com/event_types/SHARED_SYNC",
+                         "duration": 75,
+                         "scheduling_url": "https://calendly.com/test/shared-new",
+                         "active": True,
+                     }
+                 ],
+             ):
+            synced, errors = sync_event_types(db_session, therapist_with_uri)
+
+        assert errors == []
+        assert [item["duration_minutes"] for item in synced] == [30, 45]
+
+        rows = db_session.exec(
+            select(TherapistEventType)
+            .where(TherapistEventType.therapist_id == therapist_with_uri.id)
+            .order_by(TherapistEventType.duration_minutes.asc())
+        ).all()
+        assert [row.duration_minutes for row in rows] == [30, 45]
+        assert all(row.scheduling_url == "https://calendly.com/test/shared-new" for row in rows)
+        assert all(row.is_active is True for row in rows)
 
 
 class TestUpdateSpecialties:

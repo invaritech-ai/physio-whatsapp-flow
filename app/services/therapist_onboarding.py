@@ -96,6 +96,8 @@ def sync_event_types(
         et.is_active = False
         db.add(et)
 
+    has_existing_mappings = bool(existing_event_types)
+
     # Create or update event types
     synced_event_types = []
     for et in event_types:
@@ -104,20 +106,27 @@ def sync_event_types(
         scheduling_url = et.get("scheduling_url", "")
         is_active = et.get("active", True)
 
-        # Check if already exists
-        stmt = select(TherapistEventType).where(
-            TherapistEventType.calendly_event_type_uri == uri
-        )
-        existing = db.exec(stmt).first()
+        existing_matches = [
+            existing
+            for existing in existing_event_types
+            if existing.calendly_event_type_uri == uri
+        ]
 
-        if existing:
-            # Update existing
-            existing.duration_minutes = duration
-            existing.scheduling_url = scheduling_url
-            existing.is_active = is_active
-            db.add(existing)
-        else:
-            # Create new
+        if existing_matches:
+            # Preserve mapped business durations; only refresh status/URL from Calendly.
+            for existing in existing_matches:
+                existing.scheduling_url = scheduling_url
+                existing.is_active = is_active
+                db.add(existing)
+                synced_event_types.append(
+                    {
+                        "calendly_event_type_uri": uri,
+                        "duration_minutes": existing.duration_minutes,
+                        "scheduling_url": scheduling_url,
+                    }
+                )
+        elif not has_existing_mappings:
+            # Initial sync path: no explicit business-slot mappings yet, so seed rows from Calendly.
             new_event_type = TherapistEventType(
                 therapist_id=therapist.id,
                 calendly_event_type_uri=uri,
@@ -126,14 +135,13 @@ def sync_event_types(
                 is_active=is_active,
             )
             db.add(new_event_type)
-
-        synced_event_types.append(
-            {
-                "calendly_event_type_uri": uri,
-                "duration_minutes": duration,
-                "scheduling_url": scheduling_url,
-            }
-        )
+            synced_event_types.append(
+                {
+                    "calendly_event_type_uri": uri,
+                    "duration_minutes": duration,
+                    "scheduling_url": scheduling_url,
+                }
+            )
 
     # Note: Do NOT commit here - let the route control the transaction
     return synced_event_types, []

@@ -1,6 +1,7 @@
 from app.models.access_request import AccessRequest
 from app.models.auth_event import AuthEvent
 from app.models.billing import BillingPlan, ClientPlanAssignment
+from app.models.booking_intent import BookingIntent
 from app.models.client import Client
 from app.models.event_type import TherapistEventType
 from app.models.idempotency import IdempotencyKey
@@ -17,6 +18,7 @@ from app.models.user import User
 __all__ = [
     "AccessRequest",
     "AuthEvent",
+    "BookingIntent",
     "User",
     "BillingPlan",
     "ClientPlanAssignment",

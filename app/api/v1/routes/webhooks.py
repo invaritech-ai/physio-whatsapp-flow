@@ -4,7 +4,6 @@ import json
 import hashlib
 import hmac
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +14,11 @@ from app.core.encryption import decrypt_string
 from app.core.config import settings
 from app.db.session import get_session
 from app.models import AuthEvent, Client, Session as TherapySession, Therapist, TherapistEventType
+from app.services.booking_intents import (
+    consume_booking_intent,
+    find_recent_booking_intent,
+    normalize_phone_e164,
+)
 from app.services.calendly import get_scheduled_event_with_pat
 from app.services.bot.helpers import send_and_log
 from app.services.timezone_utils import to_preferred_timezone
@@ -564,6 +568,61 @@ def _find_session_by_refs(
     return None
 
 
+def _get_active_event_type_mappings(
+    db: Session,
+    *,
+    therapist_id: int,
+    event_type_uri: str,
+) -> list[TherapistEventType]:
+    return db.exec(
+        select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist_id,
+            TherapistEventType.calendly_event_type_uri == event_type_uri,
+            TherapistEventType.is_active == True,  # noqa: E712
+        )
+    ).all()
+
+
+def _resolve_session_duration_minutes(
+    db: Session,
+    *,
+    therapist: Therapist,
+    event_type_uri: str,
+    client_phone_e164: str | None,
+    existing_session: TherapySession | None,
+) -> int | None:
+    if client_phone_e164:
+        intent = find_recent_booking_intent(
+            db,
+            therapist_id=therapist.id,
+            client_phone_e164=client_phone_e164,
+            calendly_event_type_uri=event_type_uri,
+        )
+        if intent:
+            consume_booking_intent(intent)
+            db.add(intent)
+            return intent.duration_minutes
+
+    matches = _get_active_event_type_mappings(
+        db,
+        therapist_id=therapist.id,
+        event_type_uri=event_type_uri,
+    )
+    if len(matches) == 1:
+        return matches[0].duration_minutes
+
+    if existing_session:
+        return existing_session.duration_minutes
+
+    logger.error(
+        "Ambiguous TherapistEventType mapping therapist_id=%s event_type_uri=%s matches=%s",
+        therapist.id,
+        event_type_uri,
+        len(matches),
+    )
+    return None
+
+
 async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """Handle invitee.created event - create Session record when patient books.
 
@@ -651,18 +710,7 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             event_details["end_time"].replace("Z", "+00:00")
         )
 
-        # Look up TherapistEventType by the event_type URI from the scheduled event
         event_type_uri = event_details["event_type"]
-        therapist_event_type = db.exec(
-            select(TherapistEventType).where(
-                TherapistEventType.therapist_id == therapist.id,
-                TherapistEventType.calendly_event_type_uri == event_type_uri
-            )
-        ).first()
-
-        if not therapist_event_type:
-            logger.error(f"No TherapistEventType found for event type URI: {event_type_uri}")
-            return {"status": "error", "message": "Event type not found"}
 
         # Extract phone number from custom questions
         phone_number = None
@@ -677,9 +725,7 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             return {"status": "error", "message": "Phone number required"}
 
         # Normalize phone number: strip whatsapp: prefix, remove spaces/dashes, ensure E.164
-        phone_e164 = re.sub(r"[\s\-()]", "", phone_number.replace("whatsapp:", ""))
-        if not phone_e164.startswith("+"):
-            phone_e164 = f"+{phone_e164}"
+        phone_e164 = normalize_phone_e164(phone_number)
 
         # Find or create client by phone number
         client = db.exec(
@@ -712,13 +758,23 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 invitee_uri=old_invitee_uri,
             )
 
+        duration_minutes = _resolve_session_duration_minutes(
+            db,
+            therapist=therapist,
+            event_type_uri=event_type_uri,
+            client_phone_e164=phone_e164,
+            existing_session=session,
+        )
+        if duration_minutes is None:
+            return {"status": "error", "message": "Ambiguous event type mapping"}
+
         if session:
             previous_event_uri = session.calendly_event_uri
             session.client_id = client.id
             session.therapist_id = therapist.id
             session.start_time = start_time
             session.end_time = end_time
-            session.duration_minutes = therapist_event_type.duration_minutes
+            session.duration_minutes = duration_minutes
             session.calendly_event_uri = event_uri
             if invitee_uri:
                 session.calendly_invitee_uri = invitee_uri
@@ -744,7 +800,7 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 therapist_id=therapist.id,
                 start_time=start_time,
                 end_time=end_time,
-                duration_minutes=therapist_event_type.duration_minutes,
+                duration_minutes=duration_minutes,
                 calendly_event_uri=event_uri,
                 calendly_invitee_uri=invitee_uri,
                 source="calendly",
@@ -955,16 +1011,20 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
         )
         event_type_uri = event_details["event_type"]
 
-        therapist_event_type = db.exec(
-            select(TherapistEventType).where(
-                TherapistEventType.therapist_id == therapist.id,
-                TherapistEventType.calendly_event_type_uri == event_type_uri,
-            )
-        ).first()
+        client_phone_e164 = None
+        if session.client_id:
+            client = db.get(Client, session.client_id)
+            if client and client.phone_e164:
+                client_phone_e164 = client.phone_e164
 
-        duration_minutes = session.duration_minutes
-        if therapist_event_type:
-            duration_minutes = therapist_event_type.duration_minutes
+        resolved_duration = _resolve_session_duration_minutes(
+            db,
+            therapist=therapist,
+            event_type_uri=event_type_uri,
+            client_phone_e164=client_phone_e164,
+            existing_session=session,
+        )
+        duration_minutes = resolved_duration if resolved_duration is not None else session.duration_minutes
 
         existing_new_session = None
         if target_event_uri and target_event_uri != session.calendly_event_uri:

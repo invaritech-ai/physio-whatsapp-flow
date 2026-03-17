@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models import Therapist, TherapistEventType, TherapistSpecialty
+from app.services.booking_intents import create_booking_intent
 from app.services.bot import menus, states
 from app.services.bot.helpers import (
     get_conversation_data,
@@ -153,6 +154,24 @@ def _direct_booking_completion(
     """Persist preference, schedule follow-up tasks, and return final booking-link message."""
     client.preferred_therapist_id = therapist.id
     db.add(client)
+    event_type = db.exec(
+        select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist.id,
+            TherapistEventType.duration_minutes == duration_minutes,
+            TherapistEventType.is_active == True,  # noqa: E712
+        )
+    ).first()
+    if event_type:
+        create_booking_intent(
+            db,
+            therapist_id=therapist.id,
+            client_id=client.id,
+            client_phone_e164=client.phone_e164,
+            duration_minutes=duration_minutes,
+            calendly_event_type_uri=event_type.calendly_event_type_uri,
+            scheduling_url=event_type.scheduling_url,
+            source="whatsapp",
+        )
     db.commit()
 
     _schedule_booking_link_followups(
