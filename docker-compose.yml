@@ -2,7 +2,7 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "${API_HOST_PORT:-8000}:8000"
     env_file: .env
     environment:
       INVOICE_LATEX_ENGINE: ${INVOICE_LATEX_ENGINE:-tectonic}
