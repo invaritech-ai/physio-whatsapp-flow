@@ -1,7 +1,6 @@
 """Tests for therapist self-service onboarding endpoints."""
 
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlmodel import Session, select
@@ -224,15 +223,15 @@ class TestCompleteOnboarding:
         assert response.status_code == 400
         assert "already has Calendly URI" in response.json()["detail"]
 
-    def test_complete_onboarding_missing_event_types(
+    def test_complete_onboarding_allows_partial_event_types(
         self,
         client,
+        db_session: Session,
         therapist_no_uri: Therapist,
         sample_specialties_onboarding: list[TherapistSpecialty],
         mock_jwt_therapist,
     ):
-        """Fail if required event types are missing."""
-        # Mock Calendly with only 30min event type
+        """Allow onboarding when Calendly has at least one readable event type."""
         user_info = {
             "uri": "https://api.calendly.com/users/TESTUSER123",
             "name": "Dr. Test",
@@ -261,8 +260,14 @@ class TestCompleteOnboarding:
                 headers={"Authorization": "Bearer test-token"},
             )
 
-            assert response.status_code == 400
-            assert "Missing required event types" in response.json()["detail"]
+            assert response.status_code == 201
+            data = response.json()
+            assert data["event_types_synced"] == 1
+            assert len(data["event_types"]) == 1
+
+            db_session.refresh(therapist_no_uri)
+            assert therapist_no_uri.calendly_user_uri == user_info["uri"]
+            assert therapist_no_uri.is_active is True
 
     def test_complete_onboarding_invalid_specialties(
         self,
@@ -366,31 +371,13 @@ class TestOnboardingStatus:
         mock_jwt_therapist,
     ):
         """Status shows complete onboarding."""
-        # Add required slot mapping event types
-        db_session.add(
-            TherapistEventType(
-                therapist_id=therapist_with_uri.id,
-                calendly_event_type_uri="https://api.calendly.com/event_types/30MIN",
-                duration_minutes=30,
-                scheduling_url="https://calendly.com/test/30min",
-                is_active=True,
-            )
-        )
+        # Add one active mapped event type
         db_session.add(
             TherapistEventType(
                 therapist_id=therapist_with_uri.id,
                 calendly_event_type_uri="https://api.calendly.com/event_types/45MIN",
                 duration_minutes=45,
                 scheduling_url="https://calendly.com/test/45min",
-                is_active=True,
-            )
-        )
-        db_session.add(
-            TherapistEventType(
-                therapist_id=therapist_with_uri.id,
-                calendly_event_type_uri="https://api.calendly.com/event_types/60MIN",
-                duration_minutes=60,
-                scheduling_url="https://calendly.com/test/60min",
                 is_active=True,
             )
         )
@@ -415,7 +402,8 @@ class TestOnboardingStatus:
         assert data["has_calendly_uri"] is True
         assert data["has_event_types"] is True
         assert data["has_specialties"] is True
-        assert data["event_types_count"] == 3
+        assert data["has_slot_mapping"] is True
+        assert data["event_types_count"] == 1
         assert data["specialties_count"] == 1
         assert data["missing_steps"] == []
 
@@ -486,13 +474,13 @@ class TestValidateCalendly:
         assert len(data["event_types"]) == 3
         assert data["warnings"] == []
 
-    def test_validate_with_warnings(
+    def test_validate_with_partial_event_types_has_no_duration_warnings(
         self,
         client,
         therapist_no_uri: Therapist,
         mock_jwt_therapist,
     ):
-        """Validate PAT with missing event types (warnings)."""
+        """Validate PAT without warning on missing fixed durations."""
         user_info = {
             "uri": "https://api.calendly.com/users/TESTUSER123",
             "name": "Dr. Test",
@@ -523,9 +511,7 @@ class TestValidateCalendly:
             data = response.json()
             assert data["valid"] is True
             assert data["event_types_found"] == 1
-            assert len(data["warnings"]) == 2
-            assert "45-minute" in data["warnings"][0]
-            assert "60-minute" in data["warnings"][1]
+            assert data["warnings"] == []
 
     def test_validate_invalid_token(
         self,
@@ -609,6 +595,67 @@ class TestSyncEventTypes:
 
         assert response.status_code == 400
         assert "does not have Calendly URI" in response.json()["detail"]
+
+
+class TestSaveCalendly:
+    """Tests for POST /therapist/onboarding/calendly"""
+
+    def test_save_calendly_accepts_flexible_slot_mapping(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        user_info = {
+            "uri": "https://api.calendly.com/users/TESTUSER123",
+            "name": "Dr. Test",
+            "email": "test@test.com",
+        }
+        event_types = [
+            {
+                "uri": "https://api.calendly.com/event_types/45MIN",
+                "duration": 45,
+                "name": "45 Min Session",
+                "scheduling_url": "https://calendly.com/test/45min",
+                "active": True,
+            },
+            {
+                "uri": "https://api.calendly.com/event_types/75MIN",
+                "duration": 75,
+                "name": "75 Min Session",
+                "scheduling_url": "https://calendly.com/test/75min",
+                "active": True,
+            },
+        ]
+
+        with patch("app.services.therapist_onboarding.get_user_info_with_pat") as mock_user, \
+             patch("app.services.therapist_onboarding.get_event_types_with_pat") as mock_events:
+            mock_user.return_value = user_info
+            mock_events.return_value = event_types
+
+            response = client.post(
+                "/api/v1/therapist/onboarding/calendly",
+                json={
+                    "calendly_pat": "valid_token_123",
+                    "slot_mapping": {
+                        "45": "https://api.calendly.com/event_types/45MIN",
+                        "75": "https://api.calendly.com/event_types/75MIN",
+                    },
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_active"] is True
+        assert [item["duration_minutes"] for item in data["slot_mapping"]] == [45, 75]
+
+        stmt = select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist_no_uri.id
+        ).order_by(TherapistEventType.duration_minutes.asc())
+        mapped_event_types = db_session.exec(stmt).all()
+        assert [item.duration_minutes for item in mapped_event_types] == [45, 75]
 
 
 class TestUpdateProfile:

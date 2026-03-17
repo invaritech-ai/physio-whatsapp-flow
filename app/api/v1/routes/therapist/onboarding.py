@@ -4,8 +4,6 @@ import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException
-
-logger = logging.getLogger(__name__)
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist_allow_inactive
@@ -49,6 +47,8 @@ from app.services.therapist_onboarding import (
     complete_therapist_onboarding,
 )
 from app.services.license_numbers import is_valid_license_number, normalize_license_number
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/therapist", tags=["Therapist - Onboarding"])
 
@@ -124,11 +124,10 @@ def complete_onboarding(
     Steps:
     1. Validate Calendly PAT
     2. Check therapist not already onboarded
-    3. Verify required event types (30/45/60 min) exist
-    4. Update therapist.calendly_user_uri
-    5. Sync event types to database
-    6. Assign specialties
-    7. Activate therapist
+    3. Update therapist.calendly_user_uri
+    4. Sync event types to database
+    5. Assign specialties
+    6. Activate therapist
 
     Raises:
         400: Invalid PAT, missing event types, invalid specialty IDs, or already onboarded
@@ -194,9 +193,8 @@ def get_onboarding_status(
     has_event_types = len(event_types) > 0
     has_specialties = len(specialty_mappings) > 0
 
-    # Check slot mapping: must have exactly 30, 45, 60 minute active event types
-    mapped_durations = {et.duration_minutes for et in event_types}
-    has_slot_mapping = {30, 45, 60}.issubset(mapped_durations)
+    # Slot mapping is complete once the therapist has at least one active mapped event type.
+    has_slot_mapping = has_event_types
 
     is_onboarded = (
         has_profile_name and has_license_number and has_specialties and has_calendly_uri
@@ -244,7 +242,6 @@ def validate_calendly_token(
     Validate Calendly PAT and preview what will be synced (dry-run).
 
     Returns user info and event types found in Calendly.
-    Includes warnings if required event types (30/45/60 min) are missing.
 
     Raises:
         400: Invalid Calendly token
@@ -426,7 +423,7 @@ def save_calendly(
 
     Request body:
     - calendly_pat: Personal Access Token
-    - slot_mapping: {"30": "<event_type_uri>", "45": "<uri>", "60": "<uri>"}
+    - slot_mapping: {"30": "<event_type_uri>", "45": "<uri>"}
 
     Server validates each URI belongs to the therapist's Calendly account,
     persists only the mapped event types, and activates the account.
@@ -679,7 +676,7 @@ def get_therapist_profile(
             scheduling_url=et.scheduling_url,
         )
         for et in event_types
-        if et.is_active and et.duration_minutes in (30, 45, 60)
+        if et.is_active
     ]
 
     return TherapistProfileResponse(

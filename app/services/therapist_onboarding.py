@@ -9,10 +9,6 @@ from app.models import Therapist, TherapistEventType, TherapistSpecialty, Therap
 from app.services.calendly import get_event_types_with_pat, get_user_info_with_pat
 
 
-# Required event type durations for onboarding
-REQUIRED_DURATIONS = {30, 45, 60}
-
-
 def validate_calendly_pat(calendly_pat: str) -> tuple[bool, dict[str, Any], list[str]]:
     """Validate Calendly PAT and preview what will be synced.
 
@@ -33,15 +29,6 @@ def validate_calendly_pat(calendly_pat: str) -> tuple[bool, dict[str, Any], list
     # Fetch event types
     event_types = get_event_types_with_pat(user_info["uri"], calendly_pat)
 
-    # Check for required durations
-    found_durations = {et["duration"] for et in event_types}
-    missing_durations = REQUIRED_DURATIONS - found_durations
-
-    # Build warnings for missing durations
-    warnings = []
-    for duration in sorted(missing_durations):
-        warnings.append(f"Missing {duration}-minute event type")
-
     # Build response data
     data = {
         "valid": True,
@@ -58,7 +45,7 @@ def validate_calendly_pat(calendly_pat: str) -> tuple[bool, dict[str, Any], list
             }
             for et in event_types
         ],
-        "warnings": warnings,
+        "warnings": [],
     }
 
     return True, data, []
@@ -265,7 +252,7 @@ def complete_therapist_onboarding(
     Steps:
     1. Validate Calendly PAT
     2. Check therapist not already onboarded
-    3. Verify required event types exist
+    3. Verify Calendly PAT and event types can be read
     4. Update therapist.calendly_user_uri
     5. Sync event types
     6. Assign specialties
@@ -295,28 +282,22 @@ def complete_therapist_onboarding(
     if therapist.calendly_user_uri:
         return False, {}, ["Therapist already has Calendly URI set"]
 
-    # Step 3: Verify required event types exist
-    if validation_data["warnings"]:
-        # Missing required durations
-        missing = [w.replace("Missing ", "").replace(" event type", "") for w in validation_data["warnings"]]
-        return False, {}, [f"Missing required event types: {', '.join(missing)}"]
-
-    # Step 4: Update calendly_user_uri and store encrypted PAT
+    # Step 3: Update calendly_user_uri and store encrypted PAT
     therapist.calendly_user_uri = validation_data["user_uri"]
     therapist.calendly_pat_encrypted = encrypt_string(calendly_pat)
     db.add(therapist)
 
-    # Step 5: Sync event types
+    # Step 4: Sync event types
     event_types, sync_errors = sync_event_types(db, therapist, calendly_pat)
     if sync_errors:
         return False, {}, sync_errors
 
-    # Step 6: Assign specialties
+    # Step 5: Assign specialties
     specialties, specialty_errors = update_therapist_specialties(db, therapist, specialty_ids)
     if specialty_errors:
         return False, {}, specialty_errors
 
-    # Step 7: Activate therapist
+    # Step 6: Activate therapist
     therapist.is_active = True
     db.add(therapist)
 
