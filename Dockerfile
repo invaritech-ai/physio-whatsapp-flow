@@ -1,5 +1,5 @@
 # ---- Builder stage ----
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 
 # ---- Runtime stage ----
-FROM python:3.13-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 WORKDIR /app
 
