@@ -6,9 +6,8 @@ import hmac
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any
 
-from celery import Task
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlmodel import Session, select
 
@@ -130,15 +129,6 @@ async def calendly_webhook(
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     logger.info(f"Received Calendly webhook: {event_type}")
-
-    if settings.celery_webhook_async_enabled:
-        from app.tasks.calendly import process_calendly_webhook_event
-
-        task = cast(Task, process_calendly_webhook_event).delay(
-            event_type=event_type,
-            payload=payload,
-        )
-        return {"status": "queued", "event": event_type, "task_id": task.id}
 
     return await process_calendly_event(db=db, event_type=event_type, payload=payload)
 

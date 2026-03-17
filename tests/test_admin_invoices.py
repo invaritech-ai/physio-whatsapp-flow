@@ -289,58 +289,6 @@ def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_sessio
     assert data["special_notes"] == "-"
 
 
-def test_generate_invoice_uses_celery_task_when_enabled(client, db_session: Session):
-    admin = _create_admin(db_session)
-    therapist = _create_therapist(db_session, suffix="invoice-celery")
-    client_row, session_row = _create_client_and_session(
-        db_session,
-        therapist_id=therapist.id,
-        phone="+85290100010",
-    )
-
-    db_session.add(
-        ClientFinancial(
-            client_id=client_row.id,
-            total_paid_cents=90000,
-            total_receipted_cents=0,
-            currency="HKD",
-        )
-    )
-    db_session.commit()
-
-    class _FakeAsyncResult:
-        id = "task-invoice-1"
-
-        def get(self, timeout: int):
-            _ = timeout
-            return "/generated/invoices/invoice-celery.pdf"
-
-    with (
-        _admin_auth_context(admin),
-        patch.object(settings, "celery_invoice_pdf_task_enabled", True),
-        patch(
-            "app.tasks.invoice_documents.generate_invoice_pdf.delay",
-            return_value=_FakeAsyncResult(),
-        ) as mock_delay,
-    ):
-        response = client.post(
-            "/api/v1/admin/invoices/generate",
-            json={
-                "client_id": client_row.id,
-                "session_id": session_row.id,
-                "amount_cents": 65000,
-                "currency": "HKD",
-                "description": "Celery invoice",
-            },
-            headers=_auth_headers(),
-        )
-
-    assert response.status_code == 201
-    data = response.json()
-    assert data["pdf_url"] == "/generated/invoices/invoice-celery.pdf"
-    assert data["status"] == "issued"
-    assert mock_delay.called
-
 
 def test_generate_invoice_rejects_amount_exceeding_available_balance(client, db_session: Session):
     admin = _create_admin(db_session)

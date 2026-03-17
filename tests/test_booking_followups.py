@@ -1,4 +1,4 @@
-"""Unit tests for booking-link follow-up Celery task."""
+"""Unit tests for booking-link follow-up scheduler job."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from sqlmodel import select
 from app.models import Client, MessageLog
 from app.models import Session as TherapySession
 from app.models import Therapist, User
-from app.tasks.booking_followups import send_booking_link_followup
+from app.scheduler import _run_booking_followup as send_booking_link_followup
 
 
 def _seed_therapist(db_session):

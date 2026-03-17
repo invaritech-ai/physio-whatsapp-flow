@@ -12,7 +12,5 @@ pydantic-settings
 email-validator
 psycopg[binary]
 PyJWT[crypto]
-celery[redis]
-redis
 pytest
 httpx

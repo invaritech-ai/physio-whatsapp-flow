@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.exceptions import AppException
 from app.core.rate_limit import limiter
 from app.middleware.request_context import RequestContextMiddleware, get_request_id
+from app.scheduler import run_sync_therapist_event_types, run_sync_therapist_availability
 
 # DEV: enable DEBUG logging for app modules to trace webhook issues
 logging.basicConfig(level=logging.INFO)
@@ -30,12 +31,7 @@ scheduler = AsyncIOScheduler()
 
 
 def send_scheduled_reminders() -> None:
-    """
-    Scheduler function for sending reminders.
-
-    STUB: This will be reimplemented in Phase 4 (Scheduler Update).
-    """
-    # Phase 1: No-op to avoid crashes
+    """Stub for future reminder implementation."""
     pass
 
 
@@ -64,13 +60,31 @@ def _app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # Keep this id stable so hot-reload/restart paths do not duplicate jobs.
+    # Keep ids stable so hot-reload/restart paths do not duplicate jobs.
     if scheduler.get_job("scheduled-reminders") is None:
         scheduler.add_job(
             send_scheduled_reminders,
             "interval",
             id="scheduled-reminders",
             minutes=5,
+            replace_existing=True,
+        )
+
+    if scheduler.get_job("sync-therapist-event-types") is None:
+        scheduler.add_job(
+            run_sync_therapist_event_types,
+            "interval",
+            id="sync-therapist-event-types",
+            seconds=settings.sync_interval_seconds,
+            replace_existing=True,
+        )
+
+    if scheduler.get_job("sync-therapist-availability") is None:
+        scheduler.add_job(
+            run_sync_therapist_availability,
+            "interval",
+            id="sync-therapist-availability",
+            seconds=settings.availability_sync_interval_seconds,
             replace_existing=True,
         )
 

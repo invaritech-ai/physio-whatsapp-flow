@@ -1,7 +1,5 @@
-from typing import cast
 from unittest.mock import patch
 
-from celery import Task
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlmodel import Session
@@ -11,7 +9,6 @@ from app.core.rate_limit import limiter
 from app.core.webhook_security import verify_twilio_signature
 from app.db.session import get_session
 from app.services.bot.router import process_message
-from app.tasks.process_whatsapp import process_whatsapp_message
 
 router = APIRouter()
 
@@ -28,14 +25,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_session))
         form_data = await request.form()
         payload = dict(form_data)
 
-        if settings.whatsapp_webhook_sync_enabled:
-            result = process_message(payload, db)
-            return {"mode": "sync", **result}
-
-        # Fallback: enqueue message processing as background task
-        task = cast(Task, process_whatsapp_message).delay(payload)
-
-        return {"status": "queued", "task_id": task.id, "mode": "async"}
+        result = process_message(payload, db)
+        return {"mode": "sync", **result}
     except Exception as e:
         import traceback
 

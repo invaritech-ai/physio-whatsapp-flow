@@ -66,45 +66,40 @@ class Settings(BaseSettings):
     public_base_url: str | None = None
     web_base_url: str | None = None
 
-    # Celery + Redis
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/0"
-    whatsapp_webhook_sync_enabled: bool = True
-    celery_webhook_async_enabled: bool = False
-    celery_invoice_pdf_task_enabled: bool = False
-    celery_invoice_task_timeout_seconds: int = 60
-    # Optional override for faster testing; if set, this takes precedence over hours.
-    celery_sync_interval_minutes: int | None = None
-    celery_sync_interval_hours: int = 4
-    celery_availability_sync_interval_minutes: int = 30
-    celery_availability_cache_ttl_minutes: int = 45
-    celery_booking_followup_enabled: bool = False
+    # Periodic sync intervals
+    sync_interval_minutes: int | None = None
+    sync_interval_hours: int = 4
+    availability_sync_interval_minutes: int = 30
+    availability_cache_ttl_minutes: int = 45
+
+    # Booking follow-up nudges
+    booking_followup_enabled: bool = False
     booking_followup_first_delay_seconds: int = 3600
     booking_followup_second_delay_seconds: int = 21600
 
     @property
-    def celery_sync_interval_seconds(self) -> int:
-        if self.celery_sync_interval_minutes is not None:
-            return self.celery_sync_interval_minutes * 60
-        return self.celery_sync_interval_hours * 60 * 60
+    def sync_interval_seconds(self) -> int:
+        if self.sync_interval_minutes is not None:
+            return self.sync_interval_minutes * 60
+        return self.sync_interval_hours * 60 * 60
 
     @property
-    def celery_availability_sync_interval_seconds(self) -> int:
-        return self.celery_availability_sync_interval_minutes * 60
+    def availability_sync_interval_seconds(self) -> int:
+        return self.availability_sync_interval_minutes * 60
 
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         env = self.app_env.strip().lower()
         if env in {"production", "prod"} and not (self.web_base_url and self.web_base_url.strip()):
             raise ValueError("WEB_BASE_URL must be configured when APP_ENV is production/prod.")
-        if self.celery_sync_interval_hours < 1:
-            raise ValueError("CELERY_SYNC_INTERVAL_HOURS must be >= 1.")
-        if self.celery_sync_interval_minutes is not None and self.celery_sync_interval_minutes < 1:
-            raise ValueError("CELERY_SYNC_INTERVAL_MINUTES must be >= 1 when set.")
-        if self.celery_availability_sync_interval_minutes < 1:
-            raise ValueError("CELERY_AVAILABILITY_SYNC_INTERVAL_MINUTES must be >= 1.")
-        if self.celery_availability_cache_ttl_minutes < 1:
-            raise ValueError("CELERY_AVAILABILITY_CACHE_TTL_MINUTES must be >= 1.")
+        if self.sync_interval_hours < 1:
+            raise ValueError("SYNC_INTERVAL_HOURS must be >= 1.")
+        if self.sync_interval_minutes is not None and self.sync_interval_minutes < 1:
+            raise ValueError("SYNC_INTERVAL_MINUTES must be >= 1 when set.")
+        if self.availability_sync_interval_minutes < 1:
+            raise ValueError("AVAILABILITY_SYNC_INTERVAL_MINUTES must be >= 1.")
+        if self.availability_cache_ttl_minutes < 1:
+            raise ValueError("AVAILABILITY_CACHE_TTL_MINUTES must be >= 1.")
         return self
 
 

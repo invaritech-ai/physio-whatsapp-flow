@@ -4,9 +4,7 @@ import json
 import re
 import logging
 from datetime import datetime, timezone
-from typing import cast
 
-from celery import Task
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.exc import IntegrityError
@@ -213,40 +211,23 @@ def _generate_invoice_pdf_url(
     special_notes: str | None,
     issued_at: datetime | None,
 ) -> str:
-    kwargs = {
-        "invoice_id": invoice_id,
-        "client_id": client_id,
-        "client_name": client_name,
-        "client_address": client_address,
-        "client_phone": client_phone,
-        "amount_cents": amount_cents,
-        "currency": currency,
-        "description": description,
-        "diagnosis": diagnosis,
-        "session_start_at": session_start_at,
-        "therapist_name": therapist_name,
-        "therapist_license_number": therapist_license_number,
-        "payment_mode": payment_mode,
-        "special_notes": special_notes,
-        "issued_at": issued_at,
-    }
-    if not settings.celery_invoice_pdf_task_enabled:
-        return generate_and_store_invoice_pdf_url(**kwargs)
-
-    from app.tasks.invoice_documents import generate_invoice_pdf
-
-    try:
-        task = cast(Task, generate_invoice_pdf).delay(**kwargs)
-        result = task.get(timeout=settings.celery_invoice_task_timeout_seconds)
-        if isinstance(result, str) and result.strip():
-            return result
-        raise RuntimeError("invoice_pdf_url_empty")
-    except Exception:
-        logger.exception(
-            "celery invoice generation failed invoice_id=%s; falling back to inline",
-            invoice_id,
-        )
-        return generate_and_store_invoice_pdf_url(**kwargs)
+    return generate_and_store_invoice_pdf_url(
+        invoice_id=invoice_id,
+        client_id=client_id,
+        client_name=client_name,
+        client_address=client_address,
+        client_phone=client_phone,
+        amount_cents=amount_cents,
+        currency=currency,
+        description=description,
+        diagnosis=diagnosis,
+        session_start_at=session_start_at,
+        therapist_name=therapist_name,
+        therapist_license_number=therapist_license_number,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
+        issued_at=issued_at,
+    )
 
 
 @router.get("", response_model=list[InvoiceListItem])

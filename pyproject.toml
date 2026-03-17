@@ -17,8 +17,6 @@ dependencies = [
     "email-validator",
     "psycopg[binary]",
     "PyJWT[crypto]",
-    "celery[redis]",
-    "redis",
     "slowapi",
 ]
 

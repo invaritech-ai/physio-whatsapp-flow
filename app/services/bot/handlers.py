@@ -5,9 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import re
-from typing import cast
 
-from celery import Task
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -110,8 +108,8 @@ def _schedule_booking_link_followups(
     therapist_name: str,
     scheduling_url: str,
 ) -> None:
-    """Queue booking-link follow-ups (1h + 6h) when enabled."""
-    if not settings.celery_booking_followup_enabled:
+    """Schedule booking-link follow-ups (1h + 6h) via APScheduler when enabled."""
+    if not settings.booking_followup_enabled:
         return
 
     first_delay = max(0, settings.booking_followup_first_delay_seconds)
@@ -119,24 +117,22 @@ def _schedule_booking_link_followups(
     link_sent_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        from app.tasks.booking_followups import send_booking_link_followup
+        from app.scheduler import schedule_booking_followup
 
         followups = (
             (1, first_delay),
             (2, second_delay),
         )
-        for stage, countdown in followups:
-            cast(Task, send_booking_link_followup).apply_async(
-                kwargs={
-                    "client_id": client_id,
-                    "therapist_id": therapist_id,
-                    "duration_minutes": duration_minutes,
-                    "therapist_name": therapist_name,
-                    "scheduling_url": scheduling_url,
-                    "link_sent_at_iso": link_sent_at,
-                    "stage": stage,
-                },
-                countdown=countdown,
+        for stage, delay_seconds in followups:
+            schedule_booking_followup(
+                client_id=client_id,
+                therapist_id=therapist_id,
+                duration_minutes=duration_minutes,
+                therapist_name=therapist_name,
+                scheduling_url=scheduling_url,
+                link_sent_at_iso=link_sent_at,
+                stage=stage,
+                delay_seconds=delay_seconds,
             )
     except Exception:
         logger.exception(
