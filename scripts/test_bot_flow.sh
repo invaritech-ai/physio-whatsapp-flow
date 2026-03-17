@@ -46,16 +46,13 @@ send_message "John Doe"
 # Step 3: Select duration (2 = 45 minutes)
 send_message "2"
 
-# Step 4: Select specialty (1 = Sports Rehabilitation)
-send_message "1"
+# Step 4: Select match preference (3 = No preference)
+send_message "3"
 
 # Step 5: Select time band (2 = Afternoon)
 send_message "2"
 
-# Step 6: Select days (1,3,5 = Mon, Wed, Fri)
-send_message "1,3,5"
-
-# Step 7: Confirm match (1 = Confirm)
+# Step 6: Confirm match (1 = Confirm)
 send_message "1"
 
 echo "=========================================="

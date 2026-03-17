@@ -18,9 +18,9 @@ from app.services.bot.handlers import (
     handle_awaiting_by_name_duration_options,
     handle_awaiting_days,
     handle_awaiting_duration,
+    handle_awaiting_match_preference,
     handle_awaiting_match_confirm,
     handle_awaiting_name,
-    handle_awaiting_specialty,
     handle_awaiting_time_band,
     handle_idle,
     handle_reschedule_request,
@@ -302,7 +302,7 @@ class TestHandleAwaitingDuration:
 
         next_state, response = handle_awaiting_duration(client, "1", db_session)
 
-        assert next_state == states.AWAITING_SPECIALTY
+        assert next_state == states.AWAITING_MATCH_PREFERENCE
         conv_data = json.loads(client.conversation_data or "{}")
         assert conv_data.get("duration") == 45
 
@@ -320,7 +320,7 @@ class TestHandleAwaitingDuration:
 
         next_state, response = handle_awaiting_duration(client, "2", db_session)
 
-        assert next_state == states.AWAITING_SPECIALTY
+        assert next_state == states.AWAITING_MATCH_PREFERENCE
         conv_data = json.loads(client.conversation_data or "{}")
         assert conv_data.get("duration") == 30
 
@@ -454,77 +454,84 @@ class TestHandleAwaitingDuration:
         assert client.preferred_therapist_id == therapist.id
 
 
-class TestHandleAwaitingSpecialty:
-    """Tests for handle_awaiting_specialty function."""
+class TestHandleAwaitingMatchPreference:
+    """Tests for handle_awaiting_match_preference function."""
 
-    def test_valid_specialty_choice_saves(self, db_session, sample_specialties):
-        """Valid specialty choice should be saved."""
-        client = Client(
-            phone_e164="+85212345678",
-            name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
-        )
-        update_conversation_data(client, duration=30)
-        db_session.add(client)
-        db_session.commit()
-
-        next_state, response = handle_awaiting_specialty(client, "2", db_session)
-
-        assert next_state == states.AWAITING_TIME_BAND
-        conv_data = json.loads(client.conversation_data or "{}")
-        # Choice 2 should be the first specialty alphabetically.
-        # Choice 1 is dedicated female/women's health.
-        sorted_specialties = sorted(sample_specialties, key=lambda s: s.name)
-        assert conv_data.get("specialty_id") == sorted_specialties[0].id
-        assert conv_data.get("prefer_female") is False
-
-    def test_female_option_sets_prefer_female(self, db_session, sample_specialties):
-        """Dedicated female option should set prefer_female=True with no specialty_id."""
+    def test_female_option_sets_prefer_female(self, db_session):
+        """Choice 1 should set prefer_female=True with no specialty_id."""
         client = Client(
             phone_e164="+85212345677",
             name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
         )
         update_conversation_data(client, duration=45)
         db_session.add(client)
         db_session.commit()
 
-        next_state, _ = handle_awaiting_specialty(client, "1", db_session)
+        next_state, _ = handle_awaiting_match_preference(client, "1", db_session)
 
         assert next_state == states.AWAITING_TIME_BAND
         conv_data = json.loads(client.conversation_data or "{}")
         assert conv_data.get("prefer_female") is True
         assert conv_data.get("specialty_id") is None
+        assert conv_data.get("require_specialty") is False
 
-    def test_invalid_specialty_choice_rejects(self, db_session, sample_specialties):
-        """Invalid choice should be rejected."""
-        client = Client(
-            phone_e164="+85212345678",
-            name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
-        )
-        db_session.add(client)
+    def test_womens_health_option_sets_specialty(self, db_session):
+        """Choice 2 should set Women's Health specialty and require_specialty=True."""
+        womens_health = TherapistSpecialty(name="Women's Health", is_active=True)
+        db_session.add(womens_health)
         db_session.commit()
+        db_session.refresh(womens_health)
 
-        next_state, response = handle_awaiting_specialty(client, "99", db_session)
-
-        assert next_state == states.AWAITING_SPECIALTY
-        assert "please reply" in response.lower()
-
-    def test_multiple_specialty_numbers_rejects(self, db_session, sample_specialties):
-        """Multiple-number input should be rejected for specialty selection."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
         )
         update_conversation_data(client, duration=30)
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_awaiting_specialty(client, "1,2", db_session)
+        next_state, _ = handle_awaiting_match_preference(client, "2", db_session)
 
-        assert next_state == states.AWAITING_SPECIALTY
+        assert next_state == states.AWAITING_TIME_BAND
+        conv_data = json.loads(client.conversation_data or "{}")
+        assert conv_data.get("prefer_female") is False
+        assert conv_data.get("specialty_id") == womens_health.id
+        assert conv_data.get("require_specialty") is True
+
+    def test_no_preference_clears_filters(self, db_session):
+        """Choice 3 should clear preference flags."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
+        )
+        update_conversation_data(client, duration=30, prefer_female=True, specialty_id=999)
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, _ = handle_awaiting_match_preference(client, "3", db_session)
+
+        assert next_state == states.AWAITING_TIME_BAND
+        conv_data = json.loads(client.conversation_data or "{}")
+        assert conv_data.get("prefer_female") is False
+        assert conv_data.get("specialty_id") is None
+        assert conv_data.get("require_specialty") is False
+
+    def test_invalid_choice_rejects(self, db_session):
+        """Invalid choice should be rejected."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_match_preference(client, "99", db_session)
+
+        assert next_state == states.AWAITING_MATCH_PREFERENCE
         assert "please reply" in response.lower()
 
 
@@ -828,7 +835,7 @@ class TestCheckGlobalKeywords:
         client = Client(
             phone_e164="+85212345678",
             name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
             conversation_data='{"duration": 30}',
         )
         db_session.add(client)
@@ -977,40 +984,25 @@ class TestHandleRescheduleRequest:
         assert "appointment" in response.lower()
 
 
-class TestNoSpecialtiesAvailable:
-    """Tests for edge case when no active specialties exist."""
+class TestMatchPreferenceEdgeCases:
+    """Tests for edge cases in match-preference step."""
 
-    def test_duration_handler_resets_when_no_specialties(self, db_session):
-        """Duration handler should still proceed to specialty step (female/no request options)."""
-        # No specialties seeded
+    def test_womens_health_missing_returns_to_main_menu(self, db_session):
+        """Missing Women's Health specialty should return to main menu."""
         client = Client(
             phone_e164="+85212345678",
             name="John",
-            conversation_state=states.AWAITING_DURATION,
-        )
-        db_session.add(client)
-        db_session.commit()
-
-        next_state, response = handle_awaiting_duration(client, "1", db_session)
-
-        assert next_state == states.AWAITING_SPECIALTY
-        assert "female physiotherapist" in response.lower()
-        assert "no special request" in response.lower()
-
-    def test_specialty_handler_resets_when_no_specialties(self, db_session):
-        """Specialty handler should reset to IDLE when no specialties exist."""
-        client = Client(
-            phone_e164="+85212345678",
-            name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
         )
         update_conversation_data(client, duration=30)
         db_session.add(client)
         db_session.commit()
 
-        next_state, response = handle_awaiting_specialty(client, "1", db_session)
+        next_state, response = handle_awaiting_match_preference(client, "2", db_session)
 
-        assert next_state == states.AWAITING_TIME_BAND
+        assert next_state == states.IDLE
+        assert "women's health" in response.lower()
+        assert "book" in response.lower()
 
 
 class TestNoTherapistMatch:
@@ -1036,48 +1028,3 @@ class TestNoTherapistMatch:
         assert "no therapists" in response.lower()
         assert client.conversation_data is None
 
-
-class TestSpecialtyOrderingConsistency:
-    """Test that specialty ordering is consistent between menu and validation."""
-
-    def test_specialties_ordered_alphabetically(self, db_session):
-        """Specialties should be ordered by name consistently."""
-        # Create specialties in non-alphabetical order
-        specialties = [
-            TherapistSpecialty(name="Orthopedic", is_active=True),
-            TherapistSpecialty(name="Sports Rehab", is_active=True),
-            TherapistSpecialty(name="Neurological", is_active=True),
-        ]
-        for spec in specialties:
-            db_session.add(spec)
-        db_session.commit()
-
-        # Start flow
-        client = Client(
-            phone_e164="+85212345678",
-            name="John",
-            conversation_state=states.AWAITING_DURATION,
-        )
-        db_session.add(client)
-        db_session.commit()
-
-        # Get menu
-        next_state, menu_text = handle_awaiting_duration(client, "1", db_session)
-        assert next_state == states.AWAITING_SPECIALTY
-
-        # Menu should show alphabetically: 1=Neurological, 2=Orthopedic, 3=Sports Rehab
-        assert "Neurological" in menu_text
-        assert "Orthopedic" in menu_text
-        assert "Sports Rehab" in menu_text
-
-        # Choose option 2 (option 1 is dedicated female/women's health).
-        next_state, response = handle_awaiting_specialty(client, "2", db_session)
-        assert next_state == states.AWAITING_TIME_BAND
-
-        # Verify correct specialty was saved
-        conv_data = json.loads(client.conversation_data or "{}")
-        saved_specialty_id = conv_data.get("specialty_id")
-
-        # Should be Neurological (first alphabetically)
-        saved_specialty = db_session.get(TherapistSpecialty, saved_specialty_id)
-        assert saved_specialty.name == "Neurological"

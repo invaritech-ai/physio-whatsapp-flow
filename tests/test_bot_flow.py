@@ -59,10 +59,10 @@ class TestNewClientFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_SPECIALTY
+        assert result["next_state"] == states.AWAITING_MATCH_PREFERENCE
 
-        # Message 5: Select first dynamic specialty (option 2; option 1 is female-only filter)
-        form_data["Body"] = "2"
+        # Message 5: Select match preference (3 = no preference)
+        form_data["Body"] = "3"
         form_data["MessageSid"] = "SM005"
         result = process_message(form_data, db_session)
 
@@ -136,7 +136,7 @@ class TestNewClientFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_SPECIALTY
+        assert result["next_state"] == states.AWAITING_MATCH_PREFERENCE
 
 
 class TestReturningClientFlow:
@@ -344,7 +344,7 @@ class TestGlobalKeywordMidFlow:
         client = Client(
             phone_e164="+85212345678",
             name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
         )
         client.conversation_data = '{"duration": 30}'
         db_session.add(client)
@@ -372,7 +372,7 @@ class TestGlobalKeywordMidFlow:
         client = Client(
             phone_e164="+85212345678",
             name="John",
-            conversation_state=states.AWAITING_SPECIALTY,
+            conversation_state=states.AWAITING_MATCH_PREFERENCE,
         )
         client.conversation_data = '{"duration": 30}'
         db_session.add(client)

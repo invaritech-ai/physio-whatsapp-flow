@@ -62,6 +62,8 @@ def match_therapist(
     preferred_therapist_id: int | None = None,
     exclude_therapist_id: int | None = None,
     prefer_female: bool = False,
+    require_specialty: bool = False,
+    require_time_band: bool = False,
 ) -> MatchResult | None:
     """
     Run 4-factor scoring engine with fallback cascade.
@@ -114,6 +116,20 @@ def match_therapist(
     specialty_therapist_ids = _get_specialty_therapist_ids(db, specialty_id)
 
     normalized_time_band = _normalize_time_band(time_band)
+    effective_require_specialty = require_specialty and specialty_id is not None
+
+    fallback_levels = FALLBACK_LEVELS
+    if effective_require_specialty:
+        fallback_levels = [level for level in fallback_levels if level["specialty_required"]]
+    if require_time_band:
+        fallback_levels = [level for level in fallback_levels if level["time_band_required"]]
+    if not fallback_levels:
+        fallback_levels = [
+            {
+                "specialty_required": effective_require_specialty,
+                "time_band_required": require_time_band,
+            }
+        ]
     time_band_map = _get_therapist_time_band_matches(
         db=db,
         therapists=therapists,
@@ -138,7 +154,7 @@ def match_therapist(
         all_scores.append(score)
 
     # Run fallback cascade
-    for level, criteria in enumerate(FALLBACK_LEVELS):
+    for level, criteria in enumerate(fallback_levels):
         candidates = _filter_candidates(
             therapists=therapists,
             scores=all_scores,

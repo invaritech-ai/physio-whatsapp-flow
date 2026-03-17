@@ -30,7 +30,8 @@ flowchart TD
   STATE -->|AWAITING_THERAPIST_PICK| H_PICK[handle_awaiting_therapist_pick]
   STATE -->|AWAITING_DURATION| H_DUR[handle_awaiting_duration]
   STATE -->|AWAITING_BY_NAME_DURATION_OPTIONS| H_DUR_OPT[handle_awaiting_by_name_duration_options]
-  STATE -->|AWAITING_SPECIALTY| H_SPEC[handle_awaiting_specialty]
+  STATE -->|AWAITING_MATCH_PREFERENCE| H_PREF[handle_awaiting_match_preference]
+  STATE -->|AWAITING_SPECIALTY legacy| H_PREF
   STATE -->|AWAITING_TIME_BAND| H_TIME[handle_awaiting_time_band]
   STATE -->|AWAITING_MATCH_CONFIRM| H_CONFIRM[handle_awaiting_match_confirm]
   STATE -->|AWAITING_DAYS legacy| H_DAYS[handle_awaiting_days]
@@ -66,10 +67,10 @@ flowchart LR
 
   MENU_STD -->|Smart| DUR_SMART[Choose duration]
   MENU_PREF -->|Smart diff| DUR_SMART
-  DUR_SMART --> SPEC[Choose female filter, dynamic specialty, or no request]
-  SPEC --> TIME[Choose time band]
+  DUR_SMART --> PREF[Choose female therapist, Women's Health specialization, or no preference]
+  PREF --> TIME[Choose time band]
   TIME --> MATCH{Match found}
-  MATCH -- No --> MENU_STD
+  MATCH -- No --> MAINMENU[Return to main menu]
   MATCH -- Yes --> CONFIRM{Confirm match}
   CONFIRM -- Start over --> BOOKPATH[Back to booking path menu]
   CONFIRM -- Confirm --> COMPLETE

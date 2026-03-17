@@ -68,6 +68,17 @@ def build_duration_menu(name: str) -> str:
     )
 
 
+def build_match_preference_menu() -> str:
+    """Build menu for smart-match preference selection."""
+    return (
+        "Any preference for your therapist?\n\n"
+        "1️⃣ Female therapist\n"
+        "2️⃣ Women's Health specialization\n"
+        "3️⃣ No preference\n\n"
+        "Please reply with 1, 2, or 3. `Menu` to go back to main menu."
+    )
+
+
 def build_specialty_menu(specialties: list[TherapistSpecialty]) -> str:
     """Build menu for specialty selection from active specialties."""
     lines = [

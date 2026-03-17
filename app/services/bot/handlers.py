@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import logging
 import re
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from app.core.config import settings
 from app.models import Therapist, TherapistEventType, TherapistSpecialty
@@ -67,6 +67,17 @@ def _get_preferred_therapist_name(client, db: Session) -> str | None:
     return therapist.display_name if therapist else None
 
 
+def _return_to_main_menu_with_message(
+    client, db: Session, message: str
+) -> tuple[str, str]:
+    """Reset conversation and return main menu prefixed with a message."""
+    reset_conversation(client, db)
+    therapist_name = _get_preferred_therapist_name(client, db)
+    can_manage_booking = _can_manage_booking(client, db) if client.name else False
+    menu = menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking)
+    return (states.IDLE, f"{message}\n\n{menu}")
+
+
 def _list_active_therapists(db: Session) -> list[Therapist]:
     """Return active therapists in deterministic order."""
     return list(
@@ -99,6 +110,16 @@ def _list_visible_specialties(db: Session) -> list[TherapistSpecialty]:
         for specialty in specialties
         if not any(keyword in (specialty.name or "").lower() for keyword in FEMALE_SPECIALTY_KEYWORDS)
     ]
+
+
+def _get_womens_health_specialty(db: Session) -> TherapistSpecialty | None:
+    """Return active Women's Health specialty if present."""
+    return db.exec(
+        select(TherapistSpecialty).where(
+            func.lower(TherapistSpecialty.name) == "women's health",
+            TherapistSpecialty.is_active == True,  # noqa: E712
+        )
+    ).first()
 
 
 def _schedule_booking_link_followups(
@@ -217,12 +238,14 @@ def _run_matching_and_build_confirmation(client, db: Session) -> tuple[str, str]
             preferred_therapist_id=client.preferred_therapist_id,
             exclude_therapist_id=conv_data.get("exclude_therapist_id"),
             prefer_female=conv_data.get("prefer_female", False),
+            require_specialty=conv_data.get("require_specialty", False),
+            require_time_band=True,
         )
         if result is None:
-            reset_conversation(client, db)
-            return (
-                states.IDLE,
-                "Sorry, no therapists are currently available. Please try again later.",
+            return _return_to_main_menu_with_message(
+                client,
+                db,
+                "Sorry, we couldn't find an available therapist that matches your preferences right now.",
             )
         matched_therapist = result.therapist
         fallback_level = result.fallback_level
@@ -242,6 +265,8 @@ def _run_matching_and_build_confirmation(client, db: Session) -> tuple[str, str]
             select(TherapistSpecialty).where(TherapistSpecialty.id == specialty_id)
         ).first()
         specialty_name = specialty.name if specialty else None
+    if conv_data.get("prefer_female") and not specialty_name:
+        specialty_name = "Female therapist"
 
     confirmation_menu = menus.build_match_confirmation_menu(
         therapist_name=matched_therapist.display_name,
@@ -569,8 +594,7 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
             scheduling_url=event_type.scheduling_url,
         )
 
-    specialty_list = _list_visible_specialties(db)
-    return (states.AWAITING_SPECIALTY, menus.build_specialty_menu(specialty_list))
+    return (states.AWAITING_MATCH_PREFERENCE, menus.build_match_preference_menu())
 
 
 def handle_awaiting_by_name_duration_options(client, body: str, db: Session) -> tuple[str, str]:
@@ -608,40 +632,53 @@ def handle_awaiting_by_name_duration_options(client, body: str, db: Session) -> 
     )
 
 
-def handle_awaiting_specialty(client, body: str, db: Session) -> tuple[str, str]:
+def handle_awaiting_match_preference(client, body: str, db: Session) -> tuple[str, str]:
     """
-    Handle AWAITING_SPECIALTY state - validate and save specialty selection.
+    Handle match-preference step for smart match.
 
-    First option is dedicated female/women's health preference.
-    Final option is always "No special request".
+    Options:
+    1) Female therapist
+    2) Women's Health specialization
+    3) No preference
     """
-    specialty_list = _list_visible_specialties(db)
-    female_choice = 1
-    no_pref_choice = len(specialty_list) + 2
-    valid_choices = list(range(1, no_pref_choice + 1))
-    choice = validate_numbered_choice(body, valid_choices)
-
+    choice = validate_numbered_choice(body, [1, 2, 3])
     if choice is None:
         return (
-            states.AWAITING_SPECIALTY,
-            menus.build_invalid_input_message([str(i) for i in valid_choices]),
+            states.AWAITING_MATCH_PREFERENCE,
+            menus.build_invalid_input_message(["1", "2", "3"]),
         )
 
-    if choice == female_choice:
-        specialty_id = None
-        prefer_female = True
-    elif choice == no_pref_choice:
-        specialty_id = None
-        prefer_female = False
-    else:
-        selected_specialty = specialty_list[choice - 2]
-        specialty_id = selected_specialty.id
-        prefer_female = False
+    prefer_female = False
+    specialty_id = None
+    require_specialty = False
 
-    update_conversation_data(client, specialty_id=specialty_id, prefer_female=prefer_female)
+    if choice == 1:
+        prefer_female = True
+    elif choice == 2:
+        womens_health = _get_womens_health_specialty(db)
+        if not womens_health:
+            return _return_to_main_menu_with_message(
+                client,
+                db,
+                "Sorry, we don't have Women's Health specialists available right now.",
+            )
+        specialty_id = womens_health.id
+        require_specialty = True
+
+    update_conversation_data(
+        client,
+        specialty_id=specialty_id,
+        prefer_female=prefer_female,
+        require_specialty=require_specialty,
+    )
     db.add(client)
     db.commit()
     return (states.AWAITING_TIME_BAND, menus.build_time_band_menu())
+
+
+def handle_awaiting_specialty(client, body: str, db: Session) -> tuple[str, str]:
+    """Legacy alias for match-preference step."""
+    return handle_awaiting_match_preference(client, body, db)
 
 
 def handle_awaiting_time_band(client, body: str, db: Session) -> tuple[str, str]:
@@ -778,7 +815,8 @@ HANDLER_MAP = {
     states.AWAITING_THERAPIST_PICK: handle_awaiting_therapist_pick,
     states.AWAITING_DURATION: handle_awaiting_duration,
     states.AWAITING_BY_NAME_DURATION_OPTIONS: handle_awaiting_by_name_duration_options,
-    states.AWAITING_SPECIALTY: handle_awaiting_specialty,
+    states.AWAITING_MATCH_PREFERENCE: handle_awaiting_match_preference,
+    states.AWAITING_SPECIALTY: handle_awaiting_specialty,  # legacy
     states.AWAITING_TIME_BAND: handle_awaiting_time_band,
     states.AWAITING_DAYS: handle_awaiting_days,  # legacy
     states.AWAITING_MATCH_CONFIRM: handle_awaiting_match_confirm,
