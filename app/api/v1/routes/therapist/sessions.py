@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
-from app.models import Client, SessionNote, Therapist
+from app.models import Client, ClientFinancial, PaymentRecord, SessionNote, Therapist
 from app.models import Session as TherapySession
 from app.api.v1.schemas.clinical_note import (
     ClinicalNoteResponse,
@@ -20,6 +21,8 @@ from app.api.v1.schemas.session import (
     SessionStatusUpdateRequest,
     SessionStatusUpdateResponse,
     SessionSummary,
+    TherapistRecordPaymentRequest,
+    TherapistRecordPaymentResponse,
 )
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
@@ -303,7 +306,7 @@ def update_session_status(
     therapist: Therapist = Depends(get_current_therapist),
     db: Session = Depends(get_session),
 ):
-    """Update a therapist-owned session status."""
+    """Update a therapist-owned session status, optionally changing duration."""
     session_row = _get_therapist_session_or_404(
         db,
         therapist_id=therapist.id,
@@ -312,6 +315,11 @@ def update_session_status(
 
     now = datetime.now(timezone.utc)
     session_row.status = payload.status
+
+    if payload.duration_minutes is not None:
+        session_row.duration_minutes = payload.duration_minutes
+        session_row.end_time = session_row.start_time + timedelta(minutes=payload.duration_minutes)
+
     session_row.updated_at = now
     db.add(session_row)
     db.commit()
@@ -320,6 +328,7 @@ def update_session_status(
     return SessionStatusUpdateResponse(
         session_id=session_row.id,
         status=session_row.status,
+        duration_minutes=session_row.duration_minutes,
         updated_at=to_preferred_timezone(session_row.updated_at, therapist.preferred_timezone),
     )
 
@@ -385,3 +394,96 @@ def get_session_clinical_note(
         )
     diagnosis = _extract_diagnosis(_normalize_note_text(note.note_text))
     return _build_clinical_note_response(note, diagnosis=diagnosis)
+
+
+@router.post(
+    "/{session_id}/payment",
+    response_model=TherapistRecordPaymentResponse,
+    status_code=201,
+)
+def record_session_payment(
+    session_id: int,
+    payload: TherapistRecordPaymentRequest,
+    therapist: Therapist = Depends(get_current_therapist),
+    db: Session = Depends(get_session),
+):
+    """Record payment collected by therapist for a completed session."""
+    session_row = _get_therapist_session_or_404(
+        db,
+        therapist_id=therapist.id,
+        session_id=session_id,
+    )
+
+    if session_row.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="payment_requires_completed_session",
+        )
+
+    now = datetime.now(timezone.utc)
+    currency = session_row.currency or "HKD"
+
+    payment = PaymentRecord(
+        client_id=session_row.client_id,
+        source="session_linked",
+        session_id=session_row.id,
+        amount_cents=payload.amount_cents,
+        currency=currency,
+        payment_method=payload.method,
+        status="confirmed",
+        received_by_role="therapist",
+        received_by_name=therapist.display_name,
+        paid_at=now,
+        notes=payload.notes.strip() if payload.notes else None,
+        recorded_by_user_id=therapist.user_id,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(payment)
+    db.flush()
+
+    # Update client financial totals
+    stmt = select(ClientFinancial).where(ClientFinancial.client_id == session_row.client_id)
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name != "sqlite":
+        stmt = stmt.with_for_update()
+    financial = db.exec(stmt).first()
+
+    if not financial:
+        financial = ClientFinancial(
+            client_id=session_row.client_id,
+            currency=currency,
+            total_paid_cents=0,
+            total_receipted_cents=0,
+            updated_at=now,
+        )
+        db.add(financial)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            financial = db.exec(
+                select(ClientFinancial).where(ClientFinancial.client_id == session_row.client_id)
+            ).first()
+            if not financial:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="financial_record_conflict",
+                )
+
+    financial.total_paid_cents += payload.amount_cents
+    financial.currency = currency
+    financial.updated_at = now
+    db.add(financial)
+
+    db.commit()
+    db.refresh(payment)
+
+    return TherapistRecordPaymentResponse(
+        payment_id=payment.id,
+        session_id=session_row.id,
+        amount_cents=payment.amount_cents,
+        currency=payment.currency,
+        method=payment.payment_method,
+        paid_at=to_preferred_timezone(payment.paid_at, therapist.preferred_timezone),
+    )

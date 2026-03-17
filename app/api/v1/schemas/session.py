@@ -1,6 +1,7 @@
 """Pydantic schemas for therapist session endpoints."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -62,6 +63,7 @@ class SessionStatusUpdateRequest(BaseModel):
     status: str = Field(
         pattern="^(scheduled|started|completed|cancelled|no_show)$",
     )
+    duration_minutes: int | None = Field(default=None, gt=0)
 
 
 class SessionStatusUpdateResponse(BaseModel):
@@ -69,4 +71,24 @@ class SessionStatusUpdateResponse(BaseModel):
 
     session_id: int
     status: str
+    duration_minutes: int
     updated_at: datetime
+
+
+class TherapistRecordPaymentRequest(BaseModel):
+    """Therapist records payment collected for a completed session."""
+
+    amount_cents: int = Field(gt=0)
+    method: Literal["cash", "electronic"]
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class TherapistRecordPaymentResponse(BaseModel):
+    """Response after therapist records a payment."""
+
+    payment_id: int
+    session_id: int
+    amount_cents: int
+    currency: str
+    method: str
+    paid_at: datetime
