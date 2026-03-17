@@ -179,21 +179,25 @@ class SaveCalendlyRequest(BaseModel):
     )
     slot_mapping: dict[str, str] = Field(
         ...,
-        description="Mapping of duration (minutes) to Calendly event type URI.",
+        description="Mapping of business slot duration (minutes) to Calendly event type URI. Required keys: '30' and '45'.",
     )
 
     @model_validator(mode="after")
     def validate_slot_mapping(self) -> "SaveCalendlyRequest":
-        if not self.slot_mapping:
-            raise ValueError("At least one slot mapping is required")
+        required_keys = {"30", "45"}
+        provided_keys = {key.strip() for key in self.slot_mapping.keys()}
+        missing = required_keys - provided_keys
+        if missing:
+            raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
+        extra = provided_keys - required_keys
+        if extra:
+            raise ValueError(
+                f"Unexpected durations: {', '.join(sorted(extra))}. Only 30 and 45 allowed."
+            )
 
         normalized_mapping: dict[str, str] = {}
         for duration_key, uri in self.slot_mapping.items():
             normalized_key = duration_key.strip()
-            if not normalized_key.isdigit() or int(normalized_key) <= 0:
-                raise ValueError(
-                    f"Invalid duration key: {duration_key}. Duration keys must be positive integers."
-                )
             normalized_uri = uri.strip()
             if not normalized_uri:
                 raise ValueError(f"Event type URI cannot be empty for duration {normalized_key}.")

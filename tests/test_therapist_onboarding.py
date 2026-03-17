@@ -600,7 +600,7 @@ class TestSyncEventTypes:
 class TestSaveCalendly:
     """Tests for POST /therapist/onboarding/calendly"""
 
-    def test_save_calendly_accepts_flexible_slot_mapping(
+    def test_save_calendly_accepts_mismatched_native_durations_for_business_slots(
         self,
         client,
         db_session: Session,
@@ -639,8 +639,8 @@ class TestSaveCalendly:
                 json={
                     "calendly_pat": "valid_token_123",
                     "slot_mapping": {
-                        "45": "https://api.calendly.com/event_types/45MIN",
-                        "75": "https://api.calendly.com/event_types/75MIN",
+                        "30": "https://api.calendly.com/event_types/45MIN",
+                        "45": "https://api.calendly.com/event_types/75MIN",
                     },
                 },
                 headers={"Authorization": "Bearer test-token"},
@@ -649,13 +649,42 @@ class TestSaveCalendly:
         assert response.status_code == 200
         data = response.json()
         assert data["is_active"] is True
-        assert [item["duration_minutes"] for item in data["slot_mapping"]] == [45, 75]
+        assert [item["duration_minutes"] for item in data["slot_mapping"]] == [30, 45]
+        assert [item["calendly_event_type_uri"] for item in data["slot_mapping"]] == [
+            "https://api.calendly.com/event_types/45MIN",
+            "https://api.calendly.com/event_types/75MIN",
+        ]
 
         stmt = select(TherapistEventType).where(
             TherapistEventType.therapist_id == therapist_no_uri.id
         ).order_by(TherapistEventType.duration_minutes.asc())
         mapped_event_types = db_session.exec(stmt).all()
-        assert [item.duration_minutes for item in mapped_event_types] == [45, 75]
+        assert [item.duration_minutes for item in mapped_event_types] == [30, 45]
+        assert [item.calendly_event_type_uri for item in mapped_event_types] == [
+            "https://api.calendly.com/event_types/45MIN",
+            "https://api.calendly.com/event_types/75MIN",
+        ]
+
+    def test_save_calendly_requires_30_and_45_business_slots(
+        self,
+        client,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        response = client.post(
+            "/api/v1/therapist/onboarding/calendly",
+            json={
+                "calendly_pat": "valid_token_123",
+                "slot_mapping": {
+                    "30": "https://api.calendly.com/event_types/45MIN",
+                    "75": "https://api.calendly.com/event_types/75MIN",
+                },
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 422
+        assert "Missing required durations: 45" in str(response.json())
 
 
 class TestUpdateProfile:

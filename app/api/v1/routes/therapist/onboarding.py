@@ -448,13 +448,6 @@ def save_calendly(
                 status_code=400,
                 detail=f"Event type URI not found in Calendly account: {uri}",
             )
-        expected_duration = int(duration_str)
-        actual_duration = valid_event_types[uri]["duration_minutes"]
-        if actual_duration != expected_duration:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Duration mismatch for slot {duration_str}: event type has {actual_duration} minutes",
-            )
 
     # Encrypt and save PAT
     therapist.calendly_pat_encrypted = encrypt_string(data.calendly_pat)
