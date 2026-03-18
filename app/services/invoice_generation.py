@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 from app.services.invoice_documents import write_basic_invoice_pdf_file
 from app.services.invoice_latex import write_latex_invoice_pdf_file
 from app.services.invoice_storage import store_invoice_pdf
@@ -47,8 +50,10 @@ def _render_invoice_pdf_file(
                 issued_at=issued_at,
             )
         except Exception:
+            logger.exception("LaTeX invoice rendering failed for invoice %s", invoice_id)
             if not settings.invoice_latex_fallback_to_basic:
                 raise
+            logger.warning("Falling back to basic PDF renderer for invoice %s", invoice_id)
 
     return write_basic_invoice_pdf_file(
         invoice_id=invoice_id,

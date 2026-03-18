@@ -47,6 +47,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/app/ app/
 COPY --from=builder /app/alembic/ alembic/
 COPY --from=builder /app/alembic.ini ./
+COPY templates/ templates/
 
 # Put venv on PATH
 ENV PATH="/app/.venv/bin:$PATH"
