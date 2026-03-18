@@ -415,7 +415,7 @@ def test_session_payloads_include_expected_charge_and_assigned_plan(client, db_s
     with _therapist_auth_context(therapist_user):
         therapist_list_response = client.get("/api/v1/therapist/sessions", headers=_auth_headers())
     assert therapist_list_response.status_code == 200
-    therapist_list = therapist_list_response.json()
+    therapist_list = therapist_list_response.json()["items"]
     assert therapist_list[0]["expected_charge_cents"] == 100000
     assert therapist_list[0]["expected_charge_currency"] == "HKD"
     assert therapist_list[0]["assigned_plan"]["plan_id"] == plan.id

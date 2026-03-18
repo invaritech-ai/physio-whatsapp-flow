@@ -104,9 +104,13 @@ def test_therapist_sessions_list_uses_preferred_timezone(client, db_session: Ses
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload) == 1
-    start = datetime.fromisoformat(payload[0]["start_time"])
-    end = datetime.fromisoformat(payload[0]["end_time"])
+    assert payload["total"] == 1
+    assert payload["limit"] == 20
+    assert payload["offset"] == 0
+    assert payload["has_more"] is False
+    assert len(payload["items"]) == 1
+    start = datetime.fromisoformat(payload["items"][0]["start_time"])
+    end = datetime.fromisoformat(payload["items"][0]["end_time"])
     assert start.hour == 15
     assert start.utcoffset() == timedelta(hours=8)
     assert end.utcoffset() == timedelta(hours=8)
@@ -164,7 +168,7 @@ def test_therapist_sessions_fallback_to_default_app_timezone(client, db_session:
 
     assert response.status_code == 200
     payload = response.json()
-    start = datetime.fromisoformat(payload[0]["start_time"])
+    start = datetime.fromisoformat(payload["items"][0]["start_time"])
     # settings.invoice_timezone defaults to Asia/Hong_Kong.
     assert start.utcoffset() == timedelta(hours=8)
     assert start.hour == 15

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -18,6 +19,7 @@ from app.api.v1.schemas.clinical_note import (
 from app.api.v1.schemas.session import (
     SessionDetail,
     SessionListItem,
+    SessionListResponse,
     SessionStatusUpdateRequest,
     SessionStatusUpdateResponse,
     SessionSummary,
@@ -145,38 +147,45 @@ def _get_therapist_session_or_404(
     return session_row
 
 
-@router.get("", response_model=list[SessionListItem])
+@router.get("", response_model=SessionListResponse)
 def list_sessions(
     therapist: Therapist = Depends(get_current_therapist),
     db: Session = Depends(get_session),
     scope: str | None = Query(None, pattern="^(upcoming|past|all)$"),
     from_date_raw: str | None = Query(None, alias="from"),
     to_date_raw: str | None = Query(None, alias="to"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ):
     """List current therapist's sessions, with optional date range and scope filter."""
     now = datetime.now(timezone.utc)
     from_date = normalize_query_datetime(_parse_datetime_query(from_date_raw))
     to_date = normalize_query_datetime(_parse_datetime_query(to_date_raw))
 
-    stmt = select(TherapySession).where(
-        TherapySession.therapist_id == therapist.id
-    )
+    filters = [TherapySession.therapist_id == therapist.id]
 
     # Apply scope filter
     if scope == "upcoming":
-        stmt = stmt.where(TherapySession.start_time >= now)
+        filters.append(TherapySession.start_time >= now)
     elif scope == "past":
-        stmt = stmt.where(TherapySession.start_time < now)
+        filters.append(TherapySession.start_time < now)
 
     # Apply date range filters
     if from_date:
-        stmt = stmt.where(TherapySession.start_time >= from_date)
+        filters.append(TherapySession.start_time >= from_date)
     if to_date:
-        stmt = stmt.where(TherapySession.start_time <= to_date)
+        filters.append(TherapySession.start_time <= to_date)
 
-    stmt = stmt.order_by(TherapySession.start_time)
+    total_stmt = select(func.count()).select_from(TherapySession)
+    items_stmt = select(TherapySession)
+    for condition in filters:
+        total_stmt = total_stmt.where(condition)
+        items_stmt = items_stmt.where(condition)
 
-    sessions = db.exec(stmt).all()
+    total = int(db.exec(total_stmt).one())
+    sessions = db.exec(
+        items_stmt.order_by(TherapySession.start_time).offset(offset).limit(limit)
+    ).all()
 
     # Batch-load clients
     client_ids = {s.client_id for s in sessions}
@@ -188,7 +197,7 @@ def list_sessions(
         clients = {c.id: c for c in client_rows}
 
     plan_map = load_active_plan_map(db, client_ids=client_ids)
-    return [
+    items = [
         _build_list_item(
             s,
             clients.get(s.client_id, Client(phone_e164="")),
@@ -197,6 +206,13 @@ def list_sessions(
         )
         for s in sessions
     ]
+    return SessionListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + len(items)) < total,
+    )
 
 
 @router.get("/summary", response_model=SessionSummary)

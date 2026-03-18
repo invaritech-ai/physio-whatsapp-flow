@@ -25,6 +25,16 @@ class SessionListItem(BaseModel):
     assigned_plan: AssignedPlanSummary | None = None
 
 
+class SessionListResponse(BaseModel):
+    """Paginated envelope for therapist sessions list."""
+
+    items: list[SessionListItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class SessionDetail(BaseModel):
     """Response schema for session detail view."""
 
