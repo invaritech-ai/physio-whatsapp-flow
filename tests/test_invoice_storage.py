@@ -5,7 +5,11 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import invoice_storage
+
+pytestmark = pytest.mark.no_s3_mock
 
 
 class _FakeS3Client:
@@ -44,14 +48,14 @@ def test_upload_to_s3_sends_content_length_header(monkeypatch, tmp_path):
 
     result = invoice_storage._upload_to_s3(invoice_id=3, local_pdf_path=pdf_path)
 
-    assert result == "https://signed.example.com/invoice-3.pdf"
+    # No public_base_url → stable s3:// reference (presigned URL comes via resolve_invoice_pdf_url)
+    assert result == "s3://my-bucket/invoices/invoice-3.pdf"
     assert len(fake_s3.put_object_calls) == 1
     call = fake_s3.put_object_calls[0]
     assert call["Bucket"] == "my-bucket"
     assert call["Key"] == "invoices/invoice-3.pdf"
     assert call["ContentType"] == "application/pdf"
     assert call["ContentLength"] == len(payload)
-    assert len(fake_s3.generate_presigned_url_calls) == 1
 
 
 def test_upload_to_s3_uses_public_base_url_when_configured(monkeypatch, tmp_path):

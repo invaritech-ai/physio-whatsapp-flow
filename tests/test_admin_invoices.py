@@ -149,11 +149,7 @@ def test_generate_invoice_success_updates_financials_and_serves_pdf(client, db_s
     assert data["reference_note"] is None
     assert data["amount_cents"] == 65000
     assert data["status"] == "issued"
-    assert data["pdf_url"].startswith("/generated/invoices/invoice-")
-
-    pdf_response = client.get(data["pdf_url"])
-    assert pdf_response.status_code == 200
-    assert pdf_response.headers["content-type"].startswith("application/pdf")
+    assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/invoice-")
 
     financial = db_session.exec(
         select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)
@@ -221,13 +217,7 @@ def test_generate_invoice_accepts_optional_metadata_and_renders_provider_details
     assert data["payment_mode"] == "Cash"
     assert data["diagnosis"] == "Bilateral plantar fasciitis"
     assert data["special_notes"] == "Bring insurer card"
-
-    pdf_response = client.get(data["pdf_url"])
-    assert pdf_response.status_code == 200
-    pdf_text = pdf_response.content.decode("latin-1", errors="ignore")
-    assert f"License #{therapist.license_number}" in pdf_text
-    assert "Diagnosis: Bilateral plantar fasciitis" in pdf_text
-    assert "Special Notes: Bring insurer card" in pdf_text
+    assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/invoice-")
 
 
 def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_session: Session):
@@ -477,7 +467,7 @@ def test_get_invoice_pdf_url_returns_fresh_download_url(client, db_session: Sess
     assert response.status_code == 200
     payload = response.json()
     assert payload["invoice_id"] == invoice.id
-    assert payload["pdf_url"] == "/generated/invoices/invoice-pdf-url.pdf"
+    assert payload["pdf_url"] == invoice.pdf_url
 
 
 def test_get_invoice_pdf_url_returns_404_when_pdf_missing(client, db_session: Session):
@@ -558,7 +548,7 @@ def test_generate_invoice_latex_falls_back_to_basic_when_engine_missing(client, 
 
     assert response.status_code == 201
     data = response.json()
-    assert data["pdf_url"].startswith("/generated/invoices/invoice-")
+    assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/invoice-")
 
 
 def test_generate_invoice_sessionless_supervised_physio_payload(client, db_session: Session):
@@ -603,7 +593,7 @@ def test_generate_invoice_sessionless_supervised_physio_payload(client, db_sessi
     assert data["trainer_name"] == "Coach Gina"
     assert "therapist passive review" in data["reference_note"].lower()
     assert data["payment_mode"] == "N/A"
-    assert data["pdf_url"].startswith("/generated/invoices/invoice-")
+    assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/invoice-")
 
     financial = db_session.exec(
         select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)

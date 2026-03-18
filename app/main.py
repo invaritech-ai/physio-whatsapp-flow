@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import logging
-from pathlib import Path
 from typing import AsyncIterator
 
 
@@ -10,7 +9,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
 from slowapi import _rate_limit_exceeded_handler
@@ -102,15 +100,6 @@ app = FastAPI(
     title="movement-whatsapp-automation-api",
     version="0.1.0",
     lifespan=lifespan,
-)
-
-# Static invoice document serving for generated PDF links
-invoice_storage_path = Path(settings.invoice_storage_dir)
-invoice_storage_path.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/" + settings.invoice_public_path.strip("/"),
-    StaticFiles(directory=str(invoice_storage_path)),
-    name="generated-invoices",
 )
 
 # Rate limiting

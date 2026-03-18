@@ -51,14 +51,6 @@ def invoice_pdf_path(invoice_id: int) -> Path:
     return _invoice_storage_dir() / _invoice_filename(invoice_id)
 
 
-def build_invoice_pdf_url(invoice_id: int) -> str:
-    public_path = "/" + settings.invoice_public_path.strip("/")
-    relative_url = f"{public_path}/{_invoice_filename(invoice_id)}"
-    if not settings.invoice_public_base_url:
-        return relative_url
-    return f"{settings.invoice_public_base_url.rstrip('/')}{relative_url}"
-
-
 def build_invoice_pdf_bytes(
     *,
     invoice_id: int,
@@ -165,43 +157,6 @@ def build_invoice_pdf_bytes(
         ).encode("ascii")
     )
     return bytes(pdf)
-
-
-def write_invoice_pdf(
-    *,
-    invoice_id: int,
-    client_name: str | None,
-    client_address: str | None,
-    client_phone: str,
-    amount_cents: int,
-    currency: str,
-    description: str,
-    diagnosis: str | None = None,
-    session_start_at: datetime | None = None,
-    therapist_name: str | None = None,
-    therapist_license_number: str | None = None,
-    payment_mode: str | None = None,
-    special_notes: str | None = None,
-    issued_at: datetime | None = None,
-) -> str:
-    output_path = write_basic_invoice_pdf_file(
-        invoice_id=invoice_id,
-        client_name=client_name,
-        client_address=client_address,
-        client_phone=client_phone,
-        amount_cents=amount_cents,
-        currency=currency,
-        description=description,
-        diagnosis=diagnosis,
-        session_start_at=session_start_at,
-        therapist_name=therapist_name,
-        therapist_license_number=therapist_license_number,
-        payment_mode=payment_mode,
-        special_notes=special_notes,
-        issued_at=issued_at,
-    )
-    _ = output_path
-    return build_invoice_pdf_url(invoice_id)
 
 
 def write_basic_invoice_pdf_file(

@@ -3,22 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.core.config import settings
-from app.services.invoice_documents import build_invoice_pdf_url
 
 
 def _invoice_filename(invoice_id: int) -> str:
     return f"invoice-{invoice_id}.pdf"
-
-
-def _storage_backend() -> str:
-    backend = settings.invoice_storage_backend.strip().lower()
-    if backend in {"local", "s3"}:
-        return backend
-    if backend == "auto":
-        if settings.invoice_s3_bucket and settings.invoice_s3_endpoint_url:
-            return "s3"
-        return "local"
-    return "local"
 
 
 def _s3_object_key(invoice_id: int) -> str:
@@ -33,12 +21,12 @@ def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
     try:
         import boto3
     except ModuleNotFoundError as exc:
-        raise RuntimeError("boto3 is required for S3 invoice storage backend") from exc
+        raise RuntimeError("boto3 is required for S3 invoice storage") from exc
 
     bucket = settings.invoice_s3_bucket
     endpoint_url = settings.invoice_s3_endpoint_url
     if not bucket or not endpoint_url:
-        raise RuntimeError("invoice_s3_bucket and invoice_s3_endpoint_url are required for S3 backend")
+        raise RuntimeError("invoice_s3_bucket and invoice_s3_endpoint_url are required")
 
     client_kwargs: dict[str, str] = {"endpoint_url": endpoint_url}
     if settings.invoice_s3_region:
@@ -85,17 +73,14 @@ def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
 
 
 def store_invoice_pdf(*, invoice_id: int, local_pdf_path: Path) -> str:
-    backend = _storage_backend()
-    if backend == "s3":
-        return _upload_to_s3(invoice_id=invoice_id, local_pdf_path=local_pdf_path)
-    return build_invoice_pdf_url(invoice_id)
+    return _upload_to_s3(invoice_id=invoice_id, local_pdf_path=local_pdf_path)
 
 
 def resolve_invoice_pdf_url(stored_url: str | None) -> str | None:
     """Convert a stored stable s3:// reference to a fresh pre-signed (or public) URL.
 
     - ``None`` / empty → returned as-is
-    - Already a public/http URL (legacy pre-signed or public) → returned as-is
+    - Already a public/http URL → returned as-is
     - ``s3://bucket/key`` → fresh pre-signed URL (or public URL if base_url configured)
     """
     if not stored_url or not stored_url.startswith("s3://"):

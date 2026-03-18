@@ -140,10 +140,27 @@ def client_fixture(db_session):
 
 
 @pytest.fixture(autouse=True)
-def force_local_invoice_storage():
-    """Ensure all API tests use the local invoice storage backend, avoiding botocore/S3 network calls."""
-    from app.core.config import settings
-    original_backend = settings.invoice_storage_backend
-    settings.invoice_storage_backend = "local"
-    yield
-    settings.invoice_storage_backend = original_backend
+def mock_s3_invoice_storage(request):
+    """Mock S3 upload in tests to avoid real network calls.
+
+    Tests that exercise the real S3 upload logic can disable this with
+    ``@pytest.mark.no_s3_mock``.
+    """
+    if "no_s3_mock" in {m.name for m in request.node.iter_markers()}:
+        yield
+        return
+    with patch(
+        "app.services.invoice_storage._upload_to_s3",
+        side_effect=lambda *, invoice_id, local_pdf_path: f"https://test-bucket.s3.example.com/invoices/invoice-{invoice_id}.pdf",
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def mock_invoice_whatsapp():
+    """Mock WhatsApp sends triggered by invoice generation to prevent real Twilio calls."""
+    with patch(
+        "app.services.invoice_whatsapp.send_whatsapp_message",
+        return_value="test-whatsapp-sid",
+    ):
+        yield

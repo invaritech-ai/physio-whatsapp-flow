@@ -15,6 +15,7 @@ from app.api.v1.schemas.invoice import (
     InvoiceGenerateRequest,
     InvoiceListItem,
     InvoicePdfUrlResponse,
+    SendWhatsAppResponse,
 )
 from app.core.auth import get_current_admin
 from app.core.config import settings
@@ -44,6 +45,7 @@ from app.services.idempotency import (
 )
 from app.services.invoice_generation import generate_and_store_invoice_pdf_url
 from app.services.invoice_storage import resolve_invoice_pdf_url
+from app.services.invoice_whatsapp import send_invoice_whatsapp
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
@@ -300,6 +302,29 @@ def download_invoice_pdf(
     return RedirectResponse(url=url, status_code=307)
 
 
+@router.post("/{invoice_id}/send-whatsapp", response_model=SendWhatsAppResponse)
+def send_invoice_via_whatsapp(
+    invoice_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Manually (re)send an invoice PDF to the client's WhatsApp."""
+    _ = admin
+    invoice = _ensure_invoice_exists(db, invoice_id)
+    if invoice.status == "voided":
+        raise BusinessLogicError(
+            "cannot_send_voided_invoice",
+            details={"invoice_id": invoice_id},
+        )
+    client = _ensure_client_exists(db, invoice.client_id)
+    sent, error = send_invoice_whatsapp(client=client, invoice=invoice)
+    return SendWhatsAppResponse(
+        invoice_id=invoice_id,
+        whatsapp_sent=sent,
+        whatsapp_error=error,
+    )
+
+
 @router.post("/generate", response_model=InvoiceDetailResponse, status_code=201)
 def generate_invoice(
     payload: InvoiceGenerateRequest,
@@ -498,4 +523,11 @@ def _generate_invoice_impl(
         raise ConflictError("invoice_generation_conflict") from exc
 
     db.refresh(invoice)
-    return _to_invoice_detail(invoice, preferred_timezone=admin.preferred_timezone)
+    detail = _to_invoice_detail(invoice, preferred_timezone=admin.preferred_timezone)
+
+    if payload.send_whatsapp:
+        sent, error = send_invoice_whatsapp(client=client, invoice=invoice)
+        detail.whatsapp_sent = sent
+        detail.whatsapp_error = error
+
+    return detail

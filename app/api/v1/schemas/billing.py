@@ -188,6 +188,7 @@ class PaymentVerifyRequest(BaseModel):
     diagnosis_preset_id: int | None = Field(default=None, gt=0)
     supervised_exercise: bool = True
     payment_mode: str | None = Field(default=None, min_length=1, max_length=120)
+    send_whatsapp: bool = True
 
 
 class PaymentVerifyResponse(BaseModel):
@@ -215,6 +216,8 @@ class InvoiceDetailResponseRef(BaseModel):
     pdf_url: str | None
     status: str
     created_at: datetime
+    whatsapp_sent: bool = False
+    whatsapp_error: str | None = None
 
 
 class BillingQueueItem(BaseModel):

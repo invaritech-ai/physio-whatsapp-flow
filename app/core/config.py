@@ -25,11 +25,8 @@ class Settings(BaseSettings):
     # Currency
     default_currency: str = "HKD"
 
-    # Invoice document storage
+    # Invoice document storage (temp staging dir for PDF rendering before S3 upload)
     invoice_storage_dir: str = "/tmp/physio_invoice_pdfs"
-    invoice_public_path: str = "/generated/invoices"
-    invoice_public_base_url: str | None = None
-    invoice_storage_backend: str = "local"  # local|s3|auto
 
     # S3-compatible invoice object storage (AWS S3 / OCI Object Storage compat endpoint)
     invoice_s3_bucket: str | None = None

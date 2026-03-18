@@ -48,6 +48,7 @@ from app.services.idempotency import (
 )
 from app.services.invoice_generation import generate_and_store_invoice_pdf_url
 from app.services.invoice_storage import resolve_invoice_pdf_url
+from app.services.invoice_whatsapp import send_invoice_whatsapp
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
 logger = logging.getLogger(__name__)
@@ -372,9 +373,11 @@ def verify_payment(
     db.add(financial)
 
     receipt_ref: InvoiceDetailResponseRef | None = None
+    invoice_row: Receipt | None = None
+    client_row: Client | None = None
 
     if payload.auto_generate_receipt:
-        receipt_ref = _auto_generate_receipt(
+        receipt_ref, invoice_row, client_row = _auto_generate_receipt(
             db=db,
             payment=payment,
             payload=payload,
@@ -386,6 +389,12 @@ def verify_payment(
     db.commit()
     db.refresh(payment)
     db.refresh(financial)
+
+    if receipt_ref is not None and invoice_row is not None and client_row is not None and payload.send_whatsapp:
+        db.refresh(invoice_row)
+        sent, error = send_invoice_whatsapp(client=client_row, invoice=invoice_row)
+        receipt_ref.whatsapp_sent = sent
+        receipt_ref.whatsapp_error = error
 
     return PaymentVerifyResponse(
         payment=_to_payment_item(payment, preferred_timezone=admin.preferred_timezone),
@@ -402,7 +411,7 @@ def _auto_generate_receipt(
     admin: User,
     financial: ClientFinancial,
     now: datetime,
-) -> InvoiceDetailResponseRef:
+) -> tuple[InvoiceDetailResponseRef, Receipt, Client]:
     """Build and persist a receipt as part of payment verification."""
     client = db.get(Client, payment.client_id)
     if not client:
@@ -519,7 +528,7 @@ def _auto_generate_receipt(
     db.add(financial)
     db.add(invoice)
 
-    return InvoiceDetailResponseRef(
+    ref = InvoiceDetailResponseRef(
         id=invoice.id,
         client_id=invoice.client_id,
         session_id=invoice.session_id,
@@ -535,3 +544,4 @@ def _auto_generate_receipt(
         status=invoice.status,
         created_at=invoice.created_at,
     )
+    return ref, invoice, client

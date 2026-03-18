@@ -35,6 +35,8 @@ class InvoiceDetailResponse(InvoiceListItem):
     """Admin invoice detail response."""
 
     issued_by_user_id: int
+    whatsapp_sent: bool = False
+    whatsapp_error: str | None = None
 
 
 class InvoicePdfUrlResponse(BaseModel):
@@ -64,6 +66,7 @@ class InvoiceGenerateRequest(BaseModel):
                 "diagnosis": "Bilateral plantar fasciitis",
                 "special_note_preset_id": None,
                 "special_notes": "Please submit to insurer within 30 days.",
+                "send_whatsapp": True,
             }
         }
     )
@@ -82,6 +85,7 @@ class InvoiceGenerateRequest(BaseModel):
     diagnosis: str | None = Field(default=None, min_length=1, max_length=2000)
     special_note_preset_id: int | None = Field(default=None, gt=0)
     special_notes: str | None = Field(default=None, min_length=1, max_length=4000)
+    send_whatsapp: bool = Field(default=True)
 
 
 class ReceiptingSummaryReceiptItem(BaseModel):
@@ -110,6 +114,14 @@ class ReceiptingSummaryResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class SendWhatsAppResponse(BaseModel):
+    """Response from manually sending an invoice via WhatsApp."""
+
+    invoice_id: int
+    whatsapp_sent: bool
+    whatsapp_error: str | None = None
 
 
 class TherapistInvoiceListItem(InvoiceListItem):
