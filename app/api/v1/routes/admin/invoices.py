@@ -438,12 +438,6 @@ def _generate_invoice_impl(
         client_id=payload.client_id,
         currency=currency,
     )
-    available_to_receipt_cents = max(
-        financial.total_paid_cents - financial.total_receipted_cents,
-        0,
-    )
-    if amount_cents > available_to_receipt_cents:
-        raise BusinessLogicError("amount_exceeds_available_to_receipt", details={"amount_cents": amount_cents, "available_to_receipt_cents": available_to_receipt_cents})
 
     now = datetime.now(timezone.utc)
     invoice = Receipt(

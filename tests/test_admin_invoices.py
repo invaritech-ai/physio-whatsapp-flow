@@ -290,7 +290,7 @@ def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_sessio
 
 
 
-def test_generate_invoice_rejects_amount_exceeding_available_balance(client, db_session: Session):
+def test_generate_invoice_allows_amount_exceeding_available_balance_for_ar_workflow(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, suffix="invoice-guard")
     client_row, session_row = _create_client_and_session(
@@ -317,13 +317,23 @@ def test_generate_invoice_rejects_amount_exceeding_available_balance(client, db_
                 "session_id": session_row.id,
                 "amount_cents": 10000,
                 "currency": "HKD",
-                "description": "Too high",
+                "description": "AR invoice before payment",
             },
             headers=_auth_headers(),
         )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "amount_exceeds_available_to_receipt"
+    assert response.status_code == 201
+    data = response.json()
+    assert data["client_id"] == client_row.id
+    assert data["session_id"] == session_row.id
+    assert data["amount_cents"] == 10000
+
+    financial = db_session.exec(
+        select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)
+    ).first()
+    assert financial is not None
+    assert financial.total_paid_cents == 50000
+    assert financial.total_receipted_cents == 55000
 
 
 def test_generate_invoice_rejects_session_client_mismatch(client, db_session: Session):
