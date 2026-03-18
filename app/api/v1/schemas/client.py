@@ -29,6 +29,8 @@ class ClientListItem(BaseModel):
     address: str | None
     preferred_therapist_id: int | None
     default_receipt_amount_cents: int | None
+    has_30min_plan: bool = False
+    has_45min_plan: bool = False
     financials_summary: ClientFinancialSummary | None = None
     created_at: datetime
     updated_at: datetime

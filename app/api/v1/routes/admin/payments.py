@@ -1,6 +1,8 @@
 """Admin endpoints for recording and listing payments."""
 
 import json
+import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, Query
@@ -10,26 +12,46 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.billing import (
+    InvoiceDetailResponseRef,
     PaymentRecordCreateRequest,
     PaymentRecordCreateResponse,
     PaymentRecordItem,
+    PaymentVerifyRequest,
+    PaymentVerifyResponse,
 )
 from app.api.v1.schemas.client import ClientFinancialResponse
 from app.core.auth import get_current_admin
+from app.core.config import settings
 from app.core.exceptions import (
+    AppException,
     AuthorizationError,
     BusinessLogicError,
     ConflictError,
     NotFoundError,
 )
 from app.db.session import get_session
-from app.models import Client, ClientFinancial, PaymentRecord, Session as TherapySession, User
+from app.models import (
+    Client,
+    ClientFinancial,
+    InvoicePreset,
+    PaymentRecord,
+    Receipt,
+    Session as TherapySession,
+    SessionNote,
+    Therapist,
+    User,
+)
 from app.services.idempotency import (
     complete_idempotency_record,
     fail_idempotency_record,
     get_or_create_idempotency_record,
 )
+from app.services.invoice_generation import generate_and_store_invoice_pdf_url
+from app.services.invoice_storage import resolve_invoice_pdf_url
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
+
+logger = logging.getLogger(__name__)
+_DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
 
 router = APIRouter(prefix="/admin", tags=["Admin - Payments"])
 
@@ -242,7 +264,7 @@ def _create_payment_record(
 def list_payments(
     client_id: int | None = None,
     session_id: int | None = None,
-    method: str | None = Query(default=None, pattern="^(cash|electronic)$"),
+    method: str | None = Query(default=None, pattern="^(cash|electronic|bank_transfer)$"),
     source: str | None = Query(default=None, pattern="^(session_linked|admin_manual)$"),
     received_by_role: str | None = Query(default=None, pattern="^(admin|therapist)$"),
     from_date: datetime | None = Query(None, alias="from"),
@@ -288,7 +310,7 @@ def list_client_payments(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_session),
     session_id: int | None = None,
-    method: str | None = Query(default=None, pattern="^(cash|electronic)$"),
+    method: str | None = Query(default=None, pattern="^(cash|electronic|bank_transfer)$"),
     source: str | None = Query(default=None, pattern="^(session_linked|admin_manual)$"),
     received_by_role: str | None = Query(default=None, pattern="^(admin|therapist)$"),
     from_date: datetime | None = Query(None, alias="from"),
@@ -309,4 +331,207 @@ def list_client_payments(
         offset=offset,
         admin=admin,
         db=db,
+    )
+
+
+@router.post("/payments/{payment_id}/verify", response_model=PaymentVerifyResponse)
+def verify_payment(
+    payment_id: int,
+    payload: PaymentVerifyRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Verify a pending payment and optionally auto-generate a receipt."""
+    if admin.id is None:
+        raise AuthorizationError("access_denied")
+
+    payment = db.get(PaymentRecord, payment_id)
+    if not payment:
+        raise NotFoundError("payment_not_found", resource_type="payment", resource_id=payment_id)
+    if payment.status != "pending":
+        raise BusinessLogicError(
+            "payment_not_pending",
+            details={"payment_id": payment_id, "current_status": payment.status},
+        )
+
+    now = datetime.now(timezone.utc)
+    currency = payment.currency
+
+    # Confirm the payment
+    payment.status = "confirmed"
+    payment.updated_at = now
+    db.add(payment)
+
+    # Update client financial totals
+    financial = _get_or_create_client_financial_locked(
+        db, client_id=payment.client_id, currency=currency,
+    )
+    financial.total_paid_cents += payment.amount_cents
+    financial.currency = currency
+    financial.updated_at = now
+    db.add(financial)
+
+    receipt_ref: InvoiceDetailResponseRef | None = None
+
+    if payload.auto_generate_receipt:
+        receipt_ref = _auto_generate_receipt(
+            db=db,
+            payment=payment,
+            payload=payload,
+            admin=admin,
+            financial=financial,
+            now=now,
+        )
+
+    db.commit()
+    db.refresh(payment)
+    db.refresh(financial)
+
+    return PaymentVerifyResponse(
+        payment=_to_payment_item(payment, preferred_timezone=admin.preferred_timezone),
+        financials=_to_financial_response(financial, preferred_timezone=admin.preferred_timezone),
+        receipt=receipt_ref,
+    )
+
+
+def _auto_generate_receipt(
+    *,
+    db: Session,
+    payment: PaymentRecord,
+    payload: PaymentVerifyRequest,
+    admin: User,
+    financial: ClientFinancial,
+    now: datetime,
+) -> InvoiceDetailResponseRef:
+    """Build and persist a receipt as part of payment verification."""
+    client = db.get(Client, payment.client_id)
+    if not client:
+        raise NotFoundError("client_not_found", resource_type="client", resource_id=payment.client_id)
+
+    session_row: TherapySession | None = None
+    if payment.session_id is not None:
+        session_row = db.get(TherapySession, payment.session_id)
+
+    # Resolve therapist
+    therapist: Therapist | None = None
+    therapist_id: int | None = None
+    if session_row is not None:
+        therapist_id = session_row.therapist_id
+    if therapist_id is not None:
+        therapist = db.get(Therapist, therapist_id)
+    therapist_name = therapist.display_name if therapist else None
+    therapist_license_number = therapist.license_number if therapist else None
+
+    # Resolve diagnosis
+    diagnosis: str | None = payload.diagnosis
+    if diagnosis is None and payload.diagnosis_preset_id is not None:
+        preset = db.get(InvoicePreset, payload.diagnosis_preset_id)
+        if preset and preset.preset_type == "diagnosis" and preset.is_active:
+            diagnosis = preset.value
+    if diagnosis is None and session_row is not None and session_row.id is not None:
+        latest_note = db.exec(
+            select(SessionNote)
+            .where(SessionNote.session_id == session_row.id)
+            .order_by(SessionNote.created_at.desc())
+        ).first()
+        if latest_note and latest_note.note_text:
+            match = _DIAGNOSIS_PATTERN.search(latest_note.note_text)
+            if match:
+                diagnosis = match.group(1).strip()
+    if diagnosis is None:
+        diagnosis = "-"
+
+    # Auto-construct description
+    duration = session_row.duration_minutes if session_row else None
+    if payload.supervised_exercise:
+        description = "Supervised Physiotherapy Exercise"
+        service_type = "supervised_physio"
+    else:
+        description = "Physiotherapy Session"
+        service_type = "standard"
+    if duration:
+        description = f"{description} ({duration} minutes)"
+
+    # Resolve amount
+    amount_cents = payload.amount_cents
+    if amount_cents is None:
+        amount_cents = client.default_receipt_amount_cents
+    if amount_cents is None:
+        amount_cents = payment.amount_cents
+    if amount_cents is None or amount_cents <= 0:
+        raise BusinessLogicError("amount_cents_required", field="amount_cents")
+
+    # Resolve payment mode
+    payment_mode = payload.payment_mode
+    if payment_mode is None and payment.payment_method:
+        payment_mode = payment.payment_method.replace("_", " ").title()
+    if payment_mode is None:
+        payment_mode = "N/A"
+
+    currency = payment.currency
+
+    invoice = Receipt(
+        client_id=payment.client_id,
+        session_id=session_row.id if session_row else None,
+        therapist_id=therapist_id,
+        service_type=service_type,
+        amount_cents=amount_cents,
+        currency=currency,
+        description=description,
+        payment_mode=payment_mode,
+        diagnosis=diagnosis,
+        special_notes="-",
+        status="pending",
+        issued_by_user_id=admin.id,
+        created_at=now,
+    )
+    db.add(invoice)
+    db.flush()
+
+    try:
+        invoice.pdf_url = generate_and_store_invoice_pdf_url(
+            invoice_id=invoice.id,
+            client_id=client.id,
+            client_name=client.name,
+            client_address=client.address,
+            client_phone=client.phone_e164,
+            amount_cents=amount_cents,
+            currency=currency,
+            description=description,
+            diagnosis=diagnosis,
+            session_start_at=session_row.start_time if session_row else now,
+            therapist_name=therapist_name,
+            therapist_license_number=therapist_license_number,
+            payment_mode=payment_mode,
+            special_notes="-",
+            issued_at=now,
+        )
+    except (OSError, RuntimeError) as exc:
+        db.rollback()
+        error_code = "invoice_pdf_generation_failed"
+        if "s3" in str(exc).lower() or "upload" in str(exc).lower():
+            error_code = "invoice_upload_failed"
+        raise AppException(error_code, status_code=500) from exc
+
+    invoice.status = "issued"
+    financial.total_receipted_cents += amount_cents
+    financial.updated_at = now
+    db.add(financial)
+    db.add(invoice)
+
+    return InvoiceDetailResponseRef(
+        id=invoice.id,
+        client_id=invoice.client_id,
+        session_id=invoice.session_id,
+        therapist_id=invoice.therapist_id,
+        service_type=invoice.service_type,
+        amount_cents=invoice.amount_cents,
+        currency=invoice.currency,
+        description=invoice.description,
+        payment_mode=invoice.payment_mode,
+        diagnosis=invoice.diagnosis,
+        special_notes=invoice.special_notes,
+        pdf_url=resolve_invoice_pdf_url(invoice.pdf_url),
+        status=invoice.status,
+        created_at=invoice.created_at,
     )

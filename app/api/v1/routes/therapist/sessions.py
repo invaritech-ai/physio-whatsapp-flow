@@ -5,12 +5,11 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
-from app.models import Client, ClientFinancial, PaymentRecord, SessionNote, Therapist
+from app.models import Client, PaymentRecord, SessionNote, Therapist
 from app.models import Session as TherapySession
 from app.api.v1.schemas.clinical_note import (
     ClinicalNoteResponse,
@@ -446,7 +445,7 @@ def record_session_payment(
         amount_cents=payload.amount_cents,
         currency=currency,
         payment_method=payload.method,
-        status="confirmed",
+        status="pending",
         received_by_role="therapist",
         received_by_name=therapist.display_name,
         paid_at=now,
@@ -456,41 +455,6 @@ def record_session_payment(
         updated_at=now,
     )
     db.add(payment)
-    db.flush()
-
-    # Update client financial totals
-    stmt = select(ClientFinancial).where(ClientFinancial.client_id == session_row.client_id)
-    bind = db.get_bind()
-    if bind is not None and bind.dialect.name != "sqlite":
-        stmt = stmt.with_for_update()
-    financial = db.exec(stmt).first()
-
-    if not financial:
-        financial = ClientFinancial(
-            client_id=session_row.client_id,
-            currency=currency,
-            total_paid_cents=0,
-            total_receipted_cents=0,
-            updated_at=now,
-        )
-        db.add(financial)
-        try:
-            db.flush()
-        except IntegrityError:
-            db.rollback()
-            financial = db.exec(
-                select(ClientFinancial).where(ClientFinancial.client_id == session_row.client_id)
-            ).first()
-            if not financial:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="financial_record_conflict",
-                )
-
-    financial.total_paid_cents += payload.amount_cents
-    financial.currency = currency
-    financial.updated_at = now
-    db.add(financial)
 
     db.commit()
     db.refresh(payment)

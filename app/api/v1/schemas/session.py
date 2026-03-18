@@ -89,7 +89,7 @@ class TherapistRecordPaymentRequest(BaseModel):
     """Therapist records payment collected for a completed session."""
 
     amount_cents: int = Field(gt=0)
-    method: Literal["cash", "electronic"]
+    method: Literal["cash", "electronic", "bank_transfer"]
     notes: str | None = Field(default=None, max_length=2000)
 
 

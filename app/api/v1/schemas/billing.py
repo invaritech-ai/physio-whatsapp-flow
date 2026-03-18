@@ -144,7 +144,7 @@ class PaymentRecordCreateRequest(BaseModel):
     session_id: int | None = Field(default=None, gt=0)
     amount_cents: int = Field(gt=0)
     currency: str = Field(default="HKD", min_length=3, max_length=8)
-    method: Literal["cash", "electronic"]
+    method: Literal["cash", "electronic", "bank_transfer"]
     received_by_role: Literal["admin", "therapist"]
     received_by_name: str | None = Field(default=None, max_length=120)
     paid_at: datetime | None = None
@@ -177,6 +177,44 @@ class PaymentRecordCreateResponse(BaseModel):
 
     payment: PaymentRecordItem
     financials: ClientFinancialResponse
+
+
+class PaymentVerifyRequest(BaseModel):
+    """Admin request to verify a pending payment."""
+
+    auto_generate_receipt: bool = False
+    amount_cents: int | None = Field(default=None, gt=0)
+    diagnosis: str | None = Field(default=None, min_length=1, max_length=2000)
+    diagnosis_preset_id: int | None = Field(default=None, gt=0)
+    supervised_exercise: bool = True
+    payment_mode: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class PaymentVerifyResponse(BaseModel):
+    """Response from verifying a payment, optionally with auto-generated receipt."""
+
+    payment: PaymentRecordItem
+    financials: ClientFinancialResponse
+    receipt: "InvoiceDetailResponseRef | None" = None
+
+
+class InvoiceDetailResponseRef(BaseModel):
+    """Inline invoice detail for verify response (avoids circular import)."""
+
+    id: int
+    client_id: int
+    session_id: int | None
+    therapist_id: int | None
+    service_type: str
+    amount_cents: int
+    currency: str
+    description: str
+    payment_mode: str | None
+    diagnosis: str | None
+    special_notes: str | None
+    pdf_url: str | None
+    status: str
+    created_at: datetime
 
 
 class BillingQueueItem(BaseModel):

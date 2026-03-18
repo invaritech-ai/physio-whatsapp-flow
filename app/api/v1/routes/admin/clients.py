@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.core.exceptions import BusinessLogicError, NotFoundError
 from app.db.session import get_session
 from app.models import Client, ClientFinancial, MessageLog, PaymentRecord, Receipt, Session as TherapySession, Therapist, User
+from app.models.billing import ClientPlanAssignment
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
@@ -153,6 +154,20 @@ def list_clients(
     rows = db.exec(
         items_stmt.order_by(Client.created_at.desc()).offset(offset).limit(limit)
     ).all()
+
+    client_ids = [client.id for client, _ in rows if client.id is not None]
+    plan_flags: dict[int, set[int]] = {}
+    if client_ids:
+        plan_rows = db.exec(
+            select(ClientPlanAssignment.client_id, ClientPlanAssignment.duration_minutes)
+            .where(
+                ClientPlanAssignment.client_id.in_(client_ids),
+                ClientPlanAssignment.is_active == True,
+            )
+        ).all()
+        for cid, duration in plan_rows:
+            plan_flags.setdefault(cid, set()).add(duration)
+
     items = []
     for client, financial in rows:
         summary = ClientFinancialSummary(
@@ -165,9 +180,14 @@ def list_clients(
             ),
             currency=None if financial is None else financial.currency,
         )
+        durations = plan_flags.get(client.id, set())
         items.append(
             ClientListItem.model_validate(client).model_copy(
-                update={"financials_summary": summary}
+                update={
+                    "financials_summary": summary,
+                    "has_30min_plan": 30 in durations,
+                    "has_45min_plan": 45 in durations,
+                }
             )
         )
 
