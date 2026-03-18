@@ -1,93 +1,116 @@
 \documentclass[10pt]{article}
 
-\usepackage[margin=0.75in]{geometry}
-\usepackage[table]{xcolor}
-\usepackage{colortbl}
-\usepackage{array}
-\usepackage{tabularx}
-\usepackage{booktabs}
-\usepackage{makecell}
-\usepackage{fancyhdr}
+\usepackage[a4paper, margin=0mm]{geometry}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{graphicx}
 \usepackage{helvet}
 \renewcommand{\familydefault}{\sfdefault}
 
 \definecolor{brandgreen}{HTML}{004D35}
 
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{2pt}
-\renewcommand{\arraystretch}{1.4}
-\arrayrulecolor{brandgreen}
-
-\pagestyle{fancy}
-\fancyhf{}
-\renewcommand{\headrulewidth}{0pt}
-
-\fancyhead[R]{\scriptsize
-{{business_name}}\\
-{{business_address}}\\
-Tel: {{business_phone}} \quad Email: {{business_email}}
-}
-
-\fancyfoot[C]{\scriptsize
-{{business_name}} - {{business_phone}} - {{business_email}} -
-Printed at: {{printed_at}}
-}
 
 \begin{document}
-\small
+\thispagestyle{empty}
+\mbox{}
 
-\begin{minipage}[t]{0.62\textwidth}
-\textbf{{{client_name}}}\\
-{{client_address}}\\
-Tel: {{client_phone}}
-\end{minipage}
-\hfill
-\begin{minipage}[t]{0.33\textwidth}
-\raggedleft
-{\color{gray}\fontsize{28}{28}\selectfont\textbf{{{receipt_title}}}}
-\end{minipage}
+\begin{tikzpicture}[remember picture, overlay]
 
-\vspace{1em}
-\arrayrulecolor{brandgreen}
+% ===== HEADER (top right aligned) =====
+\node[anchor=north east, align=right] at ([xshift=-15mm,yshift=-15mm]current page.north east) {
+    \scriptsize
+    \textbf{{{business_name}}}\\
+    {{business_address}}\\
+    Tel: {{business_phone}} \quad Email: {{business_email}}
+};
 
-\begin{tabularx}{\textwidth}{X X >{\raggedleft\arraybackslash}p{2.6cm}}
-\multicolumn{3}{>{\columncolor{brandgreen}}l}{
-\color{white}\textbf{\rule{0pt}{2.6ex}{{items_payments_title}}}
-}\\[4pt]
+% ===== CLIENT INFO (left block) =====
+\node[anchor=north west, align=left] at ([xshift=15mm,yshift=-40mm]current page.north west) {
+    \textbf{{{client_name}}}\\
+    {{client_address}}\\
+    Tel: {{client_phone}}
+};
 
-\textbf{Items} & \textbf{Details} & \textbf{Amount}\\[6pt]
+% ===== RECEIPT TITLE =====
+\node[anchor=north east] at ([xshift=-15mm,yshift=-40mm]current page.north east) {
+    {\color{gray}\fontsize{28}{28}\selectfont\textbf{{{receipt_title}}}}
+};
 
-\makecell[l]{
-{{item_datetime_line}}\\
-{{item_description}}\\
-{{provider_line}}
-}
-&
-\makecell[l]{
-Invoice \#{{invoice_number}}\\
-Diagnosis: {{diagnosis_line}}\\
-{{special_notes_line}}
-}
-&
-\${{amount_display}}\\[8pt]
+% ===== GREEN HEADER BAR =====
+\fill[brandgreen]
+    ([xshift=15mm,yshift=-60mm]current page.north west)
+    rectangle
+    ([xshift=-15mm,yshift=-68mm]current page.north east);
 
-\arrayrulecolor{brandgreen}\midrule
+\node[anchor=west, text=white] at ([xshift=17mm,yshift=-64mm]current page.north west) {
+    \textbf{{{items_payments_title}}}
+};
 
-\multicolumn{2}{r}{Subtotal} & \${{amount_display}}\\
-\multicolumn{2}{r}{Payer Total} & \${{amount_display}}\\[6pt]
+% ===== TABLE HEADERS =====
+\node[anchor=west] at ([xshift=15mm,yshift=-75mm]current page.north west) {\textbf{Items}};
+\node[anchor=west] at ([xshift=100mm,yshift=-75mm]current page.north west) {\textbf{Details}};
+\node[anchor=east] at ([xshift=-15mm,yshift=-75mm]current page.north east) {\textbf{Amount}};
 
-\textbf{{{therapist_name_only}}} & & \\[6pt]
+% ===== ITEM ROW =====
+\node[anchor=north west, text width=80mm, align=left] at ([xshift=15mm,yshift=-80mm]current page.north west) {
+    {{item_datetime_line}}\\
+    {{item_description}}\\
+    {{provider_line}}
+};
 
-\midrule
-\multicolumn{3}{l}{\textbf{Payments}}\\[4pt]
+\node[anchor=north west, text width=65mm, align=left] at ([xshift=100mm,yshift=-80mm]current page.north west) {
+    Invoice \#{{invoice_number}}\\
+    Diagnosis: {{diagnosis_line}}\\
+    {{special_notes_line}}
+};
 
-{{payment_datetime_method}}
-&
-{{payment_payer_name}}
-&
-\${{amount_display}}\\
+\node[anchor=north east] at ([xshift=-15mm,yshift=-80mm]current page.north east) {
+    \${{amount_display}}
+};
 
-\bottomrule
-\end{tabularx}
+% ===== TOTALS =====
+\node[anchor=east] at ([xshift=-15mm,yshift=-115mm]current page.north east) {
+    Subtotal \quad \${{amount_display}}
+};
+
+\node[anchor=east] at ([xshift=-15mm,yshift=-123mm]current page.north east) {
+    \textbf{Payer Total \quad \${{amount_display}}}
+};
+
+% ===== THERAPIST & STAMP =====
+\node[anchor=west] (therapist) at ([xshift=15mm,yshift=-145mm]current page.north west) {
+    \textbf{{{therapist_name_only}}}
+};
+
+{{stamp_block}}
+
+% ===== PAYMENTS SECTION =====
+\node[anchor=west] at ([xshift=15mm,yshift=-165mm]current page.north west) {
+    \textbf{Payments}
+};
+
+\draw[lightgray, thin] ([xshift=15mm,yshift=-168mm]current page.north west) -- ([xshift=-15mm,yshift=-168mm]current page.north east);
+
+\node[anchor=west] at ([xshift=15mm,yshift=-175mm]current page.north west) {
+    {{payment_datetime_method}}
+};
+
+\node[anchor=west] at ([xshift=100mm,yshift=-175mm]current page.north west) {
+    {{payment_payer_name}}
+};
+
+\node[anchor=east] at ([xshift=-15mm,yshift=-175mm]current page.north east) {
+    \${{amount_display}}
+};
+
+% ===== FOOTER =====
+\node[anchor=south, text width=180mm, align=center] at ([yshift=10mm]current page.south) {
+    \scriptsize \color{gray}
+    {{business_name}} - {{business_phone}} - {{business_email}}\\
+    Printed at: {{printed_at}}
+};
+
+\end{tikzpicture}
 
 \end{document}

@@ -83,6 +83,39 @@ def _resolve_template_path() -> Path:
     return Path.cwd() / candidate
 
 
+def _stamps_dir() -> Path:
+    return _resolve_template_path().parent / "stamps"
+
+
+def _find_stamp_file(therapist_name: str | None) -> Path | None:
+    """Find a stamp image for the therapist by slugified name."""
+    if not therapist_name:
+        return None
+    slug = _strip_dr_prefix(therapist_name).lower().replace(" ", "_")
+    stamps = _stamps_dir()
+    if not stamps.is_dir():
+        return None
+    for ext in ("jpeg", "jpg", "png", "pdf"):
+        candidate = stamps / f"{slug}.{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _stamp_block(stamp_filename: str | None) -> str:
+    """Return the LaTeX snippet for the stamp overlay, or empty if no stamp."""
+    if not stamp_filename:
+        return "% no stamp available"
+    return (
+        r"\node[opacity=1.0, rotate=-5] "
+        r"at ([yshift=14mm, xshift=12mm]therapist.north west) {"
+        "\n"
+        rf"    \includegraphics[width=40mm]{{{stamp_filename}}}"
+        "\n"
+        r"};"
+    )
+
+
 def _build_template_context(
     *,
     invoice_id: int,
@@ -107,6 +140,7 @@ def _build_template_context(
     payment_label = payment_mode or "N/A"
     clean_therapist_name = _strip_dr_prefix(therapist_name)
     provider_line = f"{clean_therapist_name}, License #{therapist_license_number or '-'}"
+    stamp_file = _find_stamp_file(therapist_name)
     return {
         "business_name": _latex_escape(settings.business_name),
         "business_address": _latex_escape(settings.business_address),
@@ -128,6 +162,7 @@ def _build_template_context(
         "amount_display": _latex_escape(_currency_amount(amount_cents)),
         "payment_datetime_method": _latex_escape(f"{payment_at} {payment_label}"),
         "payment_payer_name": _latex_escape(payer_name),
+        "stamp_block": _stamp_block(stamp_file.name if stamp_file else None),
     }
 
 
@@ -215,8 +250,12 @@ def write_latex_invoice_pdf_file(
         context,
     )
 
+    stamp_file = _find_stamp_file(therapist_name)
+
     with tempfile.TemporaryDirectory(prefix=f"invoice-{invoice_id}-latex-") as tmp_dir:
         work_dir = Path(tmp_dir)
+        if stamp_file:
+            shutil.copy2(stamp_file, work_dir / stamp_file.name)
         tex_file = work_dir / f"invoice-{invoice_id}.tex"
         tex_file.write_text(rendered_tex, encoding="utf-8")
         compiled_pdf = _compile_latex(tex_file, work_dir)
