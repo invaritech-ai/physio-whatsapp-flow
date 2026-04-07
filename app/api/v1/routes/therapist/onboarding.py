@@ -664,8 +664,13 @@ def register_calendly_webhook(
     calendly_pat = _resolve_calendly_pat(therapist, data.calendly_pat)
     endpoint_url = _calendly_webhook_endpoint()
     logger.debug("[DEBUG-ONBOARD] endpoint_url=%s", endpoint_url)
+    force_recreate = therapist.calendly_webhook_signing_key_encrypted is None
     try:
-        result = register_webhook_if_needed(calendly_pat, endpoint_url)
+        result = register_webhook_if_needed(
+            calendly_pat,
+            endpoint_url,
+            force_recreate=force_recreate,
+        )
     except CalendlyWebhookError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

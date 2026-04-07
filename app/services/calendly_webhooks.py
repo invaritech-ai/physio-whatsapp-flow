@@ -139,6 +139,54 @@ def _summarize_subscriptions(subscriptions: list[dict[str, Any]]) -> list[dict[s
     return summarized
 
 
+def _delete_subscription(calendly_pat: str, subscription_uri: str) -> None:
+    """Delete an existing Calendly webhook subscription by full URI."""
+    try:
+        response = requests.delete(
+            subscription_uri,
+            headers=_headers(calendly_pat),
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise CalendlyWebhookError(f"Failed to delete Calendly webhook subscription: {exc}") from exc
+
+    if response.status_code not in (200, 202, 204):
+        raise CalendlyWebhookError(
+            f"Failed to delete Calendly webhook subscription: {_parse_error(response)}"
+        )
+
+
+def _matching_subscription_uris(
+    calendly_pat: str,
+    callback_url: str,
+    *,
+    organization_uri: str,
+    user_uri: str,
+) -> list[str]:
+    """List webhook subscription URIs that match this callback URL across scopes."""
+    normalized_callback = _normalize_url(callback_url)
+    user_subs, _ = _list_scope_subscriptions(
+        calendly_pat,
+        organization_uri,
+        scope="user",
+        user_uri=user_uri,
+    )
+    org_subs, _ = _list_scope_subscriptions(
+        calendly_pat,
+        organization_uri,
+        scope="organization",
+    )
+    uris: list[str] = []
+    for sub in [*user_subs, *org_subs]:
+        sub_uri = sub.get("uri")
+        callback = sub.get("callback_url")
+        if not isinstance(sub_uri, str) or not isinstance(callback, str):
+            continue
+        if _normalize_url(callback) == normalized_callback:
+            uris.append(sub_uri)
+    return uris
+
+
 def check_webhook_registration(calendly_pat: str, callback_url: str) -> dict[str, Any]:
     """
     Inspect webhook subscriptions relevant to the therapist's Calendly account.
@@ -203,7 +251,12 @@ def check_webhook_registration(calendly_pat: str, callback_url: str) -> dict[str
     }
 
 
-def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str, Any]:
+def register_webhook_if_needed(
+    calendly_pat: str,
+    callback_url: str,
+    *,
+    force_recreate: bool = False,
+) -> dict[str, Any]:
     """
     Ensure a webhook exists for this therapist account and callback URL.
 
@@ -211,7 +264,7 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
     """
     logger.debug("[DEBUG-REG] register_webhook_if_needed called, callback_url=%s", callback_url)
     status = check_webhook_registration(calendly_pat, callback_url)
-    if status["has_matching_webhook"]:
+    if status["has_matching_webhook"] and not force_recreate:
         logger.debug("[DEBUG-REG] webhook already exists, skipping creation (signing_key will be None)")
         return {
             **status,
@@ -219,6 +272,22 @@ def register_webhook_if_needed(calendly_pat: str, callback_url: str) -> dict[str
             "created_webhook_uri": None,
             "signing_key": None,
         }
+
+    if status["has_matching_webhook"] and force_recreate:
+        logger.debug("[DEBUG-REG] force_recreate enabled; deleting existing matching webhook(s)")
+        matching_uris = _matching_subscription_uris(
+            calendly_pat,
+            callback_url,
+            organization_uri=status["organization_uri"],
+            user_uri=status["user_uri"],
+        )
+        for uri in matching_uris:
+            _delete_subscription(calendly_pat, uri)
+        status = check_webhook_registration(calendly_pat, callback_url)
+        if status["has_matching_webhook"]:
+            raise CalendlyWebhookError(
+                "Unable to recreate webhook: matching subscription still exists after delete attempt."
+            )
 
     generated_signing_key = _generate_signing_key()
     logger.debug("[DEBUG-REG] generating new signing key: %s…", generated_signing_key[:8])
