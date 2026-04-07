@@ -163,7 +163,7 @@ def _matching_subscription_uris(
     organization_uri: str,
     user_uri: str,
 ) -> list[str]:
-    """List webhook subscription URIs that match this callback URL across scopes."""
+    """List user-scope webhook URIs matching this callback URL."""
     normalized_callback = _normalize_url(callback_url)
     user_subs, _ = _list_scope_subscriptions(
         calendly_pat,
@@ -171,13 +171,8 @@ def _matching_subscription_uris(
         scope="user",
         user_uri=user_uri,
     )
-    org_subs, _ = _list_scope_subscriptions(
-        calendly_pat,
-        organization_uri,
-        scope="organization",
-    )
     uris: list[str] = []
-    for sub in [*user_subs, *org_subs]:
+    for sub in user_subs:
         sub_uri = sub.get("uri")
         callback = sub.get("callback_url")
         if not isinstance(sub_uri, str) or not isinstance(callback, str):
