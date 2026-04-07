@@ -153,7 +153,7 @@ def list_sessions(
     scope: str | None = Query(None, pattern="^(upcoming|past|all)$"),
     from_date_raw: str | None = Query(None, alias="from"),
     to_date_raw: str | None = Query(None, alias="to"),
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
     """List current therapist's sessions, with optional date range and scope filter."""
