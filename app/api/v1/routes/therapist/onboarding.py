@@ -114,6 +114,44 @@ def _require_license_number(therapist: Therapist) -> None:
         raise HTTPException(status_code=400, detail="license_number_required")
 
 
+def _normalize_slot_mapping_entry(
+    raw_value: str,
+    *,
+    url_to_event_type: dict[str, dict],
+    uri_to_event_type: dict[str, dict],
+) -> tuple[str, str | None]:
+    """
+    Accept either scheduling_url (preferred) or calendly_event_type_uri (legacy clients)
+    and normalize to persisted scheduling_url + optional calendly_event_type_uri.
+    """
+    normalized = raw_value.strip().rstrip("/")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="slot_mapping value cannot be empty")
+
+    by_url = url_to_event_type.get(normalized)
+    if by_url:
+        return by_url.get("scheduling_url", raw_value).strip(), by_url.get("calendly_event_type_uri")
+
+    by_uri = uri_to_event_type.get(normalized)
+    if by_uri:
+        scheduling_url = (by_uri.get("scheduling_url") or "").strip()
+        if not scheduling_url:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Calendly event type has no scheduling URL: {normalized}",
+            )
+        return scheduling_url, by_uri.get("calendly_event_type_uri")
+
+    # Best effort fallback: keep value as URL text and let downstream flows continue.
+    # This avoids persisting API URIs when they were sent by stale clients.
+    if normalized.startswith("https://api.calendly.com/event_types/"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown Calendly event type URI in slot mapping: {normalized}",
+        )
+    return raw_value.strip(), None
+
+
 @router.post("/onboarding/complete", response_model=CompleteOnboardingResponse, status_code=201)
 def complete_onboarding(
     data: CompleteOnboardingRequest,
@@ -199,7 +237,7 @@ def get_onboarding_status(
     has_slot_mapping = has_event_types
 
     is_onboarded = (
-        has_profile_name and has_license_number and has_specialties and has_calendly_uri
+        has_profile_name and has_license_number and has_calendly_uri
         and has_slot_mapping and therapist.is_active
     )
 
@@ -209,8 +247,6 @@ def get_onboarding_status(
         missing_steps.append("profile_name")
     if not has_license_number:
         missing_steps.append("license_number")
-    if not has_specialties:
-        missing_steps.append("specialties")
     if not has_calendly_uri:
         missing_steps.append("calendly_setup")
     if not has_event_types:
@@ -425,7 +461,7 @@ def save_calendly(
 
     Request body:
     - calendly_pat: Personal Access Token
-    - slot_mapping: {"30": "<scheduling_url>", "45": "<scheduling_url>"}
+    - slot_mapping: {"30": "<scheduling_url_or_event_type_uri>", "45": "<...>"}
 
     Both slots may share the same scheduling URL (e.g. when the therapist only has one
     Calendly event type). The server derives the Calendly event type URI from the URL by
@@ -440,10 +476,14 @@ def save_calendly(
     if not success:
         raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly PAT")
 
-    # Build lookup of validated event types by scheduling_url for URI derivation.
-    # Multiple event types could share a URL (edge case); we take the first match.
+    # Build lookups from validated event types.
+    # Multiple event types could share a URL (edge case); first match wins by URL.
     url_to_event_type: dict[str, dict] = {}
+    uri_to_event_type: dict[str, dict] = {}
     for et in validation_data["event_types"]:
+        uri = et.get("calendly_event_type_uri", "").rstrip("/")
+        if uri and uri not in uri_to_event_type:
+            uri_to_event_type[uri] = et
         url = et.get("scheduling_url", "").rstrip("/")
         if url and url not in url_to_event_type:
             url_to_event_type[url] = et
@@ -464,9 +504,12 @@ def save_calendly(
     # Values in slot_mapping are scheduling URLs provided by the therapist.
     # We derive calendly_event_type_uri from the URL; None if no Calendly match found.
     slot_mapping_response = []
-    for duration_str, scheduling_url in data.slot_mapping.items():
-        matched_et = url_to_event_type.get(scheduling_url.rstrip("/"))
-        calendly_event_type_uri = matched_et["calendly_event_type_uri"] if matched_et else None
+    for duration_str, mapping_value in data.slot_mapping.items():
+        scheduling_url, calendly_event_type_uri = _normalize_slot_mapping_entry(
+            mapping_value,
+            url_to_event_type=url_to_event_type,
+            uri_to_event_type=uri_to_event_type,
+        )
         event_type = TherapistEventType(
             therapist_id=therapist.id,
             calendly_event_type_uri=calendly_event_type_uri,
@@ -514,17 +557,33 @@ def update_slot_mapping(
         select(TherapistEventType).where(TherapistEventType.therapist_id == therapist.id)
     ).all()
 
-    # Build URL → URI lookup from stored event types
+    # Build URL → URI and URI → URL lookups from stored event types
     url_to_uri: dict[str, str | None] = {
         et.scheduling_url.rstrip("/"): et.calendly_event_type_uri
         for et in all_event_types
         if et.scheduling_url
     }
+    uri_to_url: dict[str, str] = {
+        et.calendly_event_type_uri.rstrip("/"): et.scheduling_url
+        for et in all_event_types
+        if et.calendly_event_type_uri and et.scheduling_url
+    }
 
     slot_mapping_response: list[SlotMappingInfo] = []
-    for duration_str, scheduling_url in data.slot_mapping.items():
+    for duration_str, mapping_value in data.slot_mapping.items():
         duration = int(duration_str)
-        calendly_uri = url_to_uri.get(scheduling_url.rstrip("/"))
+        normalized_value = mapping_value.rstrip("/")
+        if normalized_value in uri_to_url:
+            scheduling_url = uri_to_url[normalized_value]
+            calendly_uri = normalized_value
+        else:
+            if normalized_value.startswith("https://api.calendly.com/event_types/"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown Calendly event type URI in slot mapping: {normalized_value}",
+                )
+            scheduling_url = mapping_value
+            calendly_uri = url_to_uri.get(normalized_value)
 
         existing = next((et for et in all_event_types if et.duration_minutes == duration), None)
         if existing:

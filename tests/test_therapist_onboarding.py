@@ -360,7 +360,7 @@ class TestOnboardingStatus:
         assert data["is_active"] is True
         assert "calendly_setup" in data["missing_steps"]
         assert "event_types" in data["missing_steps"]
-        assert "specialties" in data["missing_steps"]
+        assert "specialties" not in data["missing_steps"]
         assert "license_number" not in data["missing_steps"]
 
     def test_status_fully_onboarded(
@@ -754,6 +754,56 @@ class TestSaveCalendly:
             "https://api.calendly.com/event_types/SHARED",
         ]
 
+    def test_save_calendly_accepts_event_type_uri_payload_for_backward_compat(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        user_info = {
+            "uri": "https://api.calendly.com/users/TESTUSER123",
+            "name": "Dr. Test",
+            "email": "test@test.com",
+        }
+        event_types = [
+            {
+                "uri": "https://api.calendly.com/event_types/45MIN",
+                "duration": 45,
+                "name": "45 Min Session",
+                "scheduling_url": "https://calendly.com/test/45min",
+                "active": True,
+            },
+        ]
+
+        with patch("app.services.therapist_onboarding.get_user_info_with_pat") as mock_user, \
+             patch("app.services.therapist_onboarding.get_event_types_with_pat") as mock_events:
+            mock_user.return_value = user_info
+            mock_events.return_value = event_types
+
+            response = client.post(
+                "/api/v1/therapist/onboarding/calendly",
+                json={
+                    "calendly_pat": "valid_token_123",
+                    "slot_mapping": {
+                        "30": "https://api.calendly.com/event_types/45MIN",
+                        "45": "https://api.calendly.com/event_types/45MIN",
+                    },
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [item["scheduling_url"] for item in data["slot_mapping"]] == [
+            "https://calendly.com/test/45min",
+            "https://calendly.com/test/45min",
+        ]
+        assert [item["calendly_event_type_uri"] for item in data["slot_mapping"]] == [
+            "https://api.calendly.com/event_types/45MIN",
+            "https://api.calendly.com/event_types/45MIN",
+        ]
+
 
 class TestUpdateProfile:
     """Tests for PATCH /therapist/onboarding/profile"""
@@ -1024,6 +1074,38 @@ class TestUpdateSpecialties:
 
         assert response.status_code == 400
         assert "Invalid specialty IDs" in response.json()["detail"]
+
+    def test_update_specialties_allows_empty_payload(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        sample_specialties_onboarding: list[TherapistSpecialty],
+        mock_jwt_therapist,
+    ):
+        db_session.add(
+            TherapistSpecialtyMap(
+                therapist_id=therapist_no_uri.id,
+                specialty_id=sample_specialties_onboarding[0].id,
+            )
+        )
+        db_session.commit()
+
+        response = client.patch(
+            "/api/v1/therapist/specialties",
+            json={"specialty_ids": [], "new_specialties": []},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["specialties"] == []
+
+        mappings = db_session.exec(
+            select(TherapistSpecialtyMap).where(
+                TherapistSpecialtyMap.therapist_id == therapist_no_uri.id
+            )
+        ).all()
+        assert mappings == []
 
 
 class TestGetTherapistProfile:

@@ -213,9 +213,6 @@ def update_therapist_specialties(
                 db.flush()  # Get the ID assigned
                 _add_specialty(new_specialty)
 
-    if not all_specialties:
-        return [], ["At least one specialty is required"]
-
     # Apply a diff update to avoid unique-constraint clashes when keeping existing mappings.
     existing_mappings = db.exec(
         select(TherapistSpecialtyMap).where(

@@ -133,7 +133,8 @@ class UpdateSpecialtiesRequest(BaseModel):
     """Request to update therapist specialties.
 
     Accepts existing specialty IDs and/or new specialty names.
-    New names are auto-created as specialties. At least one must be provided.
+    New names are auto-created as specialties. Empty payload is allowed
+    (therapist can keep specialties blank).
     """
 
     model_config = ConfigDict(
@@ -152,19 +153,14 @@ class UpdateSpecialtiesRequest(BaseModel):
         default=[], description="List of new specialty names to create and assign"
     )
 
-    @model_validator(mode="after")
-    def at_least_one_specialty(self) -> "UpdateSpecialtiesRequest":
-        if not self.specialty_ids and not self.new_specialties:
-            raise ValueError("At least one specialty_id or new_specialty name is required")
-        return self
-
-
 class SaveCalendlyRequest(BaseModel):
     """Request to save Calendly PAT with explicit slot mapping.
 
-    slot_mapping values are the public Calendly scheduling URLs (e.g.
-    https://calendly.com/your-name/meeting). Both 30-min and 45-min slots can
-    share the same URL — useful when a therapist has only one Calendly event type.
+    slot_mapping values may be either:
+    - public Calendly scheduling URLs (preferred), or
+    - Calendly event type URIs (backward compatibility).
+    Both 30-min and 45-min slots can share the same scheduling URL — useful
+    when a therapist has only one Calendly event type.
     """
 
     model_config = ConfigDict(
