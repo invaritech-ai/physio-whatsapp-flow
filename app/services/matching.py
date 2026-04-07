@@ -406,7 +406,7 @@ def _get_therapist_time_band_matches(
                 TherapistEventType.is_active == True,  # noqa: E712
             )
         ).first()
-        if not event_type or not therapist.calendly_pat_encrypted:
+        if not event_type or not event_type.calendly_event_type_uri or not therapist.calendly_pat_encrypted:
             result[therapist_id] = None
             continue
 

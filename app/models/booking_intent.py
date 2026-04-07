@@ -16,8 +16,8 @@ class BookingIntent(SQLModel, table=True):
     client_id: int | None = Field(default=None, foreign_key="client.id", index=True)
     client_phone_e164: str = Field(index=True)
     duration_minutes: int
-    calendly_event_type_uri: str = Field(index=True)
-    scheduling_url: str
+    calendly_event_type_uri: str | None = Field(default=None, index=True)
+    scheduling_url: str | None = Field(default=None)
     source: str = Field(default="web")
     consumed_at: datetime | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=partial(datetime.now, timezone.utc), index=True)

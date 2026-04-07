@@ -590,6 +590,7 @@ def _resolve_session_duration_minutes(
     event_type_uri: str,
     client_phone_e164: str | None,
     existing_session: TherapySession | None,
+    scheduled_duration_minutes: int | None = None,
 ) -> int | None:
     if client_phone_e164:
         intent = find_recent_booking_intent(
@@ -610,6 +611,21 @@ def _resolve_session_duration_minutes(
     )
     if len(matches) == 1:
         return matches[0].duration_minutes
+
+    # Shared URI: same event type mapped to multiple durations (e.g. 30-min and 45-min).
+    # Use the actual scheduled duration from the Calendly event as a tiebreaker.
+    if len(matches) > 1 and scheduled_duration_minutes is not None:
+        for match in matches:
+            if match.duration_minutes == scheduled_duration_minutes:
+                return match.duration_minutes
+        # Duration not in mapping — trust what Calendly actually scheduled.
+        logger.warning(
+            "Shared URI tiebreaker: scheduled_duration=%s not in mapping durations=%s for therapist_id=%s; using scheduled duration",
+            scheduled_duration_minutes,
+            [m.duration_minutes for m in matches],
+            therapist.id,
+        )
+        return scheduled_duration_minutes
 
     if existing_session:
         return existing_session.duration_minutes
@@ -758,12 +774,14 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 invitee_uri=old_invitee_uri,
             )
 
+        scheduled_duration_minutes = int((end_time - start_time).total_seconds() // 60)
         duration_minutes = _resolve_session_duration_minutes(
             db,
             therapist=therapist,
             event_type_uri=event_type_uri,
             client_phone_e164=phone_e164,
             existing_session=session,
+            scheduled_duration_minutes=scheduled_duration_minutes,
         )
         if duration_minutes is None:
             return {"status": "error", "message": "Ambiguous event type mapping"}
@@ -1017,12 +1035,14 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
             if client and client.phone_e164:
                 client_phone_e164 = client.phone_e164
 
+        scheduled_duration_minutes = int((end_time - start_time).total_seconds() // 60)
         resolved_duration = _resolve_session_duration_minutes(
             db,
             therapist=therapist,
             event_type_uri=event_type_uri,
             client_phone_e164=client_phone_e164,
             existing_session=session,
+            scheduled_duration_minutes=scheduled_duration_minutes,
         )
         duration_minutes = resolved_duration if resolved_duration is not None else session.duration_minutes
 

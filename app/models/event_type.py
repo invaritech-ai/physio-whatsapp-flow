@@ -18,7 +18,7 @@ class TherapistEventType(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     therapist_id: int = Field(foreign_key="therapist.id", index=True)
-    calendly_event_type_uri: str = Field(index=True)  # e.g., "https://api.calendly.com/event_types/XXXXX"
+    calendly_event_type_uri: str | None = Field(default=None, index=True)  # e.g., "https://api.calendly.com/event_types/XXXXX"
     duration_minutes: int
     scheduling_url: str  # Public booking link
     is_active: bool = Field(default=True)

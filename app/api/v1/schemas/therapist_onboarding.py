@@ -13,7 +13,7 @@ class EventTypeInfo(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    calendly_event_type_uri: str
+    calendly_event_type_uri: str | None = None
     duration_minutes: int
     name: str | None = None
     scheduling_url: str
@@ -25,7 +25,7 @@ class EventTypeDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int | None
-    calendly_event_type_uri: str
+    calendly_event_type_uri: str | None = None
     duration_minutes: int
     scheduling_url: str
     is_active: bool
@@ -41,10 +41,10 @@ class SpecialtyInfo(BaseModel):
 
 
 class SlotMappingInfo(BaseModel):
-    """Slot mapping: duration to event type details."""
+    """Slot mapping: duration to scheduling URL (and optional Calendly event type URI)."""
 
     duration_minutes: int
-    calendly_event_type_uri: str
+    calendly_event_type_uri: str | None = None
     scheduling_url: str
 
 
@@ -160,15 +160,20 @@ class UpdateSpecialtiesRequest(BaseModel):
 
 
 class SaveCalendlyRequest(BaseModel):
-    """Request to save Calendly PAT with explicit slot mapping."""
+    """Request to save Calendly PAT with explicit slot mapping.
+
+    slot_mapping values are the public Calendly scheduling URLs (e.g.
+    https://calendly.com/your-name/meeting). Both 30-min and 45-min slots can
+    share the same URL — useful when a therapist has only one Calendly event type.
+    """
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "calendly_pat": "eyJraWQiOiIxY2UxZTEzNj...",
                 "slot_mapping": {
-                    "30": "https://api.calendly.com/event_types/AAA",
-                    "45": "https://api.calendly.com/event_types/BBB",
+                    "30": "https://calendly.com/therapist-name/meeting",
+                    "45": "https://calendly.com/therapist-name/meeting",
                 },
             }
         }
@@ -179,7 +184,7 @@ class SaveCalendlyRequest(BaseModel):
     )
     slot_mapping: dict[str, str] = Field(
         ...,
-        description="Mapping of business slot duration (minutes) to Calendly event type URI. Required keys: '30' and '45'.",
+        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'. Both may share the same URL.",
     )
 
     @model_validator(mode="after")
@@ -196,14 +201,49 @@ class SaveCalendlyRequest(BaseModel):
             )
 
         normalized_mapping: dict[str, str] = {}
-        for duration_key, uri in self.slot_mapping.items():
+        for duration_key, url in self.slot_mapping.items():
             normalized_key = duration_key.strip()
-            normalized_uri = uri.strip()
-            if not normalized_uri:
-                raise ValueError(f"Event type URI cannot be empty for duration {normalized_key}.")
-            normalized_mapping[normalized_key] = normalized_uri
+            normalized_url = url.strip()
+            if not normalized_url:
+                raise ValueError(f"Scheduling URL cannot be empty for duration {normalized_key}.")
+            normalized_mapping[normalized_key] = normalized_url
         self.slot_mapping = normalized_mapping
         return self
+
+
+class UpdateSlotMappingRequest(BaseModel):
+    """Request to update slot mapping using the stored Calendly PAT (no re-entry needed)."""
+
+    slot_mapping: dict[str, str] = Field(
+        ...,
+        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'.",
+    )
+
+    @model_validator(mode="after")
+    def validate_slot_mapping(self) -> "UpdateSlotMappingRequest":
+        required_keys = {"30", "45"}
+        provided_keys = {key.strip() for key in self.slot_mapping.keys()}
+        missing = required_keys - provided_keys
+        if missing:
+            raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
+        extra = provided_keys - required_keys
+        if extra:
+            raise ValueError(f"Unexpected durations: {', '.join(sorted(extra))}. Only 30 and 45 allowed.")
+        normalized: dict[str, str] = {}
+        for k, url in self.slot_mapping.items():
+            url = url.strip()
+            if not url:
+                raise ValueError(f"Scheduling URL cannot be empty for duration {k.strip()}.")
+            normalized[k.strip()] = url
+        self.slot_mapping = normalized
+        return self
+
+
+class UpdateSlotMappingResponse(BaseModel):
+    """Response after updating slot mapping."""
+
+    slot_mapping: list[SlotMappingInfo]
+    message: str = "Slot mapping updated successfully"
 
 
 class CalendlyWebhookActionRequest(BaseModel):

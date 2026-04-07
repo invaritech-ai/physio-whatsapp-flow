@@ -26,6 +26,8 @@ from app.api.v1.schemas.therapist_onboarding import (
     UpdateSpecialtiesResponse,
     SaveCalendlyRequest,
     SaveCalendlyResponse,
+    UpdateSlotMappingRequest,
+    UpdateSlotMappingResponse,
     SlotMappingInfo,
     TherapistProfileResponse,
     EventTypeInfo,
@@ -423,50 +425,32 @@ def save_calendly(
 
     Request body:
     - calendly_pat: Personal Access Token
-    - slot_mapping: {"30": "<event_type_uri>", "45": "<uri>"}
+    - slot_mapping: {"30": "<scheduling_url>", "45": "<scheduling_url>"}
 
-    Server validates each URI belongs to the therapist's Calendly account,
-    persists only the mapped event types, and activates the account.
+    Both slots may share the same scheduling URL (e.g. when the therapist only has one
+    Calendly event type). The server derives the Calendly event type URI from the URL by
+    matching against the therapist's Calendly account; if no match is found the URI is
+    stored as null (availability checking gracefully degrades).
     """
     _require_license_number(therapist)
     from app.core.encryption import encrypt_string
 
-    # Validate PAT
+    # Validate PAT — also fetches event types for URI derivation
     success, validation_data, errors = validate_calendly_pat(data.calendly_pat)
     if not success:
         raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly PAT")
 
-    # Build lookup of validated event types by URI
-    valid_event_types = {
-        et["calendly_event_type_uri"]: et for et in validation_data["event_types"]
-    }
-
-    # Validate each slot mapping URI exists in the validated event types
-    for duration_str, uri in data.slot_mapping.items():
-        if uri not in valid_event_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Event type URI not found in Calendly account: {uri}",
-            )
+    # Build lookup of validated event types by scheduling_url for URI derivation.
+    # Multiple event types could share a URL (edge case); we take the first match.
+    url_to_event_type: dict[str, dict] = {}
+    for et in validation_data["event_types"]:
+        url = et.get("scheduling_url", "").rstrip("/")
+        if url and url not in url_to_event_type:
+            url_to_event_type[url] = et
 
     # Encrypt and save PAT
     therapist.calendly_pat_encrypted = encrypt_string(data.calendly_pat)
     therapist.calendly_user_uri = validation_data["user_uri"]
-
-    # Check if any of these event type URIs are already mapped to another therapist
-    uris_to_insert = list(data.slot_mapping.values())
-    conflicts = db.exec(
-        select(TherapistEventType).where(
-            TherapistEventType.calendly_event_type_uri.in_(uris_to_insert),  # type: ignore
-            TherapistEventType.therapist_id != therapist.id,
-        )
-    ).all()
-    if conflicts:
-        raise HTTPException(
-            status_code=409,
-            detail="These Calendly event types are already linked to another therapist. "
-            "Each event type can only be mapped to one therapist.",
-        )
 
     # Clear existing event types for this therapist
     existing_event_types = db.exec(
@@ -476,22 +460,25 @@ def save_calendly(
         db.delete(et)
     db.flush()
 
-    # Persist only the mapped slot event types
+    # Persist mapped slot event types.
+    # Values in slot_mapping are scheduling URLs provided by the therapist.
+    # We derive calendly_event_type_uri from the URL; None if no Calendly match found.
     slot_mapping_response = []
-    for duration_str, uri in data.slot_mapping.items():
-        et_data = valid_event_types[uri]
+    for duration_str, scheduling_url in data.slot_mapping.items():
+        matched_et = url_to_event_type.get(scheduling_url.rstrip("/"))
+        calendly_event_type_uri = matched_et["calendly_event_type_uri"] if matched_et else None
         event_type = TherapistEventType(
             therapist_id=therapist.id,
-            calendly_event_type_uri=uri,
+            calendly_event_type_uri=calendly_event_type_uri,
             duration_minutes=int(duration_str),
-            scheduling_url=et_data["scheduling_url"],
+            scheduling_url=scheduling_url,
             is_active=True,
         )
         db.add(event_type)
         slot_mapping_response.append(SlotMappingInfo(
             duration_minutes=int(duration_str),
-            calendly_event_type_uri=uri,
-            scheduling_url=et_data["scheduling_url"],
+            calendly_event_type_uri=calendly_event_type_uri,
+            scheduling_url=scheduling_url,
         ))
 
     # Activate therapist
@@ -504,6 +491,64 @@ def save_calendly(
         calendly_user_uri=therapist.calendly_user_uri,
         slot_mapping=sorted(slot_mapping_response, key=lambda s: s.duration_minutes),
         is_active=therapist.is_active,
+    )
+
+
+@router.patch("/onboarding/slot-mapping", response_model=UpdateSlotMappingResponse)
+def update_slot_mapping(
+    data: UpdateSlotMappingRequest,
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+    db: Session = Depends(get_session),
+):
+    """
+    Update slot mapping without re-entering the Calendly PAT.
+
+    Uses stored TherapistEventType rows to derive calendly_event_type_uri from
+    the provided scheduling URL. Suitable for therapists who want to reassign
+    which Calendly event maps to each business slot (30-min / 45-min).
+    """
+    if not therapist.calendly_user_uri:
+        raise HTTPException(status_code=400, detail="Calendly not connected. Complete onboarding first.")
+
+    all_event_types = db.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist.id)
+    ).all()
+
+    # Build URL → URI lookup from stored event types
+    url_to_uri: dict[str, str | None] = {
+        et.scheduling_url.rstrip("/"): et.calendly_event_type_uri
+        for et in all_event_types
+        if et.scheduling_url
+    }
+
+    slot_mapping_response: list[SlotMappingInfo] = []
+    for duration_str, scheduling_url in data.slot_mapping.items():
+        duration = int(duration_str)
+        calendly_uri = url_to_uri.get(scheduling_url.rstrip("/"))
+
+        existing = next((et for et in all_event_types if et.duration_minutes == duration), None)
+        if existing:
+            existing.scheduling_url = scheduling_url
+            existing.calendly_event_type_uri = calendly_uri
+            db.add(existing)
+        else:
+            db.add(TherapistEventType(
+                therapist_id=therapist.id,
+                duration_minutes=duration,
+                scheduling_url=scheduling_url,
+                calendly_event_type_uri=calendly_uri,
+                is_active=True,
+            ))
+
+        slot_mapping_response.append(SlotMappingInfo(
+            duration_minutes=duration,
+            calendly_event_type_uri=calendly_uri,
+            scheduling_url=scheduling_url,
+        ))
+
+    db.commit()
+    return UpdateSlotMappingResponse(
+        slot_mapping=sorted(slot_mapping_response, key=lambda s: s.duration_minutes),
     )
 
 

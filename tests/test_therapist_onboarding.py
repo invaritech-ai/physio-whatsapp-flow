@@ -640,8 +640,8 @@ class TestSaveCalendly:
                 json={
                     "calendly_pat": "valid_token_123",
                     "slot_mapping": {
-                        "30": "https://api.calendly.com/event_types/45MIN",
-                        "45": "https://api.calendly.com/event_types/75MIN",
+                        "30": "https://calendly.com/test/45min",
+                        "45": "https://calendly.com/test/75min",
                     },
                 },
                 headers={"Authorization": "Bearer test-token"},
@@ -651,6 +651,7 @@ class TestSaveCalendly:
         data = response.json()
         assert data["is_active"] is True
         assert [item["duration_minutes"] for item in data["slot_mapping"]] == [30, 45]
+        # URI derived by matching scheduling URL against Calendly event type list
         assert [item["calendly_event_type_uri"] for item in data["slot_mapping"]] == [
             "https://api.calendly.com/event_types/45MIN",
             "https://api.calendly.com/event_types/75MIN",
@@ -661,6 +662,10 @@ class TestSaveCalendly:
         ).order_by(TherapistEventType.duration_minutes.asc())
         mapped_event_types = db_session.exec(stmt).all()
         assert [item.duration_minutes for item in mapped_event_types] == [30, 45]
+        assert [item.scheduling_url for item in mapped_event_types] == [
+            "https://calendly.com/test/45min",
+            "https://calendly.com/test/75min",
+        ]
         assert [item.calendly_event_type_uri for item in mapped_event_types] == [
             "https://api.calendly.com/event_types/45MIN",
             "https://api.calendly.com/event_types/75MIN",
@@ -719,8 +724,8 @@ class TestSaveCalendly:
                 json={
                     "calendly_pat": "valid_token_123",
                     "slot_mapping": {
-                        "30": "https://api.calendly.com/event_types/SHARED",
-                        "45": "https://api.calendly.com/event_types/SHARED",
+                        "30": "https://calendly.com/test/shared",
+                        "45": "https://calendly.com/test/shared",
                     },
                 },
                 headers={"Authorization": "Bearer test-token"},
@@ -729,6 +734,7 @@ class TestSaveCalendly:
         assert response.status_code == 200
         data = response.json()
         assert [item["duration_minutes"] for item in data["slot_mapping"]] == [30, 45]
+        # Same scheduling URL → same derived event type URI for both slots
         assert [item["calendly_event_type_uri"] for item in data["slot_mapping"]] == [
             "https://api.calendly.com/event_types/SHARED",
             "https://api.calendly.com/event_types/SHARED",
@@ -739,6 +745,10 @@ class TestSaveCalendly:
         ).order_by(TherapistEventType.duration_minutes.asc())
         mapped_event_types = db_session.exec(stmt).all()
         assert [item.duration_minutes for item in mapped_event_types] == [30, 45]
+        assert [item.scheduling_url for item in mapped_event_types] == [
+            "https://calendly.com/test/shared",
+            "https://calendly.com/test/shared",
+        ]
         assert [item.calendly_event_type_uri for item in mapped_event_types] == [
             "https://api.calendly.com/event_types/SHARED",
             "https://api.calendly.com/event_types/SHARED",

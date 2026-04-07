@@ -46,8 +46,8 @@ def create_booking_intent(
     *,
     therapist_id: int,
     duration_minutes: int,
-    calendly_event_type_uri: str,
-    scheduling_url: str,
+    scheduling_url: str | None = None,
+    calendly_event_type_uri: str | None = None,
     source: str,
     client_id: int | None = None,
     client_phone_e164: str | None = None,
@@ -76,9 +76,13 @@ def find_recent_booking_intent(
     *,
     therapist_id: int,
     client_phone_e164: str,
-    calendly_event_type_uri: str,
+    calendly_event_type_uri: str | None = None,
 ) -> BookingIntent | None:
-    """Return the newest unconsumed booking intent for the same therapist/client/URI."""
+    """Return the newest unconsumed booking intent for this therapist/client within 24 hours.
+
+    Matches by phone number only — the Calendly event type URI is no longer used as a
+    filter because therapists may share one URI across multiple session durations.
+    """
     cutoff = datetime.now(timezone.utc) - BOOKING_INTENT_LOOKBACK
     normalized_phone = normalize_phone_e164(client_phone_e164)
     return db.exec(
@@ -86,7 +90,6 @@ def find_recent_booking_intent(
         .where(
             BookingIntent.therapist_id == therapist_id,
             BookingIntent.client_phone_e164 == normalized_phone,
-            BookingIntent.calendly_event_type_uri == calendly_event_type_uri,
             BookingIntent.consumed_at.is_(None),  # type: ignore[union-attr]
             BookingIntent.created_at >= cutoff,
         )
