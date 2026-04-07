@@ -138,6 +138,7 @@ def test_therapist_register_webhook_uses_stored_pat(client, db_session: Session)
     mock_register.assert_called_once_with(
         "stored_pat",
         "https://api.test.local/api/v1/webhooks/calendly",
+        force_recreate=True,
     )
 
 
@@ -181,6 +182,11 @@ def test_therapist_register_webhook_persists_signing_key(client, db_session: Ses
     data = response.json()
     assert data["created"] is True
     assert data["signing_key"] is None
+    mock_register.assert_called_once_with(
+        "stored_pat",
+        "https://api.test.local/api/v1/webhooks/calendly",
+        force_recreate=True,
+    )
 
     db_session.refresh(therapist)
     assert therapist.calendly_webhook_signing_key_encrypted is not None

@@ -152,6 +152,19 @@ def _normalize_slot_mapping_entry(
     return raw_value.strip(), None
 
 
+def _build_validate_calendly_response(validation_data: dict) -> ValidateCalendlyResponse:
+    event_types = [EventTypeInfo(**et) for et in validation_data["event_types"]]
+    return ValidateCalendlyResponse(
+        valid=validation_data["valid"],
+        user_uri=validation_data["user_uri"],
+        name=validation_data["name"],
+        email=validation_data["email"],
+        event_types_found=validation_data["event_types_found"],
+        event_types=event_types,
+        warnings=validation_data["warnings"],
+    )
+
+
 @router.post("/onboarding/complete", response_model=CompleteOnboardingResponse, status_code=201)
 def complete_onboarding(
     data: CompleteOnboardingRequest,
@@ -290,18 +303,32 @@ def validate_calendly_token(
         error_message = errors[0] if errors else "Invalid Calendly token"
         raise HTTPException(status_code=400, detail=error_message)
 
-    # Convert event types to schema format
-    event_types = [EventTypeInfo(**et) for et in validation_data["event_types"]]
+    return _build_validate_calendly_response(validation_data)
 
-    return ValidateCalendlyResponse(
-        valid=validation_data["valid"],
-        user_uri=validation_data["user_uri"],
-        name=validation_data["name"],
-        email=validation_data["email"],
-        event_types_found=validation_data["event_types_found"],
-        event_types=event_types,
-        warnings=validation_data["warnings"],
-    )
+
+@router.post("/onboarding/validate-calendly/stored", response_model=ValidateCalendlyResponse)
+def validate_calendly_token_with_stored_pat(
+    therapist: Therapist = Depends(get_current_therapist_allow_inactive),
+):
+    """
+    Validate/fetch Calendly meetings using therapist's stored encrypted PAT.
+
+    Used by settings bootstrap so therapists can view current Calendly meetings
+    without re-entering PAT every time.
+    """
+    try:
+        calendly_pat = _resolve_calendly_pat(therapist, explicit_pat=None)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Stored Calendly token is invalid") from exc
+    valid, validation_data, errors = validate_calendly_pat(calendly_pat)
+
+    if not valid:
+        error_message = errors[0] if errors else "Stored Calendly token is invalid"
+        raise HTTPException(status_code=400, detail=error_message)
+
+    return _build_validate_calendly_response(validation_data)
 
 
 @router.post("/sync-event-types", response_model=EventTypeSyncResponse)
@@ -464,9 +491,10 @@ def save_calendly(
     - slot_mapping: {"30": "<scheduling_url_or_event_type_uri>", "45": "<...>"}
 
     Both slots may share the same scheduling URL (e.g. when the therapist only has one
-    Calendly event type). The server derives the Calendly event type URI from the URL by
-    matching against the therapist's Calendly account; if no match is found the URI is
-    stored as null (availability checking gracefully degrades).
+    Calendly event type). The server derives the Calendly event type URI from URL/URI
+    values by matching against the therapist's Calendly account.
+    - Unknown Calendly API event URIs are rejected with 400.
+    - Non-Calendly URL values are allowed, with URI stored as null.
     """
     _require_license_number(therapist)
     from app.core.encryption import encrypt_string

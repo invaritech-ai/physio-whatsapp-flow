@@ -533,6 +533,73 @@ class TestValidateCalendly:
             assert response.status_code == 400
             assert "Invalid Calendly token" in response.json()["detail"]
 
+    def test_validate_stored_pat_success(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        therapist_no_uri.calendly_pat_encrypted = "encrypted_valid_token_123"
+        db_session.add(therapist_no_uri)
+        db_session.commit()
+
+        with patch("app.api.v1.routes.therapist.onboarding.decrypt_string", return_value="valid_token_123"), \
+             patch("app.services.therapist_onboarding.get_user_info_with_pat") as mock_user, \
+             patch("app.services.therapist_onboarding.get_event_types_with_pat") as mock_events:
+            mock_user.return_value = {
+                "uri": "https://api.calendly.com/users/TESTUSER123",
+                "name": "Dr. Test Therapist",
+                "email": "therapist@test.com",
+            }
+            mock_events.return_value = [
+                {
+                    "uri": "https://api.calendly.com/event_types/30MIN",
+                    "duration": 30,
+                    "name": "30 Minute Session",
+                    "scheduling_url": "https://calendly.com/test/30min",
+                    "active": True,
+                }
+            ]
+
+            response = client.post(
+                "/api/v1/therapist/onboarding/validate-calendly/stored",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is True
+        assert data["event_types_found"] == 1
+        assert data["event_types"][0]["scheduling_url"] == "https://calendly.com/test/30min"
+
+    def test_validate_stored_pat_missing(self, client, therapist_no_uri: Therapist, mock_jwt_therapist):
+        response = client.post(
+            "/api/v1/therapist/onboarding/validate-calendly/stored",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Calendly PAT not configured. Connect Calendly first."
+
+    def test_validate_stored_pat_invalid_ciphertext(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        therapist_no_uri.calendly_pat_encrypted = "not-a-valid-fernet-token"
+        db_session.add(therapist_no_uri)
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/therapist/onboarding/validate-calendly/stored",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Stored Calendly token is invalid"
+
 
 class TestSyncEventTypes:
     """Tests for POST /therapist/sync-event-types"""
@@ -754,6 +821,44 @@ class TestSaveCalendly:
             "https://api.calendly.com/event_types/SHARED",
         ]
 
+    def test_save_calendly_rejects_unknown_event_type_uri(
+        self,
+        client,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        with patch("app.services.therapist_onboarding.get_user_info_with_pat") as mock_user, \
+             patch("app.services.therapist_onboarding.get_event_types_with_pat") as mock_events:
+            mock_user.return_value = {
+                "uri": "https://api.calendly.com/users/TESTUSER123",
+                "name": "Dr. Test",
+                "email": "test@test.com",
+            }
+            mock_events.return_value = [
+                {
+                    "uri": "https://api.calendly.com/event_types/KNOWN",
+                    "duration": 45,
+                    "name": "Known Event",
+                    "scheduling_url": "https://calendly.com/test/known",
+                    "active": True,
+                }
+            ]
+
+            response = client.post(
+                "/api/v1/therapist/onboarding/calendly",
+                json={
+                    "calendly_pat": "valid_token_123",
+                    "slot_mapping": {
+                        "30": "https://api.calendly.com/event_types/UNKNOWN",
+                        "45": "https://calendly.com/test/known",
+                    },
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 400
+        assert "Unknown Calendly event type URI in slot mapping" in response.json()["detail"]
+
     def test_save_calendly_accepts_event_type_uri_payload_for_backward_compat(
         self,
         client,
@@ -871,6 +976,40 @@ class TestUpdateProfile:
 
         assert response.status_code == 400
         assert response.json()["detail"] == "license_number_already_exists"
+
+
+class TestUpdateSlotMapping:
+    def test_update_slot_mapping_rejects_unknown_event_type_uri(
+        self,
+        client,
+        db_session: Session,
+        therapist_with_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist_with_uri.id,
+                calendly_event_type_uri="https://api.calendly.com/event_types/KNOWN",
+                duration_minutes=30,
+                scheduling_url="https://calendly.com/test/known",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        response = client.patch(
+            "/api/v1/therapist/onboarding/slot-mapping",
+            json={
+                "slot_mapping": {
+                    "30": "https://api.calendly.com/event_types/UNKNOWN",
+                    "45": "https://calendly.com/test/known",
+                }
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 400
+        assert "Unknown Calendly event type URI in slot mapping" in response.json()["detail"]
 
 
 class TestSyncEventTypesSharedUri:
