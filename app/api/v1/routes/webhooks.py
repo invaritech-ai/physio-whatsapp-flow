@@ -4,6 +4,7 @@ import json
 import hashlib
 import hmac
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -643,6 +644,16 @@ def _extract_phone_from_questions_and_answers(questions_and_answers: object) -> 
     if not isinstance(questions_and_answers, list):
         return None
 
+    def looks_like_phone_answer(value: str) -> bool:
+        text = value.strip()
+        if not text:
+            return False
+        # Allow common phone formatting chars, reject obvious non-phone text.
+        if re.search(r"[A-Za-z]", text):
+            return False
+        digits = re.sub(r"\D", "", text)
+        return 7 <= len(digits) <= 15
+
     # Priority: whatsapp -> phone -> number
     keyword_tiers = ("whatsapp", "phone", "number")
 
@@ -652,7 +663,7 @@ def _extract_phone_from_questions_and_answers(questions_and_answers: object) -> 
                 continue
             question = str(qa.get("question", "")).lower()
             answer = str(qa.get("answer", "")).strip()
-            if keyword in question and answer:
+            if keyword in question and looks_like_phone_answer(answer):
                 return answer
 
     return None
