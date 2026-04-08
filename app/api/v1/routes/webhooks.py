@@ -639,6 +639,25 @@ def _resolve_session_duration_minutes(
     return None
 
 
+def _extract_phone_from_questions_and_answers(questions_and_answers: object) -> str | None:
+    if not isinstance(questions_and_answers, list):
+        return None
+
+    # Priority: whatsapp -> phone -> number
+    keyword_tiers = ("whatsapp", "phone", "number")
+
+    for keyword in keyword_tiers:
+        for qa in questions_and_answers:
+            if not isinstance(qa, dict):
+                continue
+            question = str(qa.get("question", "")).lower()
+            answer = str(qa.get("answer", "")).strip()
+            if keyword in question and answer:
+                return answer
+
+    return None
+
+
 async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """Handle invitee.created event - create Session record when patient books.
 
@@ -728,13 +747,9 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
 
         event_type_uri = event_details["event_type"]
 
-        # Extract phone number from custom questions
-        phone_number = None
-        for qa in questions_and_answers:
-            question = qa.get("question", "").lower()
-            if "phone" in question:
-                phone_number = qa.get("answer")
-                break
+        # Extract phone number from custom questions.
+        # Priority order: labels containing whatsapp -> phone -> number.
+        phone_number = _extract_phone_from_questions_and_answers(questions_and_answers)
 
         if not phone_number:
             logger.error("No phone number found in booking form")

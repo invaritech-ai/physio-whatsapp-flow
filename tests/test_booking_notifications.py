@@ -204,6 +204,65 @@ async def test_invitee_created_prefers_booking_intent_for_shared_uri(db_session)
     assert intent.consumed_at is not None
 
 
+@pytest.mark.anyio
+async def test_invitee_created_extracts_phone_from_whatsapp_label(db_session):
+    therapist, client, event_type = _seed_therapist_and_client(db_session)
+    payload = _invitee_created_payload(therapist)
+    payload["questions_and_answers"] = [
+        {"question": "WhatsApp Contact", "answer": " +85295550001 "},
+    ]
+
+    with (
+        patch("app.api.v1.routes.webhooks.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.webhooks.get_scheduled_event_with_pat",
+            return_value={
+                "start_time": "2026-03-10T09:00:00Z",
+                "end_time": "2026-03-10T09:45:00Z",
+                "event_type": event_type.calendly_event_type_uri,
+                "status": "active",
+            },
+        ),
+        patch("app.api.v1.routes.webhooks.send_and_log", return_value="SM-CONFIRM-1"),
+    ):
+        result = await handle_invitee_created(db_session, payload)
+
+    assert result["status"] == "success"
+    session_row = db_session.exec(select(TherapySession)).first()
+    assert session_row is not None
+    assert session_row.client_id == client.id
+
+
+@pytest.mark.anyio
+async def test_invitee_created_extracts_phone_from_number_label_fallback(db_session):
+    therapist, client, event_type = _seed_therapist_and_client(db_session)
+    payload = _invitee_created_payload(therapist)
+    payload["questions_and_answers"] = [
+        {"question": "License Number", "answer": "PT-12345"},
+        {"question": "Contact Number", "answer": "+85295550001"},
+    ]
+
+    with (
+        patch("app.api.v1.routes.webhooks.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.webhooks.get_scheduled_event_with_pat",
+            return_value={
+                "start_time": "2026-03-10T09:00:00Z",
+                "end_time": "2026-03-10T09:45:00Z",
+                "event_type": event_type.calendly_event_type_uri,
+                "status": "active",
+            },
+        ),
+        patch("app.api.v1.routes.webhooks.send_and_log", return_value="SM-CONFIRM-1"),
+    ):
+        result = await handle_invitee_created(db_session, payload)
+
+    assert result["status"] == "success"
+    session_row = db_session.exec(select(TherapySession)).first()
+    assert session_row is not None
+    assert session_row.client_id == client.id
+
+
 def test_therapist_notifications_endpoint_returns_feed(client, db_session):
     therapist, _client, _event_type = _seed_therapist_and_client(db_session)
     now = datetime.now(timezone.utc)
