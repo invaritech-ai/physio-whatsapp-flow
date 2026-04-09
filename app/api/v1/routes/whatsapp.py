@@ -1,3 +1,5 @@
+import logging
+import traceback
 from unittest.mock import patch
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -5,10 +7,20 @@ from fastapi.responses import JSONResponse
 from sqlmodel import Session
 
 from app.core.config import settings
+from app.core.process_trace import (
+    CHANNEL_WHATSAPP_WEBHOOK,
+    attach_trace_to_result,
+    mask_twilio_whatsapp_from,
+    new_trace_id,
+    process_trace,
+    reset_trace_id,
+)
 from app.core.rate_limit import limiter
 from app.core.webhook_security import verify_twilio_signature
 from app.db.session import get_session
 from app.services.bot.router import process_message
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -21,17 +33,51 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_session))
     Processes inbound messages synchronously by default.
     Can fallback to async Celery processing when sync mode is disabled.
     """
+    _, trace_token = new_trace_id()
     try:
         form_data = await request.form()
         payload = dict(form_data)
 
-        result = process_message(payload, db)
-        return {"mode": "sync", **result}
-    except Exception as e:
-        import traceback
+        body_raw = str(payload.get("Body") or "")
+        process_trace(
+            CHANNEL_WHATSAPP_WEBHOOK,
+            "http_received",
+            path=str(request.url.path),
+            client_host=getattr(request.client, "host", None),
+            form_keys_sorted=sorted(payload.keys()),
+            from_masked=mask_twilio_whatsapp_from(payload.get("From")),
+            body_char_len=len(body_raw),
+            num_media=int(payload.get("NumMedia") or 0),
+            message_sid=payload.get("MessageSid"),
+        )
 
-        print(f"Error processing WhatsApp message: {str(e)}\n{traceback.format_exc()}")
+        result = process_message(payload, db)
+
+        process_trace(
+            CHANNEL_WHATSAPP_WEBHOOK,
+            "http_complete",
+            result_status=result.get("status"),
+            result_keys=sorted(result.keys()) if isinstance(result, dict) else None,
+            next_state=result.get("next_state") if isinstance(result, dict) else None,
+            client_id=result.get("client_id") if isinstance(result, dict) else None,
+        )
+        out = {"mode": "sync", **result}
+        return attach_trace_to_result(out)
+    except Exception as e:
+        tb = traceback.format_exc()
+        process_trace(
+            CHANNEL_WHATSAPP_WEBHOOK,
+            "http_exception",
+            error_type=type(e).__name__,
+            error=str(e)[:500],
+        )
+        if settings.debug_mode:
+            logger.exception("WhatsApp webhook error: %s", e)
+        else:
+            logger.error("WhatsApp webhook error: %s\n%s", e, tb)
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    finally:
+        reset_trace_id(trace_token)
 
 
 @router.post("/whatsapp/test")
@@ -58,8 +104,6 @@ async def whatsapp_test(request: Request, db: Session = Depends(get_session)):
 
     def fake_log_inbound(**kwargs):
         pass
-
-    from app.services.bot.router import process_message
 
     with (
         patch("app.services.bot.router.send_and_log", fake_send_and_log),

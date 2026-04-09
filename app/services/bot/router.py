@@ -2,6 +2,7 @@
 
 from sqlmodel import Session
 
+from app.core.process_trace import CHANNEL_WHATSAPP_BOT, mask_twilio_whatsapp_from, process_trace
 from app.services.bot.handlers import HANDLER_MAP, check_global_keywords, handle_idle
 from app.services.bot.helpers import get_or_create_client, send_and_log
 from app.services.message_logger import log_inbound
@@ -34,6 +35,15 @@ def process_message(form_data: dict, db: Session) -> dict:
         message_sid = form_data.get("MessageSid")
         num_media = int(form_data.get("NumMedia", "0"))
 
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "process_message_start",
+            from_masked=mask_twilio_whatsapp_from(sender),
+            body_char_len=len(body),
+            num_media=num_media,
+            message_sid=message_sid,
+        )
+
         # Get media URL if present (only first one for now)
         media_url = None
         if num_media > 0:
@@ -41,6 +51,7 @@ def process_message(form_data: dict, db: Session) -> dict:
 
         # Validate sender (required)
         if not sender:
+            process_trace(CHANNEL_WHATSAPP_BOT, "process_message_end", outcome="error", reason="missing_from")
             return {
                 "status": "error",
                 "message": "Missing required field: From",
@@ -48,6 +59,13 @@ def process_message(form_data: dict, db: Session) -> dict:
 
         # Get or create client (before validation so we can log)
         client = get_or_create_client(db, sender)
+
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "client_resolved",
+            client_id=client.id,
+            conversation_state=client.conversation_state,
+        )
 
         # Log inbound message (ALWAYS log, even if body is empty)
         log_inbound(
@@ -72,6 +90,14 @@ def process_message(form_data: dict, db: Session) -> dict:
                 body=response_text,
                 client_id=client.id,
             )
+            process_trace(
+                CHANNEL_WHATSAPP_BOT,
+                "process_message_end",
+                outcome="success",
+                reason="empty_body_or_media_only",
+                client_id=client.id,
+                next_state=client.conversation_state,
+            )
             return {
                 "status": "success",
                 "next_state": client.conversation_state,
@@ -85,16 +111,44 @@ def process_message(form_data: dict, db: Session) -> dict:
 
         if keyword_result is not None:
             next_state, response_text = keyword_result
+            process_trace(
+                CHANNEL_WHATSAPP_BOT,
+                "dispatch_global_keyword",
+                previous_state=client.conversation_state,
+                next_state=next_state,
+                response_char_len=len(response_text or ""),
+            )
         else:
             # Normal state handler dispatch
             current_state = client.conversation_state
             handler = HANDLER_MAP.get(current_state, handle_idle)
+            handler_name = getattr(handler, "__name__", str(handler))
+            process_trace(
+                CHANNEL_WHATSAPP_BOT,
+                "dispatch_state_handler",
+                conversation_state=current_state,
+                handler=handler_name,
+            )
             next_state, response_text = handler(client, body_lower, db)
+            process_trace(
+                CHANNEL_WHATSAPP_BOT,
+                "handler_returned",
+                handler=handler_name,
+                next_state=next_state,
+                response_char_len=len(response_text or ""),
+            )
 
         # Update client state
         client.conversation_state = next_state
         db.add(client)
         db.commit()
+
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "state_persisted",
+            client_id=client.id,
+            next_state=next_state,
+        )
 
         # Send response and log outbound message
         send_and_log(
@@ -104,6 +158,13 @@ def process_message(form_data: dict, db: Session) -> dict:
             client_id=client.id,
         )
 
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "process_message_end",
+            outcome="success",
+            client_id=client.id,
+            next_state=next_state,
+        )
         return {
             "status": "success",
             "next_state": next_state,
@@ -127,6 +188,14 @@ def process_message(form_data: dict, db: Session) -> dict:
             # Silently fail if we can't send error message
             pass
 
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "process_message_end",
+            outcome="error",
+            error_type=type(e).__name__,
+            error=str(e)[:500],
+            client_id=client.id if "client" in locals() and getattr(client, "id", None) else None,
+        )
         return {
             "status": "error",
             "message": error_message,

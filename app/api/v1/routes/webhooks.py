@@ -13,6 +13,13 @@ from sqlmodel import Session, select
 
 from app.core.encryption import decrypt_string
 from app.core.config import settings
+from app.core.process_trace import (
+    CHANNEL_CALENDLY_WEBHOOK,
+    attach_trace_to_result,
+    new_trace_id,
+    process_trace,
+    reset_trace_id,
+)
 from app.db.session import get_session
 from app.models import AuthEvent, Client, Session as TherapySession, Therapist, TherapistEventType
 from app.services.booking_intents import (
@@ -27,6 +34,52 @@ from app.services.timezone_utils import to_preferred_timezone
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 logger = logging.getLogger(__name__)
+
+_EMAIL_SCRUB_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# Avoid multi-megabyte log lines when DEBUG_MODE dumps full Calendly JSON.
+_MAX_CALENDLY_TRACE_JSON_CHARS = 120_000
+
+
+def _calendly_trace(stage: str, **fields: Any) -> None:
+    process_trace(CHANNEL_CALENDLY_WEBHOOK, stage, **fields)
+
+
+def _mask_phone_for_log(value: str | None) -> str:
+    if not value:
+        return ""
+    text = value.strip()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 4:
+        return f"***{digits[-4:]} (len={len(digits)})"
+    return "***"
+
+
+def _redact_nested_for_log(obj: Any, *, depth: int = 14, max_list: int = 120, max_str: int = 8000) -> Any:
+    if depth <= 0:
+        return "…"
+    if isinstance(obj, str):
+        scrubbed = _EMAIL_SCRUB_RE.sub("[email]", obj)
+        if len(scrubbed) > max_str:
+            return scrubbed[:max_str] + "…[truncated]"
+        return scrubbed
+    if isinstance(obj, dict):
+        return {str(k): _redact_nested_for_log(v, depth=depth - 1, max_list=max_list, max_str=max_str) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_nested_for_log(v, depth=depth - 1, max_list=max_list, max_str=max_str) for v in obj[:max_list]]
+    return obj
+
+
+def _calendly_trace_full_envelope(label: str, data: dict[str, Any]) -> None:
+    if not settings.debug_mode:
+        return
+    try:
+        redacted = _redact_nested_for_log(data)
+        raw = json.dumps(redacted, default=str)
+        if len(raw) > _MAX_CALENDLY_TRACE_JSON_CHARS:
+            raw = raw[:_MAX_CALENDLY_TRACE_JSON_CHARS] + "…[truncated]"
+        _calendly_trace(label, redacted_envelope_json=raw)
+    except Exception as exc:
+        _calendly_trace(f"{label}_envelope_serialize_failed", error=str(exc))
 
 
 def verify_calendly_signature(
@@ -102,40 +155,74 @@ async def calendly_webhook(
     - event: The event type (e.g., "invitee.created")
     - payload: Event data with invitee and event details
     """
-    # Parse JSON payload before signature verification so we can resolve therapist
-    # specific signing keys stored in database.
-    logger.debug("[DEBUG-WH] === Incoming Calendly webhook ===")
-    logger.debug("[DEBUG-WH] Calendly-Webhook-Signature header: %s", signature)
+    _, trace_token = new_trace_id()
     try:
-        body = await request.body()
-        data = await request.json()
-    except Exception as e:
-        logger.error(f"Failed to parse webhook JSON: {e}")
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+        # Parse JSON payload before signature verification so we can resolve therapist
+        # specific signing keys stored in database.
+        logger.debug("[DEBUG-WH] === Incoming Calendly webhook ===")
+        logger.debug("[DEBUG-WH] Calendly-Webhook-Signature header: %s", signature)
+        try:
+            body = await request.body()
+            data = await request.json()
+        except Exception as e:
+            logger.error(f"Failed to parse webhook JSON: {e}")
+            _calendly_trace("http_parse_error", error_type=type(e).__name__, error=str(e)[:400])
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+        if not isinstance(data, dict):
+            _calendly_trace("http_parse_error", reason="root_not_object", got_type=type(data).__name__)
+            raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    event_type = data.get("event")
-    payload = data.get("payload", {})
-    if not isinstance(payload, dict):
-        payload = {}
+        event_type = data.get("event")
+        payload = data.get("payload", {})
+        if not isinstance(payload, dict):
+            payload = {}
 
-    logger.debug("[DEBUG-WH] event_type=%s", event_type)
-    logger.debug("[DEBUG-WH] payload keys=%s", list(payload.keys()) if payload else "empty")
-    scheduled_event = payload.get("scheduled_event", {})
-    logger.debug("[DEBUG-WH] scheduled_event keys=%s", list(scheduled_event.keys()) if isinstance(scheduled_event, dict) else type(scheduled_event))
-    logger.debug("[DEBUG-WH] event_memberships=%s", scheduled_event.get("event_memberships") if isinstance(scheduled_event, dict) else None)
-    logger.debug("[DEBUG-WH] raw body length=%d bytes", len(body))
+        logger.debug("[DEBUG-WH] event_type=%s", event_type)
+        logger.debug("[DEBUG-WH] payload keys=%s", list(payload.keys()) if payload else "empty")
+        scheduled_event = payload.get("scheduled_event", {})
+        logger.debug(
+            "[DEBUG-WH] scheduled_event keys=%s",
+            list(scheduled_event.keys()) if isinstance(scheduled_event, dict) else type(scheduled_event),
+        )
+        logger.debug(
+            "[DEBUG-WH] event_memberships=%s",
+            scheduled_event.get("event_memberships") if isinstance(scheduled_event, dict) else None,
+        )
+        logger.debug("[DEBUG-WH] raw body length=%d bytes", len(body))
 
-    secrets = _resolve_calendly_signing_secrets(db, payload)
-    logger.debug("[DEBUG-WH] resolved %d signing secrets", len(secrets))
-    if not verify_calendly_signature(body, signature, secrets):
-        logger.warning("Invalid Calendly webhook signature")
-        raise HTTPException(status_code=401, detail="Invalid signature")
+        _calendly_trace(
+            "http_received",
+            path=str(request.url.path),
+            client_host=getattr(request.client, "host", None),
+            body_bytes=len(body),
+            envelope_top_level_keys=sorted(data.keys()),
+            webhook_event_field=event_type,
+            payload_top_level_keys=sorted(payload.keys()) if payload else [],
+            signature_header_present=bool(signature),
+        )
+        _calendly_trace_full_envelope("raw_webhook_envelope", data)
 
-    logger.info(f"Received Calendly webhook: {event_type}")
+        secrets = _resolve_calendly_signing_secrets(db, payload)
+        logger.debug("[DEBUG-WH] resolved %d signing secrets", len(secrets))
+        sig_ok = verify_calendly_signature(body, signature, secrets)
+        _calendly_trace(
+            "signature_check",
+            ok=sig_ok,
+            secrets_tried=len(secrets),
+            webhook_event_field=event_type,
+        )
+        if not sig_ok:
+            logger.warning("Invalid Calendly webhook signature")
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
-    return await process_calendly_event(db=db, event_type=event_type, payload=payload)
+        logger.info(f"Received Calendly webhook: {event_type}")
+
+        result = await process_calendly_event(db=db, event_type=event_type, payload=payload)
+        if isinstance(result, dict):
+            return attach_trace_to_result(result)
+        return result
+    finally:
+        reset_trace_id(trace_token)
 
 
 async def process_calendly_event(
@@ -145,16 +232,26 @@ async def process_calendly_event(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Process verified Calendly webhook payload by event type."""
+    _calendly_trace("handler_dispatch", webhook_event_type=event_type)
     if event_type == "invitee.created":
-        return await handle_invitee_created(db, payload)
-    if event_type == "invitee.rescheduled":
+        out = await handle_invitee_created(db, payload)
+    elif event_type == "invitee.rescheduled":
         # Kept as a compatibility fallback. Current subscription setup relies on
         # invitee.created + invitee.canceled for reschedule flows.
-        return await handle_invitee_rescheduled(db, payload)
-    if event_type == "invitee.canceled":
-        return await handle_invitee_canceled(db, payload)
-    logger.warning("Unhandled Calendly event type: %s", event_type)
-    return {"status": "ignored", "event": event_type}
+        out = await handle_invitee_rescheduled(db, payload)
+    elif event_type == "invitee.canceled":
+        out = await handle_invitee_canceled(db, payload)
+    else:
+        logger.warning("Unhandled Calendly event type: %s", event_type)
+        out = {"status": "ignored", "event": event_type}
+    if isinstance(out, dict):
+        _calendly_trace(
+            "handler_return",
+            webhook_event_type=event_type,
+            result_status=out.get("status"),
+            result_keys=sorted(out.keys()),
+        )
+    return out
 
 
 def _format_local_timestamp(value: datetime, preferred_timezone: str | None) -> str:
@@ -541,6 +638,12 @@ def _resolve_calendly_signing_secrets(db: Session, payload: dict) -> list[str]:
         therapist_ids, len(secrets),
     )
 
+    _calendly_trace(
+        "signing_secrets_resolved",
+        matched_therapist_ids=sorted(therapist_ids),
+        unique_secrets_count=len(list(dict.fromkeys(secrets))),
+    )
+
     # Preserve order while de-duplicating.
     return list(dict.fromkeys(secrets))
 
@@ -669,6 +772,19 @@ def _extract_phone_from_questions_and_answers(questions_and_answers: object) -> 
     return None
 
 
+def _summarize_qa_for_trace(questions_and_answers: object) -> list[dict[str, Any]]:
+    if not isinstance(questions_and_answers, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for qa in questions_and_answers:
+        if not isinstance(qa, dict):
+            continue
+        q = str(qa.get("question", ""))[:200]
+        a = qa.get("answer")
+        rows.append({"question": q, "answer_masked": _mask_phone_for_log(str(a) if a is not None else "")})
+    return rows
+
+
 async def handle_invitee_created(db: Session, payload: dict) -> dict:
     """Handle invitee.created event - create Session record when patient books.
 
@@ -708,8 +824,23 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
         invitee_name = payload.get("name") or (invitee.get("name") if isinstance(invitee, dict) else None)
         questions_and_answers = payload.get("questions_and_answers", [])
 
+        _name_hint: str | None = invitee_name if isinstance(invitee_name, str) else None
+        if _name_hint and len(_name_hint) > 80:
+            _name_hint = _name_hint[:80] + "…"
+        _calendly_trace(
+            "invitee_created_start",
+            event_uri=event_uri,
+            invitee_uri=invitee_uri,
+            old_event_uri=old_event_uri,
+            old_invitee_uri=old_invitee_uri,
+            is_rescheduled=is_rescheduled,
+            invitee_name_hint=_name_hint,
+            questions_and_answers_summary=_summarize_qa_for_trace(questions_and_answers),
+        )
+
         if not event_uri:
             logger.error("No event URI found in invitee.created payload")
+            _calendly_trace("invitee_created_error", reason="missing_event_uri")
             return {"status": "error", "message": "Missing event URI"}
 
         # Extract therapist's Calendly user URI from event memberships
@@ -723,6 +854,7 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             event_memberships = payload.get("event_memberships") or []
         if not event_memberships:
             logger.error("No event_memberships in webhook payload")
+            _calendly_trace("invitee_created_error", reason="missing_event_memberships")
             return {"status": "error", "message": "Missing event memberships"}
 
         therapist_calendly_uri = event_memberships[0].get("user")
@@ -734,11 +866,26 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
 
         if not therapist:
             logger.error(f"No therapist found for Calendly user: {therapist_calendly_uri}")
+            _calendly_trace(
+                "invitee_created_error",
+                reason="therapist_not_found",
+                therapist_calendly_user_uri=therapist_calendly_uri,
+                membership_count=len(event_memberships),
+            )
             return {"status": "error", "message": "Therapist not found"}
+
+        _calendly_trace(
+            "invitee_created_therapist_resolved",
+            therapist_id=therapist.id,
+            therapist_calendly_user_uri=therapist.calendly_user_uri,
+            has_pat=bool(therapist.calendly_pat_encrypted),
+            has_stored_signing_key=bool(therapist.calendly_webhook_signing_key_encrypted),
+        )
 
         # Fetch scheduled event details via therapist's PAT
         if not therapist.calendly_pat_encrypted:
             logger.error(f"Therapist {therapist.id} has no Calendly PAT")
+            _calendly_trace("invitee_created_error", reason="missing_pat", therapist_id=therapist.id)
             return {"status": "error", "message": "Therapist PAT not configured"}
 
         pat = decrypt_string(therapist.calendly_pat_encrypted)
@@ -746,6 +893,12 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
 
         if not event_details:
             logger.error(f"Failed to fetch scheduled event details: {event_uri}")
+            _calendly_trace(
+                "invitee_created_error",
+                reason="scheduled_event_fetch_failed",
+                therapist_id=therapist.id,
+                event_uri=event_uri,
+            )
             return {"status": "error", "message": "Could not fetch event details"}
 
         # Parse start/end times
@@ -758,16 +911,38 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
 
         event_type_uri = event_details["event_type"]
 
+        _calendly_trace(
+            "invitee_created_scheduled_event_fetched",
+            therapist_id=therapist.id,
+            event_uri=event_uri,
+            calendly_event_type_uri=event_type_uri,
+            start_time=event_details.get("start_time"),
+            end_time=event_details.get("end_time"),
+            api_status=event_details.get("status"),
+        )
+
         # Extract phone number from custom questions.
         # Priority order: labels containing whatsapp -> phone -> number.
         phone_number = _extract_phone_from_questions_and_answers(questions_and_answers)
 
         if not phone_number:
             logger.error("No phone number found in booking form")
+            _calendly_trace(
+                "invitee_created_error",
+                reason="phone_not_found_in_qa",
+                therapist_id=therapist.id,
+                questions_and_answers_summary=_summarize_qa_for_trace(questions_and_answers),
+            )
             return {"status": "error", "message": "Phone number required"}
 
         # Normalize phone number: strip whatsapp: prefix, remove spaces/dashes, ensure E.164
         phone_e164 = normalize_phone_e164(phone_number)
+        _calendly_trace(
+            "invitee_created_phone_extracted",
+            therapist_id=therapist.id,
+            raw_phone_masked=_mask_phone_for_log(phone_number),
+            normalized_phone_masked=_mask_phone_for_log(phone_e164),
+        )
 
         # Find or create client by phone number
         client = db.exec(
@@ -810,7 +985,24 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             scheduled_duration_minutes=scheduled_duration_minutes,
         )
         if duration_minutes is None:
+            _calendly_trace(
+                "invitee_created_error",
+                reason="ambiguous_event_type_mapping",
+                therapist_id=therapist.id,
+                calendly_event_type_uri=event_type_uri,
+                scheduled_duration_minutes=scheduled_duration_minutes,
+                had_existing_session=session is not None,
+            )
             return {"status": "error", "message": "Ambiguous event type mapping"}
+
+        _calendly_trace(
+            "invitee_created_duration_resolved",
+            therapist_id=therapist.id,
+            duration_minutes=duration_minutes,
+            scheduled_duration_minutes=scheduled_duration_minutes,
+            calendly_event_type_uri=event_type_uri,
+            session_match_mode="update" if session else "create",
+        )
 
         if session:
             previous_event_uri = session.calendly_event_uri
@@ -838,6 +1030,13 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 session.id,
                 is_rescheduled,
             )
+            _calendly_trace(
+                "invitee_created_session_updated",
+                session_id=session.id,
+                client_id=client.id,
+                therapist_id=therapist.id,
+                is_rescheduled=is_rescheduled,
+            )
         else:
             session = TherapySession(
                 client_id=client.id,
@@ -857,6 +1056,12 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             logger.info(
                 f"Created session {session.id} for client {client.id} "
                 f"with therapist {therapist.id} (duration: {session.duration_minutes}min)"
+            )
+            _calendly_trace(
+                "invitee_created_session_created",
+                session_id=session.id,
+                client_id=client.id,
+                therapist_id=therapist.id,
             )
 
         # Best-effort notifications (idempotent).
@@ -881,16 +1086,19 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 therapist.id,
             )
 
-        return {
+        out = {
             "status": "success",
             "session_id": session.id,
             "client_id": client.id,
             "therapist_id": therapist.id,
         }
+        _calendly_trace("invitee_created_success", **{k: v for k, v in out.items() if k != "status"})
+        return out
 
     except Exception as e:
         logger.exception(f"Error handling invitee.created event: {e}")
         db.rollback()
+        _calendly_trace("invitee_created_exception", error_type=type(e).__name__, error=str(e)[:500])
         return {"status": "error", "message": str(e)}
 
 
@@ -903,6 +1111,11 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
     scheduled with new event/invitee URIs.
     """
     try:
+        _calendly_trace(
+            "invitee_canceled_start",
+            payload_rescheduled_flag=bool(payload.get("rescheduled")),
+            payload_keys=sorted(payload.keys()),
+        )
         if payload.get("rescheduled"):
             logger.info(
                 "Processing invitee.canceled with rescheduled=True; invitee.created may re-activate updated session"
@@ -926,12 +1139,14 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
             "Processing invitee.canceled: event_uri=%s, invitee_uri=%s",
             event_uri, invitee_uri,
         )
+        _calendly_trace("invitee_canceled_refs", event_uri=event_uri, invitee_uri=invitee_uri)
 
         # Prefer invitee_uri match (more specific) over event_uri
         session = _find_session_by_refs(db, invitee_uri=invitee_uri, event_uri=event_uri)
 
         if not session:
             logger.warning(f"No session found for canceled event: {event_uri or invitee_uri}")
+            _calendly_trace("invitee_canceled_not_found", event_uri=event_uri, invitee_uri=invitee_uri)
             return {"status": "not_found", "message": "Session not found"}
 
         # Update session status
@@ -975,6 +1190,7 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
 
         logger.info(f"Marked session {session.id} as cancelled")
 
+        _calendly_trace("invitee_canceled_success", session_id=session.id, therapist_id=session.therapist_id)
         return {
             "status": "success",
             "session_id": session.id,
@@ -984,6 +1200,7 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
     except Exception as e:
         logger.exception(f"Error handling invitee.canceled event: {e}")
         db.rollback()
+        _calendly_trace("invitee_canceled_exception", error_type=type(e).__name__, error=str(e)[:500])
         return {"status": "error", "message": str(e)}
 
 
@@ -994,6 +1211,15 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
         new_event_uri = _payload_uri(payload, "new_event", "new_event_uri", "event")
         old_invitee_uri = _payload_uri(payload, "old_invitee", "old_invitee_uri")
         new_invitee_uri = _payload_uri(payload, "new_invitee", "new_invitee_uri", "invitee")
+
+        _calendly_trace(
+            "invitee_rescheduled_start",
+            old_event_uri=old_event_uri,
+            new_event_uri=new_event_uri,
+            old_invitee_uri=old_invitee_uri,
+            new_invitee_uri=new_invitee_uri,
+            payload_keys=sorted(payload.keys()),
+        )
 
         lookup_order = [
             ("calendly_event_uri", old_event_uri),
@@ -1025,26 +1251,42 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
                 new_event_uri,
                 new_invitee_uri,
             )
+            _calendly_trace(
+                "invitee_rescheduled_not_found",
+                old_event_uri=old_event_uri,
+                old_invitee_uri=old_invitee_uri,
+                new_event_uri=new_event_uri,
+                new_invitee_uri=new_invitee_uri,
+            )
             return {"status": "not_found", "message": "Session not found"}
 
         therapist = db.get(Therapist, session.therapist_id)
         if not therapist:
             logger.error(f"No therapist found for session {session.id}")
+            _calendly_trace("invitee_rescheduled_error", reason="therapist_missing", session_id=session.id)
             return {"status": "error", "message": "Therapist not found"}
 
         if not therapist.calendly_pat_encrypted:
             logger.error(f"Therapist {therapist.id} has no Calendly PAT")
+            _calendly_trace("invitee_rescheduled_error", reason="missing_pat", therapist_id=therapist.id)
             return {"status": "error", "message": "Therapist PAT not configured"}
 
         target_event_uri = new_event_uri or session.calendly_event_uri
         if not target_event_uri:
             logger.error(f"No target event URI in rescheduled payload for session {session.id}")
+            _calendly_trace("invitee_rescheduled_error", reason="missing_target_event_uri", session_id=session.id)
             return {"status": "error", "message": "Missing event URI"}
 
         pat = decrypt_string(therapist.calendly_pat_encrypted)
         event_details = get_scheduled_event_with_pat(target_event_uri, pat)
         if not event_details:
             logger.error(f"Failed to fetch scheduled event details for reschedule: {target_event_uri}")
+            _calendly_trace(
+                "invitee_rescheduled_error",
+                reason="scheduled_event_fetch_failed",
+                target_event_uri=target_event_uri,
+                therapist_id=therapist.id,
+            )
             return {"status": "error", "message": "Could not fetch event details"}
 
         start_time = datetime.fromisoformat(
@@ -1135,6 +1377,12 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
                 session.id,
                 existing_new_session.id,
             )
+            _calendly_trace(
+                "invitee_rescheduled_success_merged",
+                old_session_id=session.id,
+                canonical_session_id=existing_new_session.id,
+                therapist_id=therapist.id,
+            )
             return {
                 "status": "success",
                 "session_id": existing_new_session.id,
@@ -1184,6 +1432,12 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
             )
 
         logger.info("Rescheduled session %s to event %s", session.id, target_event_uri)
+        _calendly_trace(
+            "invitee_rescheduled_success",
+            session_id=session.id,
+            therapist_id=therapist.id,
+            target_event_uri=target_event_uri,
+        )
         return {
             "status": "success",
             "session_id": session.id,
@@ -1193,4 +1447,5 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
     except Exception as e:
         logger.exception(f"Error handling invitee.rescheduled event: {e}")
         db.rollback()
+        _calendly_trace("invitee_rescheduled_exception", error_type=type(e).__name__, error=str(e)[:500])
         return {"status": "error", "message": str(e)}
