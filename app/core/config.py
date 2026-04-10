@@ -60,6 +60,9 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     debug_mode: bool = False
+    # When true, outbound WhatsApp uses print-only (no Twilio API). Independent of DEBUG_MODE
+    # so verbose tracing does not silently drop patient messages.
+    twilio_dry_run: bool = False
     public_base_url: str | None = None
     web_base_url: str | None = None
 
