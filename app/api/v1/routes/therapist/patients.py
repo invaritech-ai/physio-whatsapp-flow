@@ -14,6 +14,10 @@ from app.api.v1.schemas.therapist_patient import (
 from app.core.auth import get_current_therapist
 from app.db.session import get_session
 from app.models import Client, Session as TherapySession, Therapist
+from app.services.clinical_note_visibility import (
+    clinical_note_preview,
+    latest_session_note_by_session_id,
+)
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
@@ -204,12 +208,19 @@ def list_therapist_patient_sessions(
     stmt = stmt.order_by(TherapySession.start_time.desc()).offset(offset).limit(limit)
     sessions = db.exec(stmt).all()
     plan_map = load_active_plan_map(db, client_ids={client_id})
+    session_ids = [s.id for s in sessions if s.id is not None]
+    note_map = latest_session_note_by_session_id(
+        db,
+        therapist_user_id=therapist.user_id,
+        session_ids=session_ids,
+    )
     rows: list[TherapistPatientSessionItem] = []
     for session in sessions:
         expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
             session,
             plan_map=plan_map,
         )
+        note = note_map.get(session.id) if session.id is not None else None
         rows.append(
             TherapistPatientSessionItem(
                 id=session.id,
@@ -223,6 +234,13 @@ def list_therapist_patient_sessions(
                 expected_charge_cents=expected_charge_cents,
                 expected_charge_currency=expected_charge_currency,
                 assigned_plan=assigned_plan,
+                has_clinical_note=note is not None,
+                clinical_note_preview=clinical_note_preview(note.note_text) if note else None,
+                clinical_note_saved_at=(
+                    to_preferred_timezone(note.created_at, therapist.preferred_timezone)
+                    if note
+                    else None
+                ),
             )
         )
     return rows

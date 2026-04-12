@@ -212,3 +212,70 @@ def test_therapist_cannot_write_other_therapist_session(client, db_session: Sess
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Session not found"
+
+
+def test_therapist_session_list_includes_note_preview(client, db_session: Session):
+    user, therapist = _create_therapist_user(db_session, suffix="list-preview")
+    client_row = Client(phone_e164="+85297770011", name="List Preview Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+    )
+
+    with _therapist_auth(user):
+        put = client.put(
+            f"/api/v1/therapist/sessions/{session_row.id}/clinical-note",
+            json={"note_text": "Follow-up tolerated single-leg balance work.", "diagnosis": "Ankle sprain"},
+            headers=_auth_headers(),
+        )
+        assert put.status_code == 200
+        list_response = client.get(
+            "/api/v1/therapist/sessions?scope=upcoming&limit=50",
+            headers=_auth_headers(),
+        )
+
+    assert list_response.status_code == 200
+    envelope = list_response.json()
+    items = envelope["items"]
+    match = next(row for row in items if row["id"] == session_row.id)
+    assert match["client_id"] == client_row.id
+    assert match["has_clinical_note"] is True
+    assert match["clinical_note_preview"]
+    assert "balance" in match["clinical_note_preview"].lower()
+
+
+def test_therapist_patient_sessions_list_includes_note_summary(client, db_session: Session):
+    user, therapist = _create_therapist_user(db_session, suffix="pat-sessions-note")
+    client_row = Client(phone_e164="+85297770012", name="Patient Sessions Note Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+    session_row = _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+    )
+
+    with _therapist_auth(user):
+        put = client.put(
+            f"/api/v1/therapist/sessions/{session_row.id}/clinical-note",
+            json={"note_text": "Home exercise compliance is excellent this week."},
+            headers=_auth_headers(),
+        )
+        assert put.status_code == 200
+        list_response = client.get(
+            f"/api/v1/therapist/patients/{client_row.id}/sessions",
+            headers=_auth_headers(),
+        )
+
+    assert list_response.status_code == 200
+    rows = list_response.json()
+    match = next(r for r in rows if r["id"] == session_row.id)
+    assert match["has_clinical_note"] is True
+    assert match["clinical_note_preview"]
+    assert "compliance" in match["clinical_note_preview"].lower()
+    assert match["clinical_note_saved_at"] is not None

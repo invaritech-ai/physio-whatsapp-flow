@@ -14,6 +14,7 @@ class SessionListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    client_id: int
     client_name: str | None
     client_phone: str | None
     start_time: datetime
@@ -23,6 +24,8 @@ class SessionListItem(BaseModel):
     expected_charge_cents: int | None = None
     expected_charge_currency: str | None = None
     assigned_plan: AssignedPlanSummary | None = None
+    has_clinical_note: bool = False
+    clinical_note_preview: str | None = None
 
 
 class SessionListResponse(BaseModel):

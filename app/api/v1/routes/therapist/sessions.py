@@ -25,6 +25,10 @@ from app.api.v1.schemas.session import (
     TherapistRecordPaymentRequest,
     TherapistRecordPaymentResponse,
 )
+from app.services.clinical_note_visibility import (
+    clinical_note_preview,
+    latest_session_note_by_session_id,
+)
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
@@ -56,13 +60,16 @@ def _build_list_item(
     *,
     preferred_timezone: str | None,
     plan_map: dict[tuple[int, int], dict[str, object]],
+    clinical_note: SessionNote | None = None,
 ) -> SessionListItem:
     expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
         session,
         plan_map=plan_map,
     )
+    preview = clinical_note_preview(clinical_note.note_text) if clinical_note else None
     return SessionListItem(
-        id=session.id,
+        id=session.id or 0,
+        client_id=session.client_id,
         client_name=client.name,
         client_phone=client.phone_e164,
         start_time=to_preferred_timezone(session.start_time, preferred_timezone),
@@ -72,6 +79,8 @@ def _build_list_item(
         expected_charge_cents=expected_charge_cents,
         expected_charge_currency=expected_charge_currency,
         assigned_plan=assigned_plan,
+        has_clinical_note=clinical_note is not None,
+        clinical_note_preview=preview,
     )
 
 
@@ -196,12 +205,19 @@ def list_sessions(
         clients = {c.id: c for c in client_rows}
 
     plan_map = load_active_plan_map(db, client_ids=client_ids)
+    session_ids = [s.id for s in sessions if s.id is not None]
+    note_map = latest_session_note_by_session_id(
+        db,
+        therapist_user_id=therapist.user_id,
+        session_ids=session_ids,
+    )
     items = [
         _build_list_item(
             s,
             clients.get(s.client_id, Client(phone_e164="")),
             preferred_timezone=therapist.preferred_timezone,
             plan_map=plan_map,
+            clinical_note=note_map.get(s.id) if s.id is not None else None,
         )
         for s in sessions
     ]
@@ -252,11 +268,17 @@ def session_summary(
         upcoming_sessions.sort(key=lambda s: as_utc(s.start_time))
         ns = upcoming_sessions[0]
         client = db.get(Client, ns.client_id)
+        next_note_map = latest_session_note_by_session_id(
+            db,
+            therapist_user_id=therapist.user_id,
+            session_ids=[ns.id] if ns.id is not None else [],
+        )
         next_session = _build_list_item(
             ns,
             client or Client(phone_e164=""),
             preferred_timezone=therapist.preferred_timezone,
             plan_map=plan_map,
+            clinical_note=next_note_map.get(ns.id) if ns.id is not None else None,
         )
 
     return SessionSummary(
