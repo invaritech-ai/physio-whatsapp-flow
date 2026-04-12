@@ -11,7 +11,16 @@ from sqlmodel import select
 from app.api.v1.routes.webhooks import handle_invitee_created
 from app.core.auth import get_current_therapist
 from app.main import app
-from app.models import BookingIntent, AuthEvent, Client, Session as TherapySession, Therapist, TherapistEventType, User
+from app.models import (
+    BookingIntent,
+    AuthEvent,
+    Client,
+    Session as TherapySession,
+    SessionNote,
+    Therapist,
+    TherapistEventType,
+    User,
+)
 
 
 def _seed_therapist_and_client(db_session):
@@ -93,6 +102,9 @@ async def test_invitee_created_sends_client_and_therapist_notifications(db_sessi
         result = await handle_invitee_created(db_session, payload)
 
     assert result["status"] == "success"
+    session_row = db_session.exec(select(TherapySession)).first()
+    assert session_row is not None
+    assert session_row.client_id == client.id
     assert mock_send.call_count == 1
 
     session_row = db_session.exec(select(TherapySession)).first()
@@ -258,9 +270,129 @@ async def test_invitee_created_extracts_phone_from_number_label_fallback(db_sess
         result = await handle_invitee_created(db_session, payload)
 
     assert result["status"] == "success"
-    session_row = db_session.exec(select(TherapySession)).first()
+
+
+@pytest.mark.anyio
+async def test_invitee_created_copies_previous_session_note_forward(db_session):
+    therapist, client, event_type = _seed_therapist_and_client(db_session)
+    previous_start = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+    previous_session = TherapySession(
+        client_id=client.id,
+        therapist_id=therapist.id,
+        start_time=previous_start,
+        end_time=previous_start + timedelta(minutes=45),
+        duration_minutes=45,
+        status="completed",
+        source="calendly",
+        calendly_event_uri="https://api.calendly.com/scheduled_events/BOOKING_NOTIFY_OLD",
+        calendly_invitee_uri="https://api.calendly.com/scheduled_events/BOOKING_NOTIFY_OLD/invitees/INVITEE_OLD",
+    )
+    db_session.add(previous_session)
+    db_session.commit()
+    db_session.refresh(previous_session)
+
+    previous_note = SessionNote(
+        session_id=previous_session.id,
+        author_user_id=therapist.user_id,
+        note_text="Prior session note to carry forward.",
+    )
+    db_session.add(previous_note)
+    db_session.commit()
+
+    payload = _invitee_created_payload(therapist)
+    with (
+        patch("app.api.v1.routes.webhooks.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.webhooks.get_scheduled_event_with_pat",
+            return_value={
+                "start_time": "2026-03-10T09:00:00Z",
+                "end_time": "2026-03-10T09:45:00Z",
+                "event_type": event_type.calendly_event_type_uri,
+                "status": "active",
+            },
+        ),
+        patch("app.api.v1.routes.webhooks.send_and_log", return_value="SM-CONFIRM-1"),
+    ):
+        result = await handle_invitee_created(db_session, payload)
+
+    assert result["status"] == "success"
+    session_row = db_session.exec(
+        select(TherapySession).where(
+            TherapySession.calendly_event_uri == "https://api.calendly.com/scheduled_events/BOOKING_NOTIFY_EVENT"
+        )
+    ).first()
     assert session_row is not None
-    assert session_row.client_id == client.id
+
+    copied_note = db_session.exec(
+        select(SessionNote).where(
+            SessionNote.session_id == session_row.id,
+            SessionNote.author_user_id == therapist.user_id,
+        )
+    ).first()
+    assert copied_note is not None
+    assert copied_note.note_text == "Prior session note to carry forward."
+
+
+@pytest.mark.anyio
+async def test_invitee_created_copies_empty_note_when_previous_is_empty(db_session):
+    therapist, client, event_type = _seed_therapist_and_client(db_session)
+    previous_start = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+    previous_session = TherapySession(
+        client_id=client.id,
+        therapist_id=therapist.id,
+        start_time=previous_start,
+        end_time=previous_start + timedelta(minutes=45),
+        duration_minutes=45,
+        status="completed",
+        source="calendly",
+        calendly_event_uri="https://api.calendly.com/scheduled_events/BOOKING_NOTIFY_OLD_EMPTY",
+        calendly_invitee_uri="https://api.calendly.com/scheduled_events/BOOKING_NOTIFY_OLD_EMPTY/invitees/INVITEE_OLD_EMPTY",
+    )
+    db_session.add(previous_session)
+    db_session.commit()
+    db_session.refresh(previous_session)
+
+    db_session.add(
+        SessionNote(
+            session_id=previous_session.id,
+            author_user_id=therapist.user_id,
+            note_text="",
+        )
+    )
+    db_session.commit()
+
+    payload = _invitee_created_payload(therapist)
+    with (
+        patch("app.api.v1.routes.webhooks.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.webhooks.get_scheduled_event_with_pat",
+            return_value={
+                "start_time": "2026-03-10T09:00:00Z",
+                "end_time": "2026-03-10T09:45:00Z",
+                "event_type": event_type.calendly_event_type_uri,
+                "status": "active",
+            },
+        ),
+        patch("app.api.v1.routes.webhooks.send_and_log", return_value="SM-CONFIRM-1"),
+    ):
+        result = await handle_invitee_created(db_session, payload)
+
+    assert result["status"] == "success"
+    session_row = db_session.exec(
+        select(TherapySession).where(
+            TherapySession.calendly_event_uri == "https://api.calendly.com/scheduled_events/BOOKING_NOTIFY_EVENT"
+        )
+    ).first()
+    assert session_row is not None
+
+    copied_note = db_session.exec(
+        select(SessionNote).where(
+            SessionNote.session_id == session_row.id,
+            SessionNote.author_user_id == therapist.user_id,
+        )
+    ).first()
+    assert copied_note is not None
+    assert copied_note.note_text == ""
 
 
 def test_therapist_notifications_endpoint_returns_feed(client, db_session):

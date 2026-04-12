@@ -21,7 +21,7 @@ from app.core.process_trace import (
     reset_trace_id,
 )
 from app.db.session import get_session
-from app.models import AuthEvent, Client, Session as TherapySession, Therapist, TherapistEventType
+from app.models import AuthEvent, Client, Session as TherapySession, SessionNote, Therapist, TherapistEventType
 from app.services.booking_intents import (
     consume_booking_intent,
     find_recent_booking_intent,
@@ -672,6 +672,63 @@ def _find_session_by_refs(
     return None
 
 
+def _seed_session_note_from_previous_session(
+    db: Session,
+    *,
+    session_row: TherapySession,
+    therapist_user_id: int,
+) -> None:
+    """Create initial note for a new session by copying the previous session note.
+
+    If no prior session-note exists for this therapist+client chain, seed with empty text.
+    """
+    if session_row.id is None:
+        return
+
+    previous_session = db.exec(
+        select(TherapySession)
+        .where(
+            TherapySession.client_id == session_row.client_id,
+            TherapySession.therapist_id == session_row.therapist_id,
+            TherapySession.id != session_row.id,
+            TherapySession.start_time <= session_row.start_time,
+        )
+        .order_by(TherapySession.start_time.desc(), TherapySession.id.desc())
+    ).first()
+
+    note_text = ""
+    previous_session_id: int | None = None
+    copied_from_previous = False
+    if previous_session is not None:
+        previous_session_id = previous_session.id
+        previous_note = db.exec(
+            select(SessionNote)
+            .where(
+                SessionNote.session_id == previous_session.id,
+                SessionNote.author_user_id == therapist_user_id,
+            )
+            .order_by(SessionNote.created_at.desc())
+        ).first()
+        if previous_note is not None:
+            note_text = previous_note.note_text or ""
+            copied_from_previous = True
+
+    db.add(
+        SessionNote(
+            session_id=session_row.id,
+            author_user_id=therapist_user_id,
+            note_text=note_text,
+        )
+    )
+    _calendly_trace(
+        "invitee_created_note_seeded",
+        session_id=session_row.id,
+        previous_session_id=previous_session_id,
+        copied_from_previous=copied_from_previous,
+        note_chars=len(note_text),
+    )
+
+
 def _get_active_event_type_mappings(
     db: Session,
     *,
@@ -1050,6 +1107,12 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
                 status="scheduled",
             )
             db.add(session)
+            db.flush()
+            _seed_session_note_from_previous_session(
+                db,
+                session_row=session,
+                therapist_user_id=therapist.user_id,
+            )
             db.commit()
             db.refresh(session)
 
