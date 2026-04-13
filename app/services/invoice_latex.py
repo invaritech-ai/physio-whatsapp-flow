@@ -87,19 +87,76 @@ def _stamps_dir() -> Path:
     return _resolve_template_path().parent / "stamps"
 
 
+_STAMP_EXTENSIONS = frozenset({".jpeg", ".jpg", ".png", ".pdf"})
+
+
+def _name_tokens(s: str) -> list[str]:
+    """Normalize a display name or filename stem to lowercase word tokens."""
+    if not s or not str(s).strip():
+        return []
+    t = str(s).replace("_", " ").replace("-", " ").lower()
+    return [p for p in t.split() if p]
+
+
+def _token_list_is_prefix(short: list[str], long: list[str]) -> bool:
+    """True if short equals the first len(short) tokens of long."""
+    if len(short) > len(long):
+        return False
+    return long[: len(short)] == short
+
+
+def _therapist_tokens_for_stamp(therapist_name: str) -> list[str]:
+    clean = _strip_dr_prefix(therapist_name)
+    if clean == "-":
+        clean = therapist_name.strip()
+    return _name_tokens(clean)
+
+
 def _find_stamp_file(therapist_name: str | None) -> Path | None:
-    """Find a stamp image for the therapist by slugified name."""
+    """
+    Find a stamp image for the therapist.
+
+    Matches full names, slug-style stems (underscores), and partial names on
+    either side: e.g. file ``Ava.jpeg`` with therapist ``Dr. Ava Chen``, or
+    ``Cindy Yuen Ying Chau.jpeg`` with the same string case-insensitively.
+    """
     if not therapist_name:
         return None
-    slug = _strip_dr_prefix(therapist_name).lower().replace(" ", "_")
+    therapist_tokens = _therapist_tokens_for_stamp(therapist_name)
+    if not therapist_tokens:
+        return None
+
     stamps = _stamps_dir()
     if not stamps.is_dir():
         return None
-    for ext in ("jpeg", "jpg", "png", "pdf"):
-        candidate = stamps / f"{slug}.{ext}"
-        if candidate.exists():
-            return candidate
-    return None
+
+    candidates: list[tuple[int, int, int, str, Path]] = []
+    # Sort key: exact before prefix; then closest token-count gap; then more
+    # overlapping tokens; stable tie-break on filename.
+    for path in sorted(stamps.iterdir(), key=lambda p: p.name.lower()):
+        if not path.is_file() or path.suffix.lower() not in _STAMP_EXTENSIONS:
+            continue
+        stem_tokens = _name_tokens(path.stem)
+        if not stem_tokens:
+            continue
+
+        if stem_tokens == therapist_tokens:
+            candidates.append((0, 0, 0, path.name.lower(), path))
+            continue
+
+        file_extends_therapist = _token_list_is_prefix(stem_tokens, therapist_tokens)
+        therapist_extends_file = _token_list_is_prefix(therapist_tokens, stem_tokens)
+        if not (file_extends_therapist or therapist_extends_file):
+            continue
+
+        common = min(len(stem_tokens), len(therapist_tokens))
+        length_delta = abs(len(stem_tokens) - len(therapist_tokens))
+        candidates.append((1, length_delta, -common, path.name.lower(), path))
+
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][4]
 
 
 def _stamp_block(stamp_filename: str | None) -> str:
