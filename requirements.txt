@@ -12,5 +12,6 @@ pydantic-settings
 email-validator
 psycopg[binary]
 PyJWT[crypto]
+slowapi
 pytest
 httpx

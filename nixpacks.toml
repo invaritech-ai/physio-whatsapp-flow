@@ -1,4 +1,5 @@
 # Nixpacks infers `python -m movement-whatsapp-automation-api` from pyproject name,
 # but this app is started with uvicorn (no console entrypoint). Override explicitly.
+# Use a shell so PORT expands; some hosts inject PORT only into a shell environment.
 [start]
-cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+cmd = "sh -c 'exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}'"
