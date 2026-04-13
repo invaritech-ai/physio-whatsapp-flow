@@ -1,0 +1,4 @@
+# Nixpacks infers `python -m movement-whatsapp-automation-api` from pyproject name,
+# but this app is started with uvicorn (no console entrypoint). Override explicitly.
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
