@@ -209,9 +209,7 @@ def _build_template_context(
     therapist_license_number: str | None,
     payment_mode: str | None,
     special_notes: str | None,
-    issued_at: datetime | None,
 ) -> dict[str, str]:
-    printed_at = _format_invoice_datetime(issued_at or datetime.now(timezone.utc))
     session_at = _format_invoice_datetime(session_start_at)
     payment_date = _format_payment_datetime(session_start_at)
     payer_name = client_name or "Client"
@@ -225,7 +223,6 @@ def _build_template_context(
         "business_address": _latex_escape(settings.business_address),
         "business_phone": _latex_escape(settings.business_phone),
         "business_email": _latex_escape(settings.business_email),
-        "printed_at": _latex_escape(printed_at),
         "client_name": _latex_escape(payer_name),
         "client_address": _latex_escape(client_address or "Sai Ying Pun, Hong Kong Island"),
         "client_phone": _latex_escape(client_phone),
@@ -347,7 +344,6 @@ def write_latex_invoice_pdf_file(
         therapist_license_number=therapist_license_number,
         payment_mode=payment_mode,
         special_notes=special_notes,
-        issued_at=issued_at,
     )
     rendered_tex = _render_template(
         template_path.read_text(encoding="utf-8"),
