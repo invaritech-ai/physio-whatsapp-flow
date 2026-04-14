@@ -61,10 +61,7 @@ def _format_payment_datetime(value: datetime | None) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     local = value.astimezone(_invoice_timezone())
-    hour_12 = local.strftime("%I").lstrip("0") or "0"
-    minute = local.strftime("%M")
-    suffix = local.strftime("%p").lower()
-    return f"{local.strftime('%A')} {local.strftime('%B')} {local.day}, {local.year} - {hour_12}:{minute}{suffix}"
+    return f"{local.strftime('%A')} {local.strftime('%B')} {local.day}, {local.year}"
 
 
 def _strip_dr_prefix(name: str | None) -> str:
@@ -175,7 +172,7 @@ def _stamp_block(stamp_filename: str | None) -> str:
         return "% no stamp available"
     return (
         r"\node[opacity=1.0, rotate=-5] "
-        r"at ([yshift=14mm, xshift=12mm]therapist.north west) {"
+        r"at ([yshift=14mm, xshift=20mm]therapist.north west) {"
         "\n"
         rf"    \includegraphics[width=40mm]{{{stamp_filename}}}"
         "\n"
@@ -216,9 +213,8 @@ def _build_template_context(
 ) -> dict[str, str]:
     printed_at = _format_invoice_datetime(issued_at or datetime.now(timezone.utc))
     session_at = _format_invoice_datetime(session_start_at)
-    payment_at = _format_payment_datetime(session_start_at)
+    payment_date = _format_payment_datetime(session_start_at)
     payer_name = client_name or "Client"
-    payment_label = payment_mode or "N/A"
     clean_therapist_name = _strip_dr_prefix(therapist_name)
     provider_line = f"{clean_therapist_name}, License #{therapist_license_number or '-'}"
     stamp_file = _find_stamp_file(therapist_name)
@@ -243,8 +239,8 @@ def _build_template_context(
         "diagnosis_line": _latex_escape(diagnosis or ""),
         "special_notes_line": _latex_escape(special_notes or ""),
         "amount_display": _latex_escape(_currency_amount(amount_cents)),
-        "payment_datetime_method": _latex_escape(f"{payment_at} {payment_label}"),
-        "payment_payer_name": _latex_escape(payer_name),
+        "payment_date": _latex_escape(payment_date),
+        "payment_client_name": _latex_escape(payer_name),
         "stamp_block": _stamp_block(stamp_file.name if stamp_file else None),
     }
 
