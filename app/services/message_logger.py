@@ -26,8 +26,8 @@ def log_inbound(
         created_at=datetime.now(timezone.utc),
     )
     db.add(message)
-    db.commit()
-    db.refresh(message)
+    # Avoid a full commit here; caller commits later in the same request.
+    db.flush()
     return message
 
 

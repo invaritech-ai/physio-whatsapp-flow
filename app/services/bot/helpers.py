@@ -2,11 +2,14 @@
 
 import json
 import re
+from typing import Final
 
 from sqlmodel import Session, select
 
 from app.models import Client
 from app.services.twilio_client import send_whatsapp_message
+
+_CLIENT_ID_CACHE: Final[dict[str, int]] = {}
 
 
 def get_or_create_client(db: Session, phone_e164: str) -> Client:
@@ -16,14 +19,23 @@ def get_or_create_client(db: Session, phone_e164: str) -> Client:
     Strip 'whatsapp:' prefix if present.
     """
     clean_phone = re.sub(r"[\s\-()]", "", phone_e164.replace("whatsapp:", ""))
+    cached_client_id = _CLIENT_ID_CACHE.get(clean_phone)
+    if cached_client_id is not None:
+        client = db.get(Client, cached_client_id)
+        if client and client.phone_e164 == clean_phone:
+            return client
+
     stmt = select(Client).where(Client.phone_e164 == clean_phone)
     client = db.exec(stmt).first()
 
     if not client:
         client = Client(phone_e164=clean_phone, conversation_state="IDLE")
         db.add(client)
-        db.commit()
-        db.refresh(client)
+        # Flush to assign PK; caller performs the request-level commit.
+        db.flush()
+
+    if client.id is not None:
+        _CLIENT_ID_CACHE[clean_phone] = client.id
 
     return client
 

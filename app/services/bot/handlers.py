@@ -293,7 +293,8 @@ def check_global_keywords(
         if not client.name:
             return (states.AWAITING_NAME, menus.build_welcome_menu())
         therapist_name = _get_preferred_therapist_name(client, db)
-        can_manage_booking = _can_manage_booking(client, db)
+        # Keep greeting path fast; booking checks happen when user selects booking actions.
+        can_manage_booking = False
         return (
             states.IDLE,
             menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking),
@@ -302,7 +303,8 @@ def check_global_keywords(
     if body_stripped == "book":
         client.conversation_data = None
         if client.name:
-            can_manage_booking = _can_manage_booking(client, db)
+            # Keep direct keyword routing responsive.
+            can_manage_booking = False
             return (
                 states.AWAITING_BOOKING_PATH,
                 menus.build_booking_path_menu(client.name, can_manage_booking=can_manage_booking),
