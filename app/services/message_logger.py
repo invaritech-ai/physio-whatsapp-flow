@@ -2,7 +2,8 @@
 
 from datetime import datetime, timezone
 
-from sqlmodel import Session
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
 
 from app.models import MessageLog
 
@@ -25,10 +26,19 @@ def log_inbound(
         client_id=client_id,
         created_at=datetime.now(timezone.utc),
     )
-    db.add(message)
-    # Avoid a full commit here; caller commits later in the same request.
-    db.flush()
-    return message
+    try:
+        # Use a savepoint so duplicate webhook retries don't poison the outer transaction.
+        with db.begin_nested():
+            db.add(message)
+            # Avoid a full commit here; caller commits later in the same request.
+            db.flush()
+        return message
+    except IntegrityError:
+        if twilio_sid:
+            existing = db.exec(select(MessageLog).where(MessageLog.twilio_sid == twilio_sid)).first()
+            if existing is not None:
+                return existing
+        raise
 
 
 def log_outbound(
