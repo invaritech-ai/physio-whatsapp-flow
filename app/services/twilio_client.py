@@ -1,11 +1,14 @@
 import os
 import json
 import uuid
+from time import perf_counter
 from typing import NotRequired, TypedDict
 
 from twilio.rest import Client
 
 from app.core.config import settings
+from app.core.debug_probe import debug_probe
+from app.core.process_trace import CHANNEL_WHATSAPP_BOT, process_trace
 
 TWILIO_ACCOUNT_SID = settings.twilio_account_sid or os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = settings.twilio_auth_token or os.getenv("TWILIO_AUTH_TOKEN")
@@ -50,6 +53,8 @@ def send_whatsapp_message(
         # Return a unique SID to avoid collisions in message_log
         return f"debug-{uuid.uuid4().hex}"
 
+    run_id = f"twilio-{int(perf_counter() * 1000)}"
+
     normalized_content_sid = content_sid.strip() if content_sid else None
 
     if body is None and not normalized_content_sid:
@@ -76,5 +81,53 @@ def send_whatsapp_message(
         if content_variables:
             message_args["content_variables"] = json.dumps(content_variables)
 
-    message = client.messages.create(**message_args)
-    return message.sid
+    t_twilio_send = perf_counter()
+    process_trace(
+        CHANNEL_WHATSAPP_BOT,
+        "twilio_send_start",
+        run_id=run_id,
+        to_suffix=(to[-4:] if to else ""),
+        has_body=body is not None,
+        has_media=bool(media_url),
+        has_template=bool(normalized_content_sid),
+    )
+    # region agent log
+    debug_probe(
+        run_id=run_id,
+        hypothesis_id="H3",
+        location="app/services/twilio_client.py:twilio_send_start",
+        message="Twilio send started",
+        data={"has_body": body is not None, "has_media": bool(media_url), "has_template": bool(normalized_content_sid)},
+    )
+    # endregion
+    try:
+        message = client.messages.create(**message_args)
+        elapsed_ms = round((perf_counter() - t_twilio_send) * 1000, 2)
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "twilio_send_complete",
+            run_id=run_id,
+            twilio_sid=message.sid,
+            twilio_send_ms=elapsed_ms,
+        )
+        # region agent log
+        debug_probe(
+            run_id=run_id,
+            hypothesis_id="H3",
+            location="app/services/twilio_client.py:twilio_send_complete",
+            message="Twilio send completed",
+            data={"twilio_send_ms": elapsed_ms},
+        )
+        # endregion
+        return message.sid
+    except Exception as exc:
+        elapsed_ms = round((perf_counter() - t_twilio_send) * 1000, 2)
+        process_trace(
+            CHANNEL_WHATSAPP_BOT,
+            "twilio_send_error",
+            run_id=run_id,
+            twilio_send_ms=elapsed_ms,
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
+        raise
