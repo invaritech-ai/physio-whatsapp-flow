@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
 from app.services.invoice_documents import invoice_pdf_path
+
+logger = logging.getLogger(__name__)
 
 
 def _latex_escape(value: str | None) -> str:
@@ -230,10 +233,35 @@ def _render_template(template_text: str, context: dict[str, str]) -> str:
     return rendered
 
 
+def _resolve_latex_engine() -> str:
+    """Pick the first LaTeX engine available in PATH (preferred first, then fallbacks)."""
+    preferred = (settings.invoice_latex_engine or "pdflatex").strip() or "pdflatex"
+    candidates: list[str] = []
+    for name in (
+        preferred,
+        "pdflatex",
+        "tectonic",
+        "xelatex",
+        "lualatex",
+    ):
+        if name not in candidates:
+            candidates.append(name)
+    for engine in candidates:
+        if shutil.which(engine):
+            if engine != preferred:
+                logger.warning(
+                    "invoice_latex_engine %r not found in PATH; using %r instead",
+                    preferred,
+                    engine,
+                )
+            return engine
+    raise RuntimeError(
+        f"No LaTeX engine found in PATH (tried: {', '.join(candidates)})"
+    )
+
+
 def _compile_latex(tex_file: Path, output_dir: Path) -> Path:
-    engine = settings.invoice_latex_engine.strip() or "pdflatex"
-    if shutil.which(engine) is None:
-        raise RuntimeError(f"LaTeX engine '{engine}' not found in PATH")
+    engine = _resolve_latex_engine()
 
     if engine == "tectonic":
         cmd = [engine, "--outdir", str(output_dir), str(tex_file)]

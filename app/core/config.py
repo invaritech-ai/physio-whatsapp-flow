@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_whatsapp_number: str = "whatsapp:+14155238886"
+    # Optional WhatsApp Content Template SID (HX...) for invoice receipts.
+    # When set, receipt sends use template mode and work outside the 24h window.
+    twilio_whatsapp_receipt_content_sid: str | None = None
+    # Optional template variable index for dynamic media URL (e.g. 3 for {{3}}).
+    # Leave unset when template media URL is fixed in Twilio Content Builder.
+    twilio_whatsapp_receipt_media_var_index: int | None = None
 
     calendly_api_token: str | None = None
 

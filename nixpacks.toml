@@ -1,5 +1,11 @@
 # Nixpacks infers `python -m movement-whatsapp-automation-api` from pyproject name,
 # but this app is started with uvicorn (no console entrypoint). Override explicitly.
 # Use a shell so PORT expands; some hosts inject PORT only into a shell environment.
+#
+# "..." keeps the Python provider's default nixPkgs; tectonic is the LaTeX engine used
+# for invoice PDFs (matches Dockerfile). Without it, INVOICE_LATEX_ENGINE=tectonic fails on PATH.
+[phases.setup]
+nixPkgs = ["...", "tectonic"]
+
 [start]
 cmd = "sh -c 'exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}'"
