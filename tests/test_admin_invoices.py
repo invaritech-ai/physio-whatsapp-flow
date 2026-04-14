@@ -575,6 +575,7 @@ def test_generate_invoice_sessionless_supervised_physio_payload(client, db_sessi
             json={
                 "client_id": client_row.id,
                 "therapist_id": therapist.id,
+                "manual_session_start_at": "2026-04-01T10:30:00+08:00",
                 "service_type": "supervised_physio",
                 "trainer_name": "Coach Gina",
                 "reference_note": "Trainer-led supervised session; therapist passive review.",
@@ -600,6 +601,78 @@ def test_generate_invoice_sessionless_supervised_physio_payload(client, db_sessi
     ).first()
     assert financial is not None
     assert financial.total_receipted_cents == 60000
+
+
+def test_generate_invoice_sessionless_requires_manual_session_start_at(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-sessionless-needs-manual-time")
+    client_row = Client(phone_e164="+85290100016", name="Sessionless Needs Time")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=120000,
+            total_receipted_cents=10000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "therapist_id": therapist.id,
+                "service_type": "supervised_physio",
+                "amount_cents": 50000,
+                "currency": "HKD",
+                "description": "Supervised Physiotherapy Exercise",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "manual_session_start_at_required"
+
+
+def test_generate_invoice_rejects_manual_session_start_at_when_session_selected(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-manual-time-conflict")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100017",
+    )
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=120000,
+            total_receipted_cents=20000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "manual_session_start_at": "2026-04-01T10:30:00+08:00",
+                "amount_cents": 65000,
+                "currency": "HKD",
+                "description": "Physio session invoice",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "manual_session_start_at_conflicts_with_session"
 
 
 def test_get_client_receipting_summary_returns_running_totals_and_pagination(client, db_session: Session):

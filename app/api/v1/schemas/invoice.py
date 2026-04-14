@@ -54,6 +54,7 @@ class InvoiceGenerateRequest(BaseModel):
             "example": {
                 "client_id": 101,
                 "session_id": 501,
+                "manual_session_start_at": None,
                 "therapist_id": 55,
                 "service_type": "standard",
                 "trainer_name": None,
@@ -73,6 +74,7 @@ class InvoiceGenerateRequest(BaseModel):
 
     client_id: int = Field(gt=0)
     session_id: int | None = Field(default=None, gt=0)
+    manual_session_start_at: datetime | None = None
     therapist_id: int | None = Field(default=None, gt=0)
     service_type: InvoiceServiceType = Field(default="standard")
     trainer_name: str | None = Field(default=None, min_length=1, max_length=120)

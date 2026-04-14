@@ -95,6 +95,14 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
         "message": "Service type must be one of: standard, supervised_physio, other",
         "status_code": 400,
     },
+    "manual_session_start_at_required": {
+        "message": "Session date/time is required when generating a receipt without selecting a session",
+        "status_code": 400,
+    },
+    "manual_session_start_at_conflicts_with_session": {
+        "message": "Session date/time cannot be provided when a session is selected",
+        "status_code": 400,
+    },
     "amount_cents_required": {
         "message": "Amount is required when no default charge is available",
         "status_code": 400,

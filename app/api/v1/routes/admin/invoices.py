@@ -47,7 +47,7 @@ from app.services.invoice_generation import generate_and_store_invoice_pdf_url
 from app.services.invoice_storage import resolve_invoice_pdf_url
 from app.services.invoice_whatsapp import send_invoice_whatsapp
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
-from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
+from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
 logger = logging.getLogger(__name__)
@@ -386,6 +386,22 @@ def _generate_invoice_impl(
             client_id=payload.client_id,
         )
 
+    if session_row is not None and payload.manual_session_start_at is not None:
+        raise BusinessLogicError(
+            "manual_session_start_at_conflicts_with_session",
+            field="manual_session_start_at",
+        )
+    if session_row is None and payload.manual_session_start_at is None:
+        raise BusinessLogicError(
+            "manual_session_start_at_required",
+            field="manual_session_start_at",
+        )
+    effective_session_start_at = (
+        as_utc(payload.manual_session_start_at)
+        if session_row is None and payload.manual_session_start_at is not None
+        else session_row.start_time
+    )
+
     service_type = payload.service_type.strip().lower()
     if service_type not in _SERVICE_TYPE_VALUES:
         raise BusinessLogicError("invalid_service_type", field="service_type")
@@ -496,7 +512,7 @@ def _generate_invoice_impl(
             currency=currency,
             description=description,
             diagnosis=diagnosis,
-            session_start_at=session_row.start_time if session_row else now,
+            session_start_at=effective_session_start_at if effective_session_start_at else now,
             therapist_name=therapist_name,
             therapist_license_number=therapist_license_number,
             payment_mode=payment_mode,
