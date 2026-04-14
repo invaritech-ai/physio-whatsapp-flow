@@ -90,6 +90,13 @@ def _stamps_dir() -> Path:
     return _resolve_template_path().parent / "stamps"
 
 
+def _logo_file() -> Path | None:
+    candidate = _resolve_template_path().parent / "logo.png"
+    if candidate.is_file():
+        return candidate
+    return None
+
+
 _STAMP_EXTENSIONS = frozenset({".jpeg", ".jpg", ".png", ".pdf"})
 
 
@@ -176,6 +183,20 @@ def _stamp_block(stamp_filename: str | None) -> str:
     )
 
 
+def _logo_block(logo_filename: str | None) -> str:
+    """Return the LaTeX snippet for the logo, or empty if no logo."""
+    if not logo_filename:
+        return "% no logo available"
+    return (
+        r"\node[anchor=north west] "
+        r"at ([xshift=15mm,yshift=-15mm]current page.north west) {"
+        "\n"
+        rf"    \includegraphics[width=42mm,height=22mm,keepaspectratio]{{{logo_filename}}}"
+        "\n"
+        r"};"
+    )
+
+
 def _build_template_context(
     *,
     invoice_id: int,
@@ -201,7 +222,9 @@ def _build_template_context(
     clean_therapist_name = _strip_dr_prefix(therapist_name)
     provider_line = f"{clean_therapist_name}, License #{therapist_license_number or '-'}"
     stamp_file = _find_stamp_file(therapist_name)
+    logo_file = _logo_file()
     return {
+        "logo_block": _logo_block(logo_file.name if logo_file else None),
         "business_name": _latex_escape(settings.business_name),
         "business_address": _latex_escape(settings.business_address),
         "business_phone": _latex_escape(settings.business_phone),
@@ -336,11 +359,14 @@ def write_latex_invoice_pdf_file(
     )
 
     stamp_file = _find_stamp_file(therapist_name)
+    logo_file = _logo_file()
 
     with tempfile.TemporaryDirectory(prefix=f"invoice-{invoice_id}-latex-") as tmp_dir:
         work_dir = Path(tmp_dir)
         if stamp_file:
             shutil.copy2(stamp_file, work_dir / stamp_file.name)
+        if logo_file:
+            shutil.copy2(logo_file, work_dir / logo_file.name)
         tex_file = work_dir / f"invoice-{invoice_id}.tex"
         tex_file.write_text(rendered_tex, encoding="utf-8")
         compiled_pdf = _compile_latex(tex_file, work_dir)
