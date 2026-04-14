@@ -2,13 +2,11 @@
 
 import json
 import re
-from time import perf_counter
 from typing import Final
 
 from sqlmodel import Session, select
 
 from app.models import Client
-from app.core.process_trace import CHANNEL_WHATSAPP_BOT, process_trace
 from app.services.twilio_client import send_whatsapp_message
 
 _CLIENT_ID_CACHE: Final[dict[str, int]] = {}
@@ -21,46 +19,20 @@ def get_or_create_client(db: Session, phone_e164: str) -> Client:
     Strip 'whatsapp:' prefix if present.
     """
     clean_phone = re.sub(r"[\s\-()]", "", phone_e164.replace("whatsapp:", ""))
-    t_start = perf_counter()
     cached_client_id = _CLIENT_ID_CACHE.get(clean_phone)
     if cached_client_id is not None:
-        t_cache_get = perf_counter()
         client = db.get(Client, cached_client_id)
-        process_trace(
-            CHANNEL_WHATSAPP_BOT,
-            "client_cache_lookup",
-            cache_hit=True,
-            cached_client_id=cached_client_id,
-            cache_get_ms=round((perf_counter() - t_cache_get) * 1000, 2),
-            elapsed_ms_from_client_lookup_start=round((perf_counter() - t_start) * 1000, 2),
-        )
         if client and client.phone_e164 == clean_phone:
             return client
 
-    t_select = perf_counter()
     stmt = select(Client).where(Client.phone_e164 == clean_phone)
     client = db.exec(stmt).first()
-    process_trace(
-        CHANNEL_WHATSAPP_BOT,
-        "client_db_select",
-        cache_hit=False,
-        found=client is not None,
-        select_ms=round((perf_counter() - t_select) * 1000, 2),
-        elapsed_ms_from_client_lookup_start=round((perf_counter() - t_start) * 1000, 2),
-    )
 
     if not client:
-        t_create = perf_counter()
         client = Client(phone_e164=clean_phone, conversation_state="IDLE")
         db.add(client)
         # Flush to assign PK; caller performs the request-level commit.
         db.flush()
-        process_trace(
-            CHANNEL_WHATSAPP_BOT,
-            "client_created",
-            create_flush_ms=round((perf_counter() - t_create) * 1000, 2),
-            elapsed_ms_from_client_lookup_start=round((perf_counter() - t_start) * 1000, 2),
-        )
 
     if client.id is not None:
         _CLIENT_ID_CACHE[clean_phone] = client.id
