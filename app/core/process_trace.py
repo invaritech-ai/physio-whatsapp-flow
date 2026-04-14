@@ -10,12 +10,15 @@ import contextvars
 import json
 import logging
 import re
+from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
 
 logger = logging.getLogger("app.process_trace")
+_process_start = perf_counter()
 
 _trace_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "process_trace_id", default=None
@@ -51,6 +54,8 @@ def process_trace(channel: str, stage: str, **fields: Any) -> None:
         "trace_id": get_trace_id(),
         "channel": channel,
         "stage": stage,
+        "server_time_utc": datetime.now(timezone.utc).isoformat(),
+        "server_uptime_ms": round((perf_counter() - _process_start) * 1000, 2),
         **fields,
     }
     try:
