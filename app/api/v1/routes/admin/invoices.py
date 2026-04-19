@@ -467,7 +467,13 @@ def _generate_invoice_impl(
         preset_type="special_note",
         invalid_detail="invalid_special_note_preset_id",
     )
-    diagnosis = _clean_optional_text(payload.diagnosis) or diagnosis_preset_value or extracted_diagnosis or "-"
+    diagnosis = (
+        _clean_optional_text(payload.diagnosis)
+        or diagnosis_preset_value
+        or extracted_diagnosis
+        or _clean_optional_text(client.diagnosis)
+        or "-"
+    )
     special_notes = _clean_optional_text(payload.special_notes) or special_note_preset_value or "-"
     trainer_name = _clean_optional_text(payload.trainer_name)
     reference_note = _clean_optional_text(payload.reference_note)

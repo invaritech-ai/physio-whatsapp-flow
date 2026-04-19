@@ -57,6 +57,13 @@ _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
 router = APIRouter(prefix="/admin", tags=["Admin - Payments"])
 
 
+def _clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 def _ensure_client_exists(db: Session, client_id: int) -> Client:
     client = db.get(Client, client_id)
     if not client:
@@ -432,7 +439,7 @@ def _auto_generate_receipt(
     therapist_license_number = therapist.license_number if therapist else None
 
     # Resolve diagnosis
-    diagnosis: str | None = payload.diagnosis
+    diagnosis: str | None = _clean_optional_text(payload.diagnosis)
     if diagnosis is None and payload.diagnosis_preset_id is not None:
         preset = db.get(InvoicePreset, payload.diagnosis_preset_id)
         if preset and preset.preset_type == "diagnosis" and preset.is_active:
@@ -447,6 +454,8 @@ def _auto_generate_receipt(
             match = _DIAGNOSIS_PATTERN.search(latest_note.note_text)
             if match:
                 diagnosis = match.group(1).strip()
+    if diagnosis is None:
+        diagnosis = _clean_optional_text(client.diagnosis)
     if diagnosis is None:
         diagnosis = "-"
 

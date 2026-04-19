@@ -85,6 +85,7 @@ def test_create_and_get_client_with_optional_fields(client, db_session: Session)
         "email": "john.chan@example.com",
         "date_of_birth": "1992-07-19",
         "address": "Flat 12A, Example Building, Kowloon, Hong Kong",
+        "diagnosis": "Chronic plantar fasciitis",
         "preferred_therapist_id": therapist.id,
     }
 
@@ -98,6 +99,7 @@ def test_create_and_get_client_with_optional_fields(client, db_session: Session)
     assert created["email"] == payload["email"]
     assert created["date_of_birth"] == payload["date_of_birth"]
     assert created["address"] == payload["address"]
+    assert created["diagnosis"] == payload["diagnosis"]
     assert created["preferred_therapist_id"] == therapist.id
 
     with _admin_auth_context(admin):
@@ -107,6 +109,14 @@ def test_create_and_get_client_with_optional_fields(client, db_session: Session)
     fetched = get_response.json()
     assert fetched["id"] == created["id"]
     assert fetched["email"] == payload["email"]
+    assert fetched["diagnosis"] == payload["diagnosis"]
+
+    with _admin_auth_context(admin):
+        list_response = client.get("/api/v1/admin/clients", headers=_auth_headers())
+
+    assert list_response.status_code == 200
+    list_item = next(item for item in list_response.json()["items"] if item["id"] == created["id"])
+    assert "diagnosis" not in list_item
 
 
 def test_create_client_duplicate_phone_returns_400(client, db_session: Session):
@@ -202,6 +212,7 @@ def test_patch_client_updates_and_clears_optional_fields(client, db_session: Ses
                 "name": "Chris Updated",
                 "email": "new@example.com",
                 "address": "New Address",
+                "diagnosis": "  Achilles tendinopathy  ",
                 "preferred_therapist_id": None,
             },
             headers=_auth_headers(),
@@ -212,7 +223,18 @@ def test_patch_client_updates_and_clears_optional_fields(client, db_session: Ses
     assert data["name"] == "Chris Updated"
     assert data["email"] == "new@example.com"
     assert data["address"] == "New Address"
+    assert data["diagnosis"] == "Achilles tendinopathy"
     assert data["preferred_therapist_id"] is None
+
+    with _admin_auth_context(admin):
+        clear_response = client.patch(
+            f"/api/v1/admin/clients/{client_row.id}",
+            json={"diagnosis": "   "},
+            headers=_auth_headers(),
+        )
+
+    assert clear_response.status_code == 200
+    assert clear_response.json()["diagnosis"] is None
 
 
 def test_list_clients_returns_pagination_metadata(client, db_session: Session):

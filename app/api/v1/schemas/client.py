@@ -36,8 +36,22 @@ class ClientListItem(BaseModel):
     updated_at: datetime
 
 
-class ClientDetailResponse(ClientListItem):
+class ClientDetailResponse(BaseModel):
     """Detailed client response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str | None
+    phone_e164: str
+    email: str | None
+    date_of_birth: date | None
+    address: str | None
+    diagnosis: str | None
+    preferred_therapist_id: int | None
+    default_receipt_amount_cents: int | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ClientListResponse(BaseModel):
@@ -71,6 +85,7 @@ class ClientCreate(BaseModel):
     email: EmailStr | None = None
     date_of_birth: date | None = None
     address: str | None = Field(default=None, max_length=1000)
+    diagnosis: str | None = Field(default=None, max_length=2000)
     preferred_therapist_id: int | None = Field(default=None, gt=0)
     default_receipt_amount_cents: int | None = Field(default=None, ge=1)
 
@@ -83,6 +98,7 @@ class ClientUpdate(BaseModel):
     email: EmailStr | None = None
     date_of_birth: date | None = None
     address: str | None = Field(default=None, max_length=1000)
+    diagnosis: str | None = Field(default=None, max_length=2000)
     preferred_therapist_id: int | None = Field(default=None, gt=0)
     default_receipt_amount_cents: int | None = Field(default=None, ge=1)
 

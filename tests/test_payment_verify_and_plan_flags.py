@@ -313,6 +313,7 @@ def test_verify_payment_with_auto_receipt(client, db_session: Session):
     therapist = _create_therapist(db_session, suffix="verify-4")
     client_row = _create_client(db_session, phone="+85290200007", name="Receipt Client")
     client_row.default_receipt_amount_cents = 65000
+    client_row.diagnosis = "Stored fallback diagnosis"
     db_session.add(client_row)
     db_session.commit()
 
@@ -377,6 +378,9 @@ def test_verify_payment_auto_receipt_uses_override_values(client, db_session: Se
     admin = _create_admin(db_session, suffix="verify-5")
     therapist = _create_therapist(db_session, suffix="verify-5")
     client_row = _create_client(db_session, phone="+85290200008")
+    client_row.diagnosis = "Stored fallback diagnosis"
+    db_session.add(client_row)
+    db_session.commit()
     session_row = _create_completed_session(
         db_session, client_id=client_row.id, therapist_id=therapist.id, duration_minutes=30,
     )
@@ -416,6 +420,56 @@ def test_verify_payment_auto_receipt_uses_override_values(client, db_session: Se
     assert receipt["payment_mode"] == "Electronic"
     assert receipt["service_type"] == "standard"
     assert "30 minutes" in receipt["description"]
+
+
+def test_verify_payment_auto_receipt_uses_patient_diagnosis_when_note_has_none(client, db_session: Session):
+    admin = _create_admin(db_session, suffix="verify-patient-diagnosis")
+    therapist = _create_therapist(db_session, suffix="verify-patient-diagnosis")
+    client_row = _create_client(db_session, phone="+85290200011", name="Fallback Diagnosis Client")
+    client_row.diagnosis = "Lumbar facet irritation"
+    db_session.add(client_row)
+    db_session.commit()
+
+    session_row = _create_completed_session(
+        db_session, client_id=client_row.id, therapist_id=therapist.id, duration_minutes=45,
+    )
+
+    therapist_user = db_session.get(User, therapist.user_id)
+    note = SessionNote(
+        session_id=session_row.id,
+        author_user_id=therapist_user.id,
+        note_text="Follow-up completed with lumbar mobility work only.",
+    )
+    db_session.add(note)
+
+    payment = PaymentRecord(
+        client_id=client_row.id,
+        source="session_linked",
+        session_id=session_row.id,
+        amount_cents=65000,
+        currency="HKD",
+        payment_method="cash",
+        status="pending",
+        received_by_role="therapist",
+        recorded_by_user_id=admin.id,
+    )
+    db_session.add(payment)
+    db_session.commit()
+    db_session.refresh(payment)
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            f"/api/v1/admin/payments/{payment.id}/verify",
+            json={
+                "auto_generate_receipt": True,
+                "supervised_exercise": False,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    receipt = response.json()["receipt"]
+    assert receipt["diagnosis"] == "Lumbar facet irritation"
 
 
 # ── Ask 3: bank_transfer payment method ──

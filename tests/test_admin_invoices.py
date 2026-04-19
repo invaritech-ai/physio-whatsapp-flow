@@ -184,6 +184,8 @@ def test_generate_invoice_accepts_optional_metadata_and_renders_provider_details
         therapist_id=therapist.id,
         phone="+85290100008",
     )
+    client_row.diagnosis = "Stored fallback diagnosis"
+    db_session.add(client_row)
     db_session.add(
         ClientFinancial(
             client_id=client_row.id,
@@ -639,6 +641,91 @@ def test_generate_invoice_sessionless_requires_manual_session_start_at(client, d
     assert response.json()["error"]["code"] == "manual_session_start_at_required"
 
 
+def test_generate_invoice_uses_patient_diagnosis_when_session_note_has_no_diagnosis(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-patient-diagnosis")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100018",
+    )
+    client_row.diagnosis = "Patellofemoral pain syndrome"
+    db_session.add(client_row)
+    db_session.add(
+        SessionNote(
+            session_id=session_row.id,
+            author_user_id=therapist.user_id,
+            note_text="Treatment progressed to loaded split squats without diagnosis header.",
+        )
+    )
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=100000,
+            total_receipted_cents=0,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "amount_cents": 65000,
+                "currency": "HKD",
+                "description": "Physio session invoice",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    assert response.json()["diagnosis"] == "Patellofemoral pain syndrome"
+
+
+def test_generate_invoice_sessionless_uses_patient_diagnosis_fallback(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-sessionless-patient-diagnosis")
+    client_row = Client(
+        phone_e164="+85290100019",
+        name="Sessionless Diagnosis Client",
+    )
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+    client_row.diagnosis = "Rotator cuff tendinopathy"
+    db_session.add(client_row)
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=120000,
+            total_receipted_cents=10000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/generate",
+            json={
+                "client_id": client_row.id,
+                "therapist_id": therapist.id,
+                "manual_session_start_at": "2026-04-01T10:30:00+08:00",
+                "service_type": "supervised_physio",
+                "amount_cents": 50000,
+                "currency": "HKD",
+                "description": "Supervised Physiotherapy Exercise",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    assert response.json()["diagnosis"] == "Rotator cuff tendinopathy"
+
+
 def test_generate_invoice_rejects_manual_session_start_at_when_session_selected(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, suffix="invoice-manual-time-conflict")
@@ -777,6 +864,8 @@ def test_generate_invoice_uses_invoice_presets(client, db_session: Session):
         therapist_id=therapist.id,
         phone="+85290100012",
     )
+    client_row.diagnosis = "Stored fallback diagnosis"
+    db_session.add(client_row)
     
     from app.models import InvoicePreset
     diag_preset = InvoicePreset(preset_type="diagnosis", label="Test Diag", value="Lumbar Spine Injury")

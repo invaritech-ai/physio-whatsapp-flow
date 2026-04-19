@@ -34,6 +34,13 @@ from app.services.timezone_utils import normalize_query_datetime, to_preferred_t
 router = APIRouter(prefix="/admin/clients", tags=["Admin - Clients"])
 
 
+def _clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 def _ensure_client_exists(db: Session, client_id: int) -> Client:
     client = db.get(Client, client_id)
     if not client:
@@ -217,6 +224,7 @@ def create_client(
         email=str(data.email) if data.email else None,
         date_of_birth=data.date_of_birth,
         address=data.address,
+        diagnosis=_clean_optional_text(data.diagnosis),
         preferred_therapist_id=data.preferred_therapist_id,
         default_receipt_amount_cents=data.default_receipt_amount_cents,
     )
@@ -259,6 +267,8 @@ def update_client(
         client.date_of_birth = data.date_of_birth
     if "address" in data.model_fields_set:
         client.address = data.address
+    if "diagnosis" in data.model_fields_set:
+        client.diagnosis = _clean_optional_text(data.diagnosis)
     if "preferred_therapist_id" in data.model_fields_set:
         _ensure_preferred_therapist_exists(db, data.preferred_therapist_id)
         client.preferred_therapist_id = data.preferred_therapist_id
