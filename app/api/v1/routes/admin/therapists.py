@@ -7,7 +7,7 @@ from app.core.auth import get_current_admin
 from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.db.session import get_session
-from app.models import Therapist, TherapistSpecialty, TherapistSpecialtyMap, User
+from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
 from app.api.v1.schemas.therapist_onboarding import CalendlyWebhookCheckResponse
 from app.api.v1.schemas.therapist import (
     TherapistCreate,
@@ -16,6 +16,7 @@ from app.api.v1.schemas.therapist import (
     TherapistListResponse,
     SpecialtyAssignment,
 )
+from app.api.v1.schemas.therapist_onboarding import SlotMappingInfo
 from app.api.v1.schemas.specialty import SpecialtyResponse
 from app.services.calendly_webhooks import CalendlyWebhookError, check_webhook_registration
 from app.services.license_numbers import is_valid_license_number, normalize_license_number
@@ -168,6 +169,29 @@ def get_therapist(therapist_id: int, admin: User = Depends(get_current_admin), d
         ],
         created_at=therapist.created_at,
     )
+
+
+@router.get("/{therapist_id}/slots", response_model=list[SlotMappingInfo])
+def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
+    """Get active booking slots (scheduling URLs) for a therapist."""
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    event_types = db.exec(
+        select(TherapistEventType)
+        .where(TherapistEventType.therapist_id == therapist_id, TherapistEventType.is_active == True)  # noqa: E712
+        .order_by(TherapistEventType.duration_minutes)
+    ).all()
+
+    return [
+        SlotMappingInfo(
+            duration_minutes=et.duration_minutes,
+            scheduling_url=et.scheduling_url,
+            calendly_event_type_uri=et.calendly_event_type_uri,
+        )
+        for et in event_types
+    ]
 
 
 @router.patch("/{therapist_id}", response_model=TherapistResponse)
