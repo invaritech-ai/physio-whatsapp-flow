@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # Optional template variable index for dynamic media URL (e.g. 3 for {{3}}).
     # Leave unset when template media URL is fixed in Twilio Content Builder.
     twilio_whatsapp_receipt_media_var_index: int | None = None
+    # Content SID for the session-booking confirmation template (physio_session_booked).
+    # When set, booking confirmations use this template and work outside the 24h window.
+    twilio_whatsapp_session_booked_content_sid: str | None = None
 
     calendly_api_token: str | None = None
 

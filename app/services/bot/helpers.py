@@ -121,12 +121,16 @@ def validate_comma_separated_choices(
 def send_and_log(
     db: Session,
     phone_e164: str,
-    body: str,
+    body: str | None,
     client_id: int,
     media_url: list[str] | None = None,
+    *,
+    content_sid: str | None = None,
+    content_variables: dict[str, str] | None = None,
 ) -> str | None:
     """
     Send WhatsApp message and log to MessageLog.
+    Pass either body (free-form) or content_sid + content_variables (template).
     Returns Twilio message SID.
     """
     # Import here to avoid circular dependency
@@ -137,13 +141,19 @@ def send_and_log(
         phone_e164 = f"whatsapp:{phone_e164}"
 
     # Send via Twilio
-    twilio_sid = send_whatsapp_message(phone_e164, body, media_url)
+    twilio_sid = send_whatsapp_message(
+        phone_e164,
+        body,
+        media_url,
+        content_sid=content_sid,
+        content_variables=content_variables,
+    )
 
-    # Log outbound message
+    # Log outbound message; for templates log the SID as a placeholder
     log_outbound(
         db=db,
         phone_e164=phone_e164.replace("whatsapp:", ""),
-        body=body,
+        body=body if body is not None else f"[template:{content_sid}]",
         twilio_sid=twilio_sid,
         client_id=client_id,
     )

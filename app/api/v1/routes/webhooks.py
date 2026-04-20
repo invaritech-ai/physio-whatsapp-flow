@@ -446,18 +446,38 @@ def _notify_booking_confirmed(
     if not session.reminder_sent:
         try:
             client_name = client.name or "there"
-            message = (
-                f"Booking confirmed, {client_name}! ✅\n\n"
-                f"Therapist: {therapist.display_name}\n"
-                f"Time: {local_start_text} ({therapist_tz})\n\n"
-                "If you need to reschedule or cancel, reply with 'reschedule'."
-            )
-            send_and_log(
-                db=db,
-                phone_e164=client.phone_e164,
-                body=message,
-                client_id=client.id,
-            )
+            template_sid = (settings.twilio_whatsapp_session_booked_content_sid or "").strip()
+            if template_sid:
+                local_dt = to_preferred_timezone(session.start_time, therapist.preferred_timezone)
+                date_str = local_dt.strftime("%a, %b %d, %Y")
+                time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+                send_and_log(
+                    db=db,
+                    phone_e164=client.phone_e164,
+                    body=None,
+                    client_id=client.id,
+                    content_sid=template_sid,
+                    content_variables={
+                        "1": client_name,
+                        "2": therapist.display_name or "",
+                        "3": date_str,
+                        "4": time_str,
+                        "5": str(session.duration_minutes),
+                    },
+                )
+            else:
+                message = (
+                    f"Booking confirmed, {client_name}! ✅\n\n"
+                    f"Therapist: {therapist.display_name}\n"
+                    f"Time: {local_start_text} ({therapist_tz})\n\n"
+                    "If you need to reschedule or cancel, reply with 'reschedule'."
+                )
+                send_and_log(
+                    db=db,
+                    phone_e164=client.phone_e164,
+                    body=message,
+                    client_id=client.id,
+                )
             session.reminder_sent = True
             dirty = True
         except Exception:
