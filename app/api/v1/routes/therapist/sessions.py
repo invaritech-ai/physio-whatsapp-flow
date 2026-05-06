@@ -30,7 +30,11 @@ from app.services.clinical_note_visibility import (
     latest_session_note_by_session_id,
 )
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
-from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
+from app.services.timezone_utils import (
+    as_utc,
+    normalize_query_datetime,
+    to_preferred_timezone,
+)
 
 router = APIRouter(prefix="/sessions", tags=["Therapist Sessions"])
 _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
@@ -62,9 +66,11 @@ def _build_list_item(
     plan_map: dict[tuple[int, int], dict[str, object]],
     clinical_note: SessionNote | None = None,
 ) -> SessionListItem:
-    expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
-        session,
-        plan_map=plan_map,
+    expected_charge_cents, expected_charge_currency, assigned_plan = (
+        resolve_expected_charge(
+            session,
+            plan_map=plan_map,
+        )
     )
     preview = clinical_note_preview(clinical_note.note_text) if clinical_note else None
     return SessionListItem(
@@ -99,7 +105,9 @@ def _normalize_note_text(note_text: str) -> str:
     return normalized
 
 
-def _merge_note_with_diagnosis(note_text: str, diagnosis: str | None) -> tuple[str, str | None]:
+def _merge_note_with_diagnosis(
+    note_text: str, diagnosis: str | None
+) -> tuple[str, str | None]:
     clean_note = _normalize_note_text(note_text.strip())
     if diagnosis is None:
         derived = _extract_diagnosis(clean_note)
@@ -111,7 +119,9 @@ def _merge_note_with_diagnosis(note_text: str, diagnosis: str | None) -> tuple[s
         return clean_note, derived
 
     if _DIAGNOSIS_PATTERN.search(clean_note):
-        merged = _DIAGNOSIS_PATTERN.sub(f"Diagnosis: {clean_diagnosis}", clean_note, count=1)
+        merged = _DIAGNOSIS_PATTERN.sub(
+            f"Diagnosis: {clean_diagnosis}", clean_note, count=1
+        )
     else:
         merged = f"{clean_note}\n\nDiagnosis: {clean_diagnosis}"
     return merged, clean_diagnosis
@@ -191,9 +201,17 @@ def list_sessions(
         items_stmt = items_stmt.where(condition)
 
     total = int(db.exec(total_stmt).one())
-    sessions = db.exec(
-        items_stmt.order_by(TherapySession.start_time).offset(offset).limit(limit)
-    ).all()
+    # sessions = db.exec(
+    #     items_stmt.order_by(TherapySession.start_time).offset(offset).limit(limit)
+    # ).all()
+    if scope == "past":
+        ordered_items_stmt = items_stmt.order_by(TherapySession.start_time.desc())
+    else:
+        ordered_items_stmt = items_stmt.order_by(TherapySession.start_time.asc())
+
+    paginated_items_stmt = ordered_items_stmt.offset(offset).limit(limit)
+
+    sessions = db.exec(paginated_items_stmt).all()
 
     # Batch-load clients
     client_ids = {s.client_id for s in sessions}
@@ -243,9 +261,7 @@ def session_summary(
     to_date = normalize_query_datetime(_parse_datetime_query(to_date_raw))
 
     # Base query for this therapist
-    base = select(TherapySession).where(
-        TherapySession.therapist_id == therapist.id
-    )
+    base = select(TherapySession).where(TherapySession.therapist_id == therapist.id)
     if from_date:
         base = base.where(TherapySession.start_time >= from_date)
     if to_date:
@@ -254,7 +270,9 @@ def session_summary(
     sessions = db.exec(base).all()
     plan_map = load_active_plan_map(db, client_ids={s.client_id for s in sessions})
 
-    upcoming = sum(1 for s in sessions if as_utc(s.start_time) >= now and s.status == "scheduled")
+    upcoming = sum(
+        1 for s in sessions if as_utc(s.start_time) >= now and s.status == "scheduled"
+    )
     completed = sum(1 for s in sessions if s.status == "completed")
     cancelled = sum(1 for s in sessions if s.status == "cancelled")
     no_show = sum(1 for s in sessions if s.status == "no_show")
@@ -313,15 +331,19 @@ def get_session_detail(
     client = db.get(Client, session.client_id)
 
     plan_map = load_active_plan_map(db, client_ids={session.client_id})
-    expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
-        session,
-        plan_map=plan_map,
+    expected_charge_cents, expected_charge_currency, assigned_plan = (
+        resolve_expected_charge(
+            session,
+            plan_map=plan_map,
+        )
     )
     return SessionDetail(
         id=session.id,
         client_name=client.name if client else None,
         client_phone=client.phone_e164 if client else None,
-        start_time=to_preferred_timezone(session.start_time, therapist.preferred_timezone),
+        start_time=to_preferred_timezone(
+            session.start_time, therapist.preferred_timezone
+        ),
         end_time=to_preferred_timezone(session.end_time, therapist.preferred_timezone),
         duration_minutes=session.duration_minutes,
         status=session.status,
@@ -332,7 +354,9 @@ def get_session_detail(
         expected_charge_currency=expected_charge_currency,
         assigned_plan=assigned_plan,
         calendly_event_uri=session.calendly_event_uri,
-        created_at=to_preferred_timezone(session.created_at, therapist.preferred_timezone),
+        created_at=to_preferred_timezone(
+            session.created_at, therapist.preferred_timezone
+        ),
     )
 
 
@@ -355,7 +379,9 @@ def update_session_status(
 
     if payload.duration_minutes is not None:
         session_row.duration_minutes = payload.duration_minutes
-        session_row.end_time = session_row.start_time + timedelta(minutes=payload.duration_minutes)
+        session_row.end_time = session_row.start_time + timedelta(
+            minutes=payload.duration_minutes
+        )
 
     session_row.updated_at = now
     db.add(session_row)
@@ -366,7 +392,9 @@ def update_session_status(
         session_id=session_row.id,
         status=session_row.status,
         duration_minutes=session_row.duration_minutes,
-        updated_at=to_preferred_timezone(session_row.updated_at, therapist.preferred_timezone),
+        updated_at=to_preferred_timezone(
+            session_row.updated_at, therapist.preferred_timezone
+        ),
     )
 
 
@@ -380,7 +408,9 @@ def upsert_session_clinical_note(
     """Create/update therapist clinical note for a session."""
     _get_therapist_session_or_404(db, therapist_id=therapist.id, session_id=session_id)
 
-    merged_note_text, diagnosis = _merge_note_with_diagnosis(payload.note_text, payload.diagnosis)
+    merged_note_text, diagnosis = _merge_note_with_diagnosis(
+        payload.note_text, payload.diagnosis
+    )
     existing = db.exec(
         select(SessionNote)
         .where(
@@ -395,7 +425,9 @@ def upsert_session_clinical_note(
         db.add(existing)
         db.commit()
         db.refresh(existing)
-        return _build_clinical_note_response(existing, diagnosis=diagnosis, updated_at=now)
+        return _build_clinical_note_response(
+            existing, diagnosis=diagnosis, updated_at=now
+        )
 
     note = SessionNote(
         session_id=session_id,
