@@ -50,10 +50,14 @@ def _render_invoice_pdf_file(
                 issued_at=issued_at,
             )
         except Exception:
-            logger.exception("LaTeX invoice rendering failed for invoice %s", invoice_id)
+            logger.exception(
+                "LaTeX invoice rendering failed for invoice %s", invoice_id
+            )
             if not settings.invoice_latex_fallback_to_basic:
                 raise
-            logger.warning("Falling back to basic PDF renderer for invoice %s", invoice_id)
+            logger.warning(
+                "Falling back to basic PDF renderer for invoice %s", invoice_id
+            )
 
     return write_basic_invoice_pdf_file(
         invoice_id=invoice_id,
@@ -108,4 +112,9 @@ def generate_and_store_invoice_pdf_url(
         special_notes=special_notes,
         issued_at=issued_at,
     )
-    return store_invoice_pdf(invoice_id=invoice_id, local_pdf_path=pdf_path)
+    return store_invoice_pdf(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        local_pdf_path=pdf_path,
+        date_value=issued_at,
+    )

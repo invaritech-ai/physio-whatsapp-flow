@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -46,14 +47,19 @@ def test_upload_to_s3_sends_content_length_header(monkeypatch, tmp_path):
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_public_base_url", None)
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_presign_ttl_seconds", 900)
 
-    result = invoice_storage._upload_to_s3(invoice_id=3, local_pdf_path=pdf_path)
+    result = invoice_storage._upload_to_s3(
+        invoice_id=3,
+        client_name="Jane Doe",
+        local_pdf_path=pdf_path,
+        date_value=datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc),
+    )
 
     # No public_base_url → stable s3:// reference (presigned URL comes via resolve_invoice_pdf_url)
-    assert result == "s3://my-bucket/invoices/invoice-3.pdf"
+    assert result == "s3://my-bucket/invoices/jane-doe_2026-05-06_AFIXEDSTRING_3.pdf"
     assert len(fake_s3.put_object_calls) == 1
     call = fake_s3.put_object_calls[0]
     assert call["Bucket"] == "my-bucket"
-    assert call["Key"] == "invoices/invoice-3.pdf"
+    assert call["Key"] == "invoices/jane-doe_2026-05-06_AFIXEDSTRING_3.pdf"
     assert call["ContentType"] == "application/pdf"
     assert call["ContentLength"] == len(payload)
 
@@ -75,8 +81,16 @@ def test_upload_to_s3_uses_public_base_url_when_configured(monkeypatch, tmp_path
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_prefix", "invoices")
     monkeypatch.setattr(invoice_storage.settings, "invoice_s3_public_base_url", "https://cdn.example.com/public")
 
-    result = invoice_storage._upload_to_s3(invoice_id=12, local_pdf_path=pdf_path)
+    result = invoice_storage._upload_to_s3(
+        invoice_id=12,
+        client_name=None,
+        local_pdf_path=pdf_path,
+        date_value=datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc),
+    )
 
-    assert result == "https://cdn.example.com/public/invoices/invoice-12.pdf"
+    assert (
+        result
+        == "https://cdn.example.com/public/invoices/client-12_2026-05-06_AFIXEDSTRING_12.pdf"
+    )
     assert len(fake_s3.put_object_calls) == 1
     assert len(fake_s3.generate_presigned_url_calls) == 0

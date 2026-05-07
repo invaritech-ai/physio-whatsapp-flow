@@ -17,6 +17,7 @@ from app.models import (
     TherapistSpecialty,
     User,
 )
+from app.services.naming import invoice_filename
 
 
 @pytest.fixture(name="db_session")
@@ -151,7 +152,10 @@ def mock_s3_invoice_storage(request):
         return
     with patch(
         "app.services.invoice_storage._upload_to_s3",
-        side_effect=lambda *, invoice_id, local_pdf_path: f"https://test-bucket.s3.example.com/invoices/invoice-{invoice_id}.pdf",
+        side_effect=lambda *, invoice_id, client_name, local_pdf_path, date_value=None: (
+            f"https://test-bucket.s3.example.com/invoices/"
+            f"{invoice_filename(invoice_id=invoice_id, client_name=client_name, date_value=date_value)}"
+        ),
     ):
         yield
 

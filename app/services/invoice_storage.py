@@ -1,23 +1,36 @@
 from __future__ import annotations
 
 from pathlib import Path
-
+from datetime import datetime
 from app.core.config import settings
 
-
-def _invoice_filename(invoice_id: int) -> str:
-    return f"invoice-{invoice_id}.pdf"
+from app.services.naming import invoice_filename as _invoice_filename
 
 
-def _s3_object_key(invoice_id: int) -> str:
+def _s3_object_key(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    date_value: datetime | None = None,
+) -> str:
     prefix = settings.invoice_s3_prefix.strip("/")
-    name = _invoice_filename(invoice_id)
+    name = _invoice_filename(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        date_value=date_value,
+    )
     if not prefix:
         return name
     return f"{prefix}/{name}"
 
 
-def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
+def _upload_to_s3(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    local_pdf_path: Path,
+    date_value: datetime | None = None,
+) -> str:
     try:
         import boto3
     except ModuleNotFoundError as exc:
@@ -53,7 +66,11 @@ def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
         ),
         **client_kwargs,
     )
-    object_key = _s3_object_key(invoice_id)
+    object_key = _s3_object_key(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        date_value=date_value,
+    )
     pdf_bytes = local_pdf_path.read_bytes()
     s3.put_object(
         Bucket=bucket,
@@ -72,8 +89,19 @@ def _upload_to_s3(*, invoice_id: int, local_pdf_path: Path) -> str:
     return f"s3://{bucket}/{object_key}"
 
 
-def store_invoice_pdf(*, invoice_id: int, local_pdf_path: Path) -> str:
-    return _upload_to_s3(invoice_id=invoice_id, local_pdf_path=local_pdf_path)
+def store_invoice_pdf(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    local_pdf_path: Path,
+    date_value: datetime | None = None,
+) -> str:
+    return _upload_to_s3(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        local_pdf_path=local_pdf_path,
+        date_value=date_value,
+    )
 
 
 def resolve_invoice_pdf_url(stored_url: str | None) -> str | None:
@@ -86,7 +114,7 @@ def resolve_invoice_pdf_url(stored_url: str | None) -> str | None:
     if not stored_url or not stored_url.startswith("s3://"):
         return stored_url
 
-    without_scheme = stored_url[len("s3://"):]
+    without_scheme = stored_url[len("s3://") :]
     bucket, _, object_key = without_scheme.partition("/")
     if not bucket or not object_key:
         return stored_url

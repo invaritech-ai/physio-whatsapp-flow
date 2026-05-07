@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from app.services.naming import invoice_filename as _invoice_filename
 
 from app.core.config import settings
 
@@ -16,10 +17,6 @@ def _to_ascii(value: str | None) -> str:
         return "-"
     normalized = value.replace("\r\n", ", ").replace("\n", ", ")
     return normalized.encode("latin-1", "replace").decode("latin-1")
-
-
-def _invoice_filename(invoice_id: int) -> str:
-    return f"invoice-{invoice_id}.pdf"
 
 
 def _invoice_timezone() -> ZoneInfo:
@@ -47,8 +44,17 @@ def _invoice_storage_dir() -> Path:
     return root
 
 
-def invoice_pdf_path(invoice_id: int) -> Path:
-    return _invoice_storage_dir() / _invoice_filename(invoice_id)
+def invoice_pdf_path(
+    *,
+    invoice_id: int,
+    client_name: str | None,
+    date_value: datetime | None = None,
+) -> Path:
+    return _invoice_storage_dir() / _invoice_filename(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        date_value=date_value,
+    )
 
 
 def build_invoice_pdf_bytes(
@@ -75,8 +81,14 @@ def build_invoice_pdf_bytes(
     payer_name = _to_ascii(client_name) if client_name else "Client"
     client_address_line = _to_ascii(client_address) if client_address else ""
     therapist_line = _to_ascii(therapist_name) if therapist_name else ""
-    therapist_license_line = _to_ascii(therapist_license_number) if therapist_license_number else "-"
-    provider_line = f"{therapist_line}, License #{therapist_license_line}" if therapist_line else f"License #{therapist_license_line}"
+    therapist_license_line = (
+        _to_ascii(therapist_license_number) if therapist_license_number else "-"
+    )
+    provider_line = (
+        f"{therapist_line}, License #{therapist_license_line}"
+        if therapist_line
+        else f"License #{therapist_license_line}"
+    )
     diagnosis_line = _to_ascii(diagnosis) if diagnosis else "-"
     payment_mode_line = _to_ascii(payment_mode) if payment_mode else "N/A"
     special_notes_line = _to_ascii(special_notes) if special_notes else "-"
@@ -192,6 +204,10 @@ def write_basic_invoice_pdf_file(
         special_notes=special_notes,
         issued_at=issued_at,
     )
-    output_path = invoice_pdf_path(invoice_id)
+    output_path = invoice_pdf_path(
+        invoice_id=invoice_id,
+        client_name=client_name,
+        date_value=issued_at,
+    )
     output_path.write_bytes(pdf_bytes)
     return output_path
