@@ -1,6 +1,6 @@
 """Admin endpoints for global session management."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -255,7 +255,11 @@ def update_session(
     if "billing_plan_id" in payload.model_fields_set and payload.billing_plan_id is not None:
         plan = _ensure_plan_exists(db, payload.billing_plan_id)
         if plan.duration_minutes != row.duration_minutes:
-            raise HTTPException(status_code=400, detail="plan_duration_mismatch")
+            # Sync session duration to the chosen plan so downstream billing
+            # (expected charge, receipts) reflects the actual delivered length.
+            row.duration_minutes = plan.duration_minutes
+            row.end_time = row.start_time + timedelta(minutes=plan.duration_minutes)
+            row.updated_at = now
 
         existing_assignment = db.exec(
             select(ClientPlanAssignment).where(
