@@ -242,7 +242,11 @@ def update_session(
         raise HTTPException(status_code=403, detail="access_denied")
     if not payload.model_fields_set:
         raise HTTPException(status_code=400, detail="no_changes_requested")
-    if "status" not in payload.model_fields_set and "billing_plan_id" not in payload.model_fields_set:
+    if (
+        "status" not in payload.model_fields_set
+        and "billing_plan_id" not in payload.model_fields_set
+        and "duration_minutes" not in payload.model_fields_set
+    ):
         raise HTTPException(status_code=400, detail="no_changes_requested")
 
     row = _ensure_session_exists(db, session_id)
@@ -250,6 +254,11 @@ def update_session(
 
     if "status" in payload.model_fields_set and payload.status is not None:
         row.status = payload.status
+        row.updated_at = now
+
+    if "duration_minutes" in payload.model_fields_set and payload.duration_minutes is not None:
+        row.duration_minutes = payload.duration_minutes
+        row.end_time = row.start_time + timedelta(minutes=payload.duration_minutes)
         row.updated_at = now
 
     if "billing_plan_id" in payload.model_fields_set and payload.billing_plan_id is not None:
