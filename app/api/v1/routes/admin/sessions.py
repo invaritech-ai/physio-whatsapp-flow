@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app.api.v1.schemas.clinical_note import ClinicalNoteResponse
+from app.api.v1.schemas.clinical_note import ClinicalNoteResponse, ClinicalNoteUpsertRequest
 from app.api.v1.schemas.admin_session import (
     AdminSessionDetailResponse,
     AdminSessionListItem,
@@ -117,6 +117,26 @@ def _normalize_note_text(note_text: str) -> str:
     if "\\n" in normalized:
         normalized = normalized.replace("\\n", "\n")
     return normalized
+
+
+def _merge_note_with_diagnosis(
+    note_text: str, diagnosis: str | None
+) -> tuple[str, str | None]:
+    clean_note = _normalize_note_text(note_text.strip())
+    if diagnosis is None:
+        return clean_note, _extract_diagnosis(clean_note)
+
+    clean_diagnosis = diagnosis.strip()
+    if not clean_diagnosis:
+        return clean_note, _extract_diagnosis(clean_note)
+
+    if _DIAGNOSIS_PATTERN.search(clean_note):
+        merged = _DIAGNOSIS_PATTERN.sub(
+            f"Diagnosis: {clean_diagnosis}", clean_note, count=1
+        )
+    else:
+        merged = f"{clean_note}\n\nDiagnosis: {clean_diagnosis}"
+    return merged, clean_diagnosis
 
 
 def _build_clinical_note_response(note: SessionNote) -> ClinicalNoteResponse:
@@ -342,3 +362,54 @@ def get_admin_session_clinical_note(
             updated_at=fallback_ts,
         )
     return _build_clinical_note_response(note)
+
+
+@router.put("/{session_id}/clinical-note", response_model=ClinicalNoteResponse)
+def upsert_admin_session_clinical_note(
+    session_id: int,
+    payload: ClinicalNoteUpsertRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    _ensure_session_exists(db, session_id)
+    merged_note_text, diagnosis = _merge_note_with_diagnosis(
+        payload.note_text, payload.diagnosis
+    )
+    existing = db.exec(
+        select(SessionNote)
+        .where(SessionNote.session_id == session_id)
+        .order_by(SessionNote.created_at.desc())
+    ).first()
+    now = datetime.now(timezone.utc)
+    if existing:
+        existing.note_text = merged_note_text
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return ClinicalNoteResponse(
+            session_id=existing.session_id,
+            note_id=existing.id or 0,
+            note_text=_normalize_note_text(existing.note_text),
+            diagnosis=diagnosis,
+            author_user_id=existing.author_user_id,
+            created_at=existing.created_at,
+            updated_at=now,
+        )
+
+    note = SessionNote(
+        session_id=session_id,
+        author_user_id=admin.id,
+        note_text=merged_note_text,
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return ClinicalNoteResponse(
+        session_id=note.session_id,
+        note_id=note.id or 0,
+        note_text=_normalize_note_text(note.note_text),
+        diagnosis=diagnosis,
+        author_user_id=note.author_user_id,
+        created_at=note.created_at,
+        updated_at=note.created_at,
+    )
