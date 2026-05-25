@@ -71,3 +71,4 @@ class AdminSessionUpdateRequest(BaseModel):
     billing_plan_id: int | None = Field(default=None, gt=0)
     plan_effective_from: datetime | None = None
     plan_notes: str | None = Field(default=None, max_length=1000)
+    duration_minutes: int | None = Field(default=None, gt=0)
