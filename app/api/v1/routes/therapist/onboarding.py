@@ -48,6 +48,7 @@ from app.services.therapist_onboarding import (
     update_therapist_specialties,
     complete_therapist_onboarding,
 )
+from app.services.calendly import get_event_types_with_pat
 from app.services.license_numbers import is_valid_license_number, normalize_license_number
 
 logger = logging.getLogger(__name__)
@@ -597,12 +598,38 @@ def update_slot_mapping(
         if et.calendly_event_type_uri and et.scheduling_url
     }
 
+    # Also resolve against the therapist's LIVE Calendly event types. The stored
+    # lookups only know about events already saved, so picking a different event
+    # would otherwise save calendly_event_type_uri=None. A null URI causes the
+    # periodic sync_event_types job to deactivate the row (it reactivates rows by
+    # URI match), which silently hides the mapping. Resolving from live data keeps
+    # the URI correct so the row stays active. Network failures fall back to the
+    # stored-only maps and must not block saving.
+    live_url_to_uri: dict[str, str] = {}
+    live_uri_to_url: dict[str, str] = {}
+    try:
+        calendly_pat = _resolve_calendly_pat(therapist)
+        for et in get_event_types_with_pat(therapist.calendly_user_uri, calendly_pat):
+            uri = et.get("uri")
+            scheduling_url = et.get("scheduling_url")
+            if uri and scheduling_url:
+                live_url_to_uri[scheduling_url.rstrip("/")] = uri
+                live_uri_to_url[uri.rstrip("/")] = scheduling_url
+    except HTTPException:
+        # PAT not configured — fall back to stored-only resolution.
+        pass
+    except Exception:  # noqa: BLE001 - Calendly/network failures must not block saving
+        logger.warning(
+            "Failed to fetch live Calendly event types during slot-mapping update",
+            exc_info=True,
+        )
+
     slot_mapping_response: list[SlotMappingInfo] = []
     for duration_str, mapping_value in data.slot_mapping.items():
         duration = int(duration_str)
         normalized_value = mapping_value.rstrip("/")
-        if normalized_value in uri_to_url:
-            scheduling_url = uri_to_url[normalized_value]
+        if normalized_value in uri_to_url or normalized_value in live_uri_to_url:
+            scheduling_url = live_uri_to_url.get(normalized_value) or uri_to_url[normalized_value]
             calendly_uri = normalized_value
         else:
             if normalized_value.startswith("https://api.calendly.com/event_types/"):
@@ -611,12 +638,15 @@ def update_slot_mapping(
                     detail=f"Unknown Calendly event type URI in slot mapping: {normalized_value}",
                 )
             scheduling_url = mapping_value
-            calendly_uri = url_to_uri.get(normalized_value)
+            calendly_uri = live_url_to_uri.get(normalized_value) or url_to_uri.get(normalized_value)
 
         existing = next((et for et in all_event_types if et.duration_minutes == duration), None)
         if existing:
             existing.scheduling_url = scheduling_url
             existing.calendly_event_type_uri = calendly_uri
+            # Re-activate: a prior sync may have turned this row off. Without this the
+            # saved mapping stays hidden (the profile only returns is_active rows).
+            existing.is_active = True
             db.add(existing)
         else:
             db.add(TherapistEventType(
