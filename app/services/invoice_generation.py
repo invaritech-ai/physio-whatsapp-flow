@@ -118,3 +118,52 @@ def generate_and_store_invoice_pdf_url(
         local_pdf_path=pdf_path,
         date_value=session_start_at or issued_at,
     )
+
+
+def render_invoice_pdf_bytes(
+    *,
+    invoice_id: int,
+    client_id: int,
+    client_name: str | None,
+    client_address: str | None,
+    client_phone: str,
+    amount_cents: int,
+    currency: str,
+    description: str,
+    diagnosis: str | None,
+    session_start_at: datetime | None,
+    therapist_name: str | None,
+    therapist_license_number: str | None,
+    payment_mode: str | None,
+    special_notes: str | None,
+    issued_at: datetime | None,
+) -> bytes:
+    """Render a receipt PDF and return its bytes without persisting or uploading.
+
+    Uses the same renderer path as generation (LaTeX with basic fallback) so a
+    preview matches the final receipt. The local temp file is removed afterwards.
+    """
+    pdf_path = _render_invoice_pdf_file(
+        invoice_id=invoice_id,
+        client_id=client_id,
+        client_name=client_name,
+        client_address=client_address,
+        client_phone=client_phone,
+        amount_cents=amount_cents,
+        currency=currency,
+        description=description,
+        diagnosis=diagnosis,
+        session_start_at=session_start_at,
+        therapist_name=therapist_name,
+        therapist_license_number=therapist_license_number,
+        payment_mode=payment_mode,
+        special_notes=special_notes,
+        issued_at=issued_at,
+    )
+    try:
+        return pdf_path.read_bytes()
+    finally:
+        try:
+            pdf_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Failed to remove preview PDF temp file %s", pdf_path)
