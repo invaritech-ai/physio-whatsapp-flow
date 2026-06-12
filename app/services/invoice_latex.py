@@ -365,7 +365,7 @@ def write_latex_invoice_pdf_file(
         destination = invoice_pdf_path(
             invoice_id=invoice_id,
             client_name=client_name,
-            date_value=issued_at,
+            date_value=session_start_at or issued_at,
         )
         destination.write_bytes(compiled_pdf.read_bytes())
         return destination
