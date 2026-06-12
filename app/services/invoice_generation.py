@@ -116,5 +116,5 @@ def generate_and_store_invoice_pdf_url(
         invoice_id=invoice_id,
         client_name=client_name,
         local_pdf_path=pdf_path,
-        date_value=issued_at,
+        date_value=session_start_at or issued_at,
     )

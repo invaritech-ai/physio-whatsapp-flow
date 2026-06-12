@@ -207,7 +207,7 @@ def write_basic_invoice_pdf_file(
     output_path = invoice_pdf_path(
         invoice_id=invoice_id,
         client_name=client_name,
-        date_value=issued_at,
+        date_value=session_start_at or issued_at,
     )
     output_path.write_bytes(pdf_bytes)
     return output_path
