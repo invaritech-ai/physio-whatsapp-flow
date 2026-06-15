@@ -24,21 +24,24 @@ def clinical_note_preview(note_text: str, max_len: int = 140) -> str:
 def latest_session_note_by_session_id(
     db: Session,
     *,
-    therapist_user_id: int,
+    therapist_user_id: int | None,
     session_ids: list[int],
 ) -> dict[int, SessionNote]:
-    """Latest note row per session for this therapist (by created_at desc)."""
+    """Latest note row per session (by created_at desc).
+
+    When ``therapist_user_id`` is provided, only that author's notes are
+    considered (therapist-scoped views). Pass ``None`` to consider notes from
+    any author (admin views, matching the admin clinical-note read path).
+    """
     ids = [sid for sid in session_ids if sid is not None]
     if not ids:
         return {}
-    notes = db.exec(
-        select(SessionNote)
-        .where(
-            SessionNote.session_id.in_(ids),  # type: ignore[arg-type]
-            SessionNote.author_user_id == therapist_user_id,
-        )
-        .order_by(SessionNote.created_at.desc())
-    ).all()
+    stmt = select(SessionNote).where(
+        SessionNote.session_id.in_(ids),  # type: ignore[arg-type]
+    )
+    if therapist_user_id is not None:
+        stmt = stmt.where(SessionNote.author_user_id == therapist_user_id)
+    notes = db.exec(stmt.order_by(SessionNote.created_at.desc())).all()
     latest: dict[int, SessionNote] = {}
     for note in notes:
         sid = note.session_id

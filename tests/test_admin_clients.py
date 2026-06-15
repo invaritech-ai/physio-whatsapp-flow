@@ -341,6 +341,65 @@ def test_list_client_sessions_with_status_filter(client, db_session: Session):
     assert data[0]["status"] == "completed"
 
 
+def test_list_client_sessions_flags_clinical_note_presence(client, db_session: Session):
+    from app.models.session_note import SessionNote
+
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="sessions-notes")
+    client_row = Client(phone_e164="+85294444555", name="Notes Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    now = datetime.now(timezone.utc)
+    with_note = TherapySession(
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=now - timedelta(days=1),
+        end_time=now - timedelta(days=1) + timedelta(minutes=45),
+        duration_minutes=45,
+        status="completed",
+        source="manual",
+        currency="HKD",
+    )
+    without_note = TherapySession(
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=now - timedelta(days=3),
+        end_time=now - timedelta(days=3) + timedelta(minutes=30),
+        duration_minutes=30,
+        status="completed",
+        source="manual",
+        currency="HKD",
+    )
+    db_session.add(with_note)
+    db_session.add(without_note)
+    db_session.commit()
+    db_session.refresh(with_note)
+
+    db_session.add(
+        SessionNote(
+            session_id=with_note.id,
+            author_user_id=admin.id,
+            note_text="Patient reports reduced pain. Diagnosis: Frozen Shoulder",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/clients/{client_row.id}/sessions",
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    by_id = {row["id"]: row for row in response.json()}
+    assert by_id[with_note.id]["has_clinical_note"] is True
+    assert by_id[with_note.id]["clinical_note_preview"]
+    assert by_id[without_note.id]["has_clinical_note"] is False
+    assert by_id[without_note.id]["clinical_note_preview"] is None
+
+
 def test_list_client_sessions_serializes_in_admin_preferred_timezone(client, db_session: Session):
     admin = _create_admin(db_session)
     admin.preferred_timezone = "Asia/Hong_Kong"

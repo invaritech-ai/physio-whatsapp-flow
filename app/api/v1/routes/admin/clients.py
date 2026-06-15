@@ -28,6 +28,10 @@ from app.core.exceptions import BusinessLogicError, NotFoundError
 from app.db.session import get_session
 from app.models import Client, ClientFinancial, MessageLog, PaymentRecord, Receipt, Session as TherapySession, Therapist, User
 from app.models.billing import ClientPlanAssignment
+from app.services.clinical_note_visibility import (
+    clinical_note_preview,
+    latest_session_note_by_session_id,
+)
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
 
@@ -310,10 +314,18 @@ def list_client_sessions(
     stmt = stmt.order_by(TherapySession.start_time.desc()).offset(offset).limit(limit)
     sessions = db.exec(stmt).all()
     plan_map = load_active_plan_map(db, client_ids={client_id})
+    session_ids = [session.id for session in sessions if session.id is not None]
     payment_totals_by_session = _load_confirmed_payment_totals_by_session(
         db,
         client_id=client_id,
-        session_ids={session.id for session in sessions if session.id is not None},
+        session_ids=set(session_ids),
+    )
+    # Latest clinical note per session (any author) so the timeline can flag
+    # which sessions have notes, matching the admin clinical-note read path.
+    note_map = latest_session_note_by_session_id(
+        db,
+        therapist_user_id=None,
+        session_ids=session_ids,
     )
     rows: list[ClientSessionListItem] = []
     for session in sessions:
@@ -327,6 +339,7 @@ def list_client_sessions(
             payment_total = payment_totals_by_session.get(session.id)
             if payment_total is not None:
                 charge_amount_cents, currency = payment_total
+        note = note_map.get(session.id) if session.id is not None else None
         rows.append(
             ClientSessionListItem(
                 id=session.id,
@@ -341,6 +354,8 @@ def list_client_sessions(
                 expected_charge_cents=expected_charge_cents,
                 expected_charge_currency=expected_charge_currency,
                 assigned_plan=assigned_plan,
+                has_clinical_note=note is not None,
+                clinical_note_preview=clinical_note_preview(note.note_text) if note else None,
             )
         )
     return rows

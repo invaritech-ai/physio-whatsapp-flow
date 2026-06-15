@@ -72,3 +72,6 @@ class TherapistListResponse(BaseModel):
     is_active: bool
     email: str  # From User relation
     specialty_count: int
+    # When True, this account uses bot-only suspension: `is_active` reflects
+    # WhatsApp-bot bookability only; login/dashboard stay available regardless.
+    is_bot_only_suspend: bool = False

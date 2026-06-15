@@ -23,6 +23,19 @@ from app.services.auth_audit import record_auth_event
 _JWK_CLIENT: dict[str, Any] = {"url": None, "client": None}
 _logger = logging.getLogger("app.auth")
 
+def is_bot_only_suspend_email(email: str | None) -> bool:
+    """Whether ``email`` is configured for bot-only suspension.
+
+    These therapist accounts have their suspension applied as a WhatsApp-bot-only
+    removal (Therapist profile deactivated, so the bot's ``Therapist.is_active ==
+    True`` filters drop them) while keeping login and full dashboard access. For
+    these emails, ``get_current_therapist`` does NOT deny on an inactive therapist
+    profile. Configured via the file at ``settings.bot_only_suspend_emails_file``
+    (one email per line); compared case-insensitively.
+    """
+    return bool(email) and email.lower() in settings.bot_only_suspend_emails_set
+
+
 AuthErrorCode = Literal[
     "invalid_token",
     "access_pending",
@@ -416,7 +429,10 @@ def get_current_therapist(
             reason="missing_therapist_profile",
         )
 
-    if not therapist.is_active:
+    # Bot-only suspension: an inactive Therapist profile normally blocks the
+    # dashboard, but for designated accounts suspension only removes them from
+    # the WhatsApp bot — login and dashboard access stay intact.
+    if not therapist.is_active and not is_bot_only_suspend_email(user.email):
         _deny_auth(
             status.HTTP_403_FORBIDDEN,
             "account_inactive",
