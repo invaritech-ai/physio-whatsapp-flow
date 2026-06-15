@@ -21,7 +21,7 @@ from app.core.process_trace import (
     reset_trace_id,
 )
 from app.db.session import get_session
-from app.models import AuthEvent, Client, Session as TherapySession, SessionNote, Therapist, TherapistEventType
+from app.models import AuthEvent, Client, Session as TherapySession, SessionNote, Therapist, TherapistEventType, User
 from app.services.booking_intents import (
     consume_booking_intent,
     find_recent_booking_intent,
@@ -262,7 +262,7 @@ def _format_local_timestamp(value: datetime, preferred_timezone: str | None) -> 
     return f"{date_part} {time_part}"
 
 
-def _append_therapist_notification_event(
+def _append_notification_event(
     *,
     db: Session,
     event_type: str,
@@ -270,7 +270,11 @@ def _append_therapist_notification_event(
     details: dict[str, Any],
     dedupe_reason: str | None = None,
 ) -> bool:
-    """Append a therapist notification event, with optional idempotency guard."""
+    """Append an in-app notification event, with optional idempotency guard.
+
+    Used for both therapist and admin notification feeds (the row is targeted by
+    ``user_id`` and categorized by ``event_type`` prefix).
+    """
     if dedupe_reason:
         existing = db.exec(
             select(AuthEvent).where(
@@ -316,7 +320,7 @@ def _notify_therapist_session_update(
         "action": action,
     }
     dedupe_reason = f"session:{session.id}:{action}"
-    created = _append_therapist_notification_event(
+    created = _append_notification_event(
         db=db,
         event_type=event_type,
         user_id=therapist.user_id,
@@ -324,6 +328,62 @@ def _notify_therapist_session_update(
         dedupe_reason=dedupe_reason,
     )
     if created:
+        db.commit()
+
+
+def _notify_admins_session_update(
+    *,
+    db: Session,
+    session: TherapySession,
+    therapist: Therapist,
+    client: Client | None,
+    event_type: str,
+    action: str,
+) -> None:
+    """Create an in-app notification for every active admin on session changes.
+
+    Mirrors the therapist feed but writes one row per active admin so each
+    admin's ``admin.notification.*`` feed surfaces cancel/reschedule events.
+    """
+    admin_ids = [
+        admin_id
+        for admin_id in db.exec(
+            select(User.id).where(
+                User.role == "admin",
+                User.is_active == True,  # noqa: E712
+            )
+        ).all()
+        if admin_id is not None
+    ]
+    if not admin_ids:
+        return
+
+    local_start_text = _format_local_timestamp(session.start_time, therapist.preferred_timezone)
+    details = {
+        "session_id": session.id,
+        "client_id": client.id if client else session.client_id,
+        "client_name": client.name if client else None,
+        "therapist_id": therapist.id,
+        "therapist_name": therapist.display_name,
+        "status": session.status,
+        "start_time_utc": session.start_time.isoformat(),
+        "start_time_local": local_start_text,
+        "timezone": therapist.preferred_timezone or settings.invoice_timezone or "UTC",
+        "duration_minutes": session.duration_minutes,
+        "action": action,
+    }
+    dedupe_reason = f"session:{session.id}:admin:{action}"
+    wrote_any = False
+    for admin_id in admin_ids:
+        created = _append_notification_event(
+            db=db,
+            event_type=event_type,
+            user_id=admin_id,
+            details=details,
+            dedupe_reason=dedupe_reason,
+        )
+        wrote_any = wrote_any or created
+    if wrote_any:
         db.commit()
 
 
@@ -498,7 +558,7 @@ def _notify_booking_confirmed(
             "timezone": therapist_tz,
             "duration_minutes": session.duration_minutes,
         }
-        _append_therapist_notification_event(
+        _append_notification_event(
             db=db,
             event_type="therapist.notification.booking_confirmed",
             user_id=therapist.user_id,
@@ -1257,6 +1317,20 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
                     therapist.id,
                 )
             try:
+                _notify_admins_session_update(
+                    db=db,
+                    session=session,
+                    therapist=therapist,
+                    client=client,
+                    event_type="admin.notification.booking_cancelled",
+                    action="cancelled",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create admin cancellation notification session_id=%s",
+                    session.id,
+                )
+            try:
                 _append_calendly_operational_events(
                     db=db,
                     webhook_event_type="invitee.canceled",
@@ -1441,6 +1515,20 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
                     therapist.id,
                 )
             try:
+                _notify_admins_session_update(
+                    db=db,
+                    session=existing_new_session,
+                    therapist=therapist,
+                    client=client,
+                    event_type="admin.notification.booking_rescheduled",
+                    action="rescheduled",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create admin reschedule notification session_id=%s",
+                    existing_new_session.id,
+                )
+            try:
                 _append_calendly_operational_events(
                     db=db,
                     webhook_event_type="invitee.rescheduled",
@@ -1498,6 +1586,20 @@ async def handle_invitee_rescheduled(db: Session, payload: dict) -> dict:
                 "Failed to create therapist reschedule notification session_id=%s therapist_id=%s",
                 session.id,
                 therapist.id,
+            )
+        try:
+            _notify_admins_session_update(
+                db=db,
+                session=session,
+                therapist=therapist,
+                client=client,
+                event_type="admin.notification.booking_rescheduled",
+                action="rescheduled",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create admin reschedule notification session_id=%s",
+                session.id,
             )
         try:
             _append_calendly_operational_events(

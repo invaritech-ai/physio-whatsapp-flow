@@ -12,6 +12,7 @@ from app.api.v1.routes.admin import (
     invoice_presets,
     invoices,
     me,
+    notifications,
     payments,
     plans,
     reports,
@@ -33,6 +34,7 @@ router.include_router(clients.router)
 router.include_router(invoice_presets.router)
 router.include_router(invoices.router)
 router.include_router(me.router)
+router.include_router(notifications.router)
 router.include_router(plans.router)
 router.include_router(payments.router)
 router.include_router(reports.router)

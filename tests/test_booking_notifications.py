@@ -395,6 +395,107 @@ async def test_invitee_created_copies_empty_note_when_previous_is_empty(db_sessi
     assert copied_note.note_text == ""
 
 
+def _seed_admins(db_session):
+    active = User(
+        neon_auth_sub="admin-notify-active-sub",
+        email="admin-notify-active@test.com",
+        display_name="Active Admin",
+        role="admin",
+        is_active=True,
+    )
+    inactive = User(
+        neon_auth_sub="admin-notify-inactive-sub",
+        email="admin-notify-inactive@test.com",
+        display_name="Inactive Admin",
+        role="admin",
+        is_active=False,
+    )
+    db_session.add(active)
+    db_session.add(inactive)
+    db_session.commit()
+    db_session.refresh(active)
+    db_session.refresh(inactive)
+    return active, inactive
+
+
+def test_notify_admins_session_update_targets_active_admins_idempotently(db_session):
+    from app.api.v1.routes.webhooks import _notify_admins_session_update
+
+    therapist, client, _event_type = _seed_therapist_and_client(db_session)
+    active_admin, inactive_admin = _seed_admins(db_session)
+    start = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    session = TherapySession(
+        client_id=client.id,
+        therapist_id=therapist.id,
+        start_time=start,
+        end_time=start + timedelta(minutes=45),
+        duration_minutes=45,
+        status="cancelled",
+        source="calendly",
+    )
+    db_session.add(session)
+    db_session.commit()
+    db_session.refresh(session)
+
+    for _ in range(2):  # second call must be idempotent
+        _notify_admins_session_update(
+            db=db_session,
+            session=session,
+            therapist=therapist,
+            client=client,
+            event_type="admin.notification.booking_cancelled",
+            action="cancelled",
+        )
+
+    active_events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == active_admin.id,
+            AuthEvent.event_type == "admin.notification.booking_cancelled",
+        )
+    ).all()
+    assert len(active_events) == 1
+
+    inactive_events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == inactive_admin.id,
+            AuthEvent.event_type == "admin.notification.booking_cancelled",
+        )
+    ).all()
+    assert len(inactive_events) == 0
+
+
+def test_admin_notifications_endpoint_returns_feed(client, db_session):
+    from app.core.auth import get_current_admin
+
+    active_admin, _inactive = _seed_admins(db_session)
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        AuthEvent(
+            event_type="admin.notification.booking_cancelled",
+            user_id=active_admin.id,
+            reason="session:1:admin:cancelled",
+            details_json=(
+                '{"session_id": 1, "client_name": "Client Notify", '
+                '"therapist_name": "Dr. Notify", "start_time_local": "Tue, Mar 10, 2026 5:00 PM"}'
+            ),
+            created_at=now,
+        )
+    )
+    db_session.commit()
+
+    app.dependency_overrides[get_current_admin] = lambda: active_admin
+    try:
+        response = client.get("/api/v1/admin/notifications?limit=20&offset=0")
+    finally:
+        app.dependency_overrides.pop(get_current_admin, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] >= 1
+    assert payload["items"][0]["event_type"] == "admin.notification.booking_cancelled"
+    assert "cancel" in payload["items"][0]["title"].lower()
+
+
 def test_therapist_notifications_endpoint_returns_feed(client, db_session):
     therapist, _client, _event_type = _seed_therapist_and_client(db_session)
     now = datetime.now(timezone.utc)
