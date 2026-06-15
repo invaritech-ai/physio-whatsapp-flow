@@ -111,6 +111,49 @@ def test_therapist_sessions_inactive_profile_returns_account_inactive(
     assert response.json()["detail"] == "account_inactive"
 
 
+def test_bot_only_email_keeps_dashboard_when_profile_inactive(
+    client,
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+):
+    """A bot-only-suspended therapist (profile inactive) still gets dashboard
+    access, unlike a normally-inactive therapist profile."""
+    from app.core.config import settings
+
+    emails_file = tmp_path / "bot_only_suspend_emails.txt"
+    emails_file.write_text("avishek.alex15@gmail.com\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "bot_only_suspend_emails_file", str(emails_file))
+
+    user = User(
+        neon_auth_sub="bot-only-dashboard-sub",
+        email="avishek.alex15@gmail.com",
+        display_name="Dr. Bot Only",
+        role="therapist",
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    therapist = Therapist(
+        user_id=user.id,
+        display_name="Dr. Bot Only",
+        is_active=False,  # removed from the WhatsApp bot
+    )
+    db_session.add(therapist)
+    db_session.commit()
+
+    with patch("app.core.auth._verify_neon_token") as mock_verify:
+        mock_verify.return_value = {
+            "sub": user.neon_auth_sub,
+            "email": user.email,
+        }
+        response = client.get("/api/v1/therapist/sessions", headers=_auth_headers())
+
+    assert response.status_code == 200
+
+
 def test_admin_rejected_access_request_returns_access_denied(client, db_session: Session):
     access_request = AccessRequest(
         neon_auth_sub="rejected-admin-sub-1",

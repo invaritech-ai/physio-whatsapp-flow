@@ -120,6 +120,8 @@ class ClientSessionListItem(BaseModel):
     expected_charge_cents: int | None = None
     expected_charge_currency: str | None = None
     assigned_plan: AssignedPlanSummary | None = None
+    has_clinical_note: bool = False
+    clinical_note_preview: str | None = None
 
 
 class ClientMessageListItem(BaseModel):

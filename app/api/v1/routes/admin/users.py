@@ -7,7 +7,11 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, func, select
 
-from app.core.auth import get_current_admin, revoke_user_sessions
+from app.core.auth import (
+    get_current_admin,
+    is_bot_only_suspend_email,
+    revoke_user_sessions,
+)
 from app.db.session import get_session
 from app.models import Therapist, User
 from app.services.auth_audit import record_auth_event
@@ -186,6 +190,79 @@ def update_user_role(
     )
 
 
+def _update_bot_only_suspension(
+    *,
+    target_user: User,
+    therapist: Therapist,
+    desired_active: bool,
+    admin: User,
+    db: Session,
+) -> UpdateUserStatusResponse:
+    """Apply suspension as a WhatsApp-bot-only removal.
+
+    Toggles only ``therapist.is_active`` (suspend -> False removes them from the
+    bot's ``Therapist.is_active == True`` filters; reactivate -> True restores
+    them). The User account stays active and sessions are NOT revoked, so the
+    therapist keeps login and full dashboard access (``get_current_therapist``
+    skips the inactive-profile deny for these accounts).
+    """
+    if therapist.is_active == desired_active:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Therapist already active in the WhatsApp bot"
+                if desired_active
+                else "Therapist already removed from the WhatsApp bot"
+            ),
+        )
+
+    therapist.is_active = desired_active
+    db.add(therapist)
+    target_user.updated_at = datetime.now(timezone.utc)
+    db.add(target_user)
+
+    record_auth_event(
+        db,
+        event_type="account_status_change",
+        user_id=target_user.id,
+        actor_user_id=admin.id,
+        reason=f"bot_only:therapist_active={desired_active}",
+        details={
+            "bot_only_suspension": True,
+            "therapist_is_active_set_to": desired_active,
+            "user_is_active": target_user.is_active,
+        },
+        commit=False,
+    )
+    db.commit()
+    db.refresh(target_user)
+
+    logger.info(
+        "auth.bot_only_suspend %s",
+        json.dumps(
+            {
+                "actor_user_id": admin.id,
+                "target_user_id": target_user.id,
+                "therapist_is_active": desired_active,
+                "user_is_active": target_user.is_active,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+    )
+
+    return UpdateUserStatusResponse(
+        user_id=target_user.id,
+        email=target_user.email,
+        previous_is_active=target_user.is_active,
+        new_is_active=target_user.is_active,
+        message=(
+            "Therapist restored to the WhatsApp bot (login retained)"
+            if desired_active
+            else "Therapist removed from the WhatsApp bot (login retained)"
+        ),
+    )
+
+
 @router.patch("/{user_id}/status", response_model=UpdateUserStatusResponse)
 def update_user_status(
     user_id: int,
@@ -197,6 +274,23 @@ def update_user_status(
     target_user = db.get(User, user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Bot-only suspension: for designated therapist accounts, suspending must
+    # only remove them from the WhatsApp bot while leaving login and dashboard
+    # access intact. Reactivation restores them to the bot.
+    if is_bot_only_suspend_email(target_user.email):
+        therapist = db.exec(
+            select(Therapist).where(Therapist.user_id == target_user.id)
+        ).first()
+        if therapist is not None:
+            return _update_bot_only_suspension(
+                target_user=target_user,
+                therapist=therapist,
+                desired_active=data.is_active,
+                admin=admin,
+                db=db,
+            )
+        # No therapist profile to gate -> fall through to normal handling.
 
     previous_is_active = target_user.is_active
     if previous_is_active == data.is_active:

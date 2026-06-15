@@ -48,6 +48,7 @@ COPY --from=builder /app/app/ app/
 COPY --from=builder /app/alembic/ alembic/
 COPY --from=builder /app/alembic.ini ./
 COPY templates/ templates/
+COPY data/bot_only_suspend_emails.txt data/bot_only_suspend_emails.txt
 
 # Put venv on PATH
 ENV PATH="/app/.venv/bin:$PATH"

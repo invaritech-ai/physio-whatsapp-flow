@@ -1,0 +1,5 @@
+# Therapist emails whose "suspension" only removes them from the WhatsApp bot
+# (their Therapist profile is deactivated) while keeping login + full dashboard
+# access. One email per line. Lines starting with '#' and blank lines are
+# ignored. Matched case-insensitively. Edits are picked up without a restart.
+avishek.alex15@gmail.com
