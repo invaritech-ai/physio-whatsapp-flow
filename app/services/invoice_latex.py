@@ -279,7 +279,9 @@ def _resolve_latex_engine() -> str:
 def _compile_latex(tex_file: Path, output_dir: Path) -> Path:
     engine = _resolve_latex_engine()
 
-    if engine == "tectonic":
+    # Detect tectonic by the executable's base name so an absolute path
+    # (e.g. C:\Users\me\bin\tectonic.exe) still uses tectonic's CLI flags.
+    if Path(engine).stem.lower() == "tectonic":
         cmd = [engine, "--outdir", str(output_dir), str(tex_file)]
     else:
         cmd = [
