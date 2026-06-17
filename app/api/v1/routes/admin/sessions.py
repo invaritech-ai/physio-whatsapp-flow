@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from app.api.v1.schemas.clinical_note import ClinicalNoteResponse, ClinicalNoteUpsertRequest
 from app.api.v1.schemas.admin_session import (
+    AdminSessionCreateRequest,
     AdminSessionDetailResponse,
     AdminSessionListItem,
     AdminSessionListResponse,
@@ -18,7 +19,8 @@ from app.core.auth import get_current_admin
 from app.db.session import get_session
 from app.models import BillingPlan, Client, ClientPlanAssignment, SessionNote, Therapist, User
 from app.models import Session as TherapySession
-from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
+from app.services.calendly import get_event_type_available_times_with_pat
+from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 
 router = APIRouter(prefix="/admin/sessions", tags=["Admin - Sessions"])
@@ -228,6 +230,103 @@ def list_sessions(
         limit=limit,
         offset=offset,
         has_more=(offset + len(items)) < total,
+    )
+
+
+@router.post("", response_model=AdminSessionDetailResponse, status_code=201)
+def create_session(
+    payload: AdminSessionCreateRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Quick-book a manual session, re-validating the slot against live Calendly availability."""
+    # Deferred imports avoid import-order coupling between admin route modules.
+    from app.api.v1.routes.admin.therapists import (
+        _resolve_active_event_type,
+        _resolve_therapist_pat,
+    )
+    from app.api.v1.routes.webhooks import _seed_session_note_from_previous_session
+
+    client = db.get(Client, payload.client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    therapist = db.get(Therapist, payload.therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="therapist_not_found")
+
+    start_utc = as_utc(payload.start_time)
+    end_utc = start_utc + timedelta(minutes=payload.duration_minutes)
+
+    # Direct-booking exception: sessions for this client bypass Calendly availability
+    # and can be placed at any date/time (e.g. ad-hoc / offline-arranged sessions).
+    free_booking = "marco" in (client.name or "").strip().lower()
+
+    if not free_booking:
+        now = datetime.now(timezone.utc)
+        if start_utc <= now:
+            raise HTTPException(status_code=409, detail="slot_unavailable")
+
+        event_type = _resolve_active_event_type(db, payload.therapist_id, payload.duration_minutes)
+        pat = _resolve_therapist_pat(therapist)
+
+        # Re-validate the chosen instant against live Calendly availability (fail closed).
+        available = get_event_type_available_times_with_pat(
+            event_type.calendly_event_type_uri, pat, start_utc, end_utc + timedelta(minutes=1)
+        )
+        slot_is_free = any(
+            item.get("start_time")
+            and as_utc(datetime.fromisoformat(item["start_time"].replace("Z", "+00:00")))
+            == start_utc
+            for item in available
+        )
+        if not slot_is_free:
+            raise HTTPException(status_code=409, detail="slot_unavailable")
+
+    start_naive = start_utc.replace(tzinfo=None)
+    end_naive = end_utc.replace(tzinfo=None)
+
+    if not free_booking:
+        # In-app overlap guard closes the validate->commit race against other in-app bookings.
+        conflict = db.exec(
+            select(TherapySession).where(
+                TherapySession.therapist_id == payload.therapist_id,
+                TherapySession.status != "cancelled",
+                TherapySession.start_time < end_naive,
+                TherapySession.end_time > start_naive,
+            )
+        ).first()
+        if conflict:
+            raise HTTPException(status_code=409, detail="slot_unavailable")
+
+    session = TherapySession(
+        client_id=client.id,
+        therapist_id=therapist.id,
+        start_time=start_naive,
+        end_time=end_naive,
+        duration_minutes=payload.duration_minutes,
+        source="manual",
+        status="scheduled",
+        calendly_event_uri=None,
+        calendly_invitee_uri=None,
+        # Suppress booking confirmation / reminders for admin-created manual sessions.
+        reminder_sent=True,
+        therapist_notified=True,
+    )
+    db.add(session)
+    db.flush()
+    _seed_session_note_from_previous_session(
+        db, session_row=session, therapist_user_id=therapist.user_id
+    )
+    db.commit()
+    db.refresh(session)
+
+    plan_map = load_active_plan_map(db, client_ids={client.id})
+    return _build_detail_response(
+        session,
+        client_name=client.name,
+        therapist_name=therapist.display_name,
+        preferred_timezone=admin.preferred_timezone,
+        plan_map=plan_map,
     )
 
 
