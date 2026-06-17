@@ -72,3 +72,29 @@ class AdminSessionUpdateRequest(BaseModel):
     plan_effective_from: datetime | None = None
     plan_notes: str | None = Field(default=None, max_length=1000)
     duration_minutes: int | None = Field(default=None, gt=0)
+
+
+class AdminSessionCreateRequest(BaseModel):
+    """Quick-booking payload for creating a manual session."""
+
+    client_id: int = Field(..., gt=0)
+    therapist_id: int = Field(..., gt=0)
+    duration_minutes: int = Field(..., gt=0)  # must match an active TherapistEventType
+    start_time: datetime  # absolute UTC instant chosen from live availability
+
+
+class AdminAvailableTimeSlot(BaseModel):
+    """A single bookable time returned from live Calendly availability."""
+
+    start_time: datetime  # canonical UTC instant (echoed back on booking)
+    end_time: datetime  # start + duration
+    scheduling_url: str | None = None
+
+
+class AdminAvailableTimesResponse(BaseModel):
+    """Live availability for a therapist + duration within a time window."""
+
+    therapist_id: int
+    duration_minutes: int
+    calendly_event_type_uri: str
+    slots: list[AdminAvailableTimeSlot]

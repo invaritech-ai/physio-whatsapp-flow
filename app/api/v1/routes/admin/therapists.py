@@ -1,6 +1,8 @@
 """Admin endpoints for managing therapists."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, func, select
 
 from app.core.auth import get_current_admin, is_bot_only_suspend_email
@@ -8,7 +10,13 @@ from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.db.session import get_session
 from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
+from app.api.v1.schemas.admin_session import (
+    AdminAvailableTimeSlot,
+    AdminAvailableTimesResponse,
+)
 from app.api.v1.schemas.therapist_onboarding import CalendlyWebhookCheckResponse
+from app.services.calendly import get_event_type_available_times_with_pat
+from app.services.timezone_utils import as_utc
 from app.api.v1.schemas.therapist import (
     TherapistCreate,
     TherapistUpdate,
@@ -193,6 +201,85 @@ def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_adm
         )
         for et in event_types
     ]
+
+
+def _resolve_active_event_type(
+    db: Session, therapist_id: int, duration_minutes: int
+) -> TherapistEventType:
+    """Return the active event type for a therapist+duration, or raise 409."""
+    event_type = db.exec(
+        select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist_id,
+            TherapistEventType.duration_minutes == duration_minutes,
+            TherapistEventType.is_active == True,  # noqa: E712
+        )
+    ).first()
+    if not event_type or not event_type.calendly_event_type_uri:
+        raise HTTPException(status_code=409, detail="event_type_not_configured")
+    return event_type
+
+
+def _resolve_therapist_pat(therapist: Therapist) -> str:
+    """Decrypt the therapist's stored Calendly PAT, or raise 400 if unset."""
+    if not therapist.calendly_pat_encrypted:
+        raise HTTPException(status_code=400, detail="calendly_pat_missing")
+    return decrypt_string(therapist.calendly_pat_encrypted)
+
+
+@router.get("/{therapist_id}/available-times", response_model=AdminAvailableTimesResponse)
+def get_therapist_available_times(
+    therapist_id: int,
+    duration_minutes: int = Query(..., gt=0),
+    start: datetime = Query(..., description="Window start (UTC ISO, aware)"),
+    end: datetime = Query(..., description="Window end (UTC ISO, aware)"),
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Fetch live Calendly availability for a therapist + duration within a window."""
+    _ = admin
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    event_type = _resolve_active_event_type(db, therapist_id, duration_minutes)
+    pat = _resolve_therapist_pat(therapist)
+
+    # Normalize to aware UTC and clamp to a valid Calendly window (future, <= 7 days).
+    now = datetime.now(timezone.utc)
+    start_utc = as_utc(start)
+    end_utc = as_utc(end)
+    if start_utc < now:
+        start_utc = now + timedelta(minutes=1)
+    if end_utc <= start_utc:
+        end_utc = start_utc + timedelta(days=1)
+    max_end = start_utc + timedelta(days=7)
+    if end_utc > max_end:
+        end_utc = max_end
+
+    raw_slots = get_event_type_available_times_with_pat(
+        event_type.calendly_event_type_uri, pat, start_utc, end_utc
+    )
+
+    slots: list[AdminAvailableTimeSlot] = []
+    for item in raw_slots:
+        raw_start = item.get("start_time")
+        if not raw_start:
+            continue
+        slot_start = as_utc(datetime.fromisoformat(raw_start.replace("Z", "+00:00")))
+        slots.append(
+            AdminAvailableTimeSlot(
+                start_time=slot_start,
+                end_time=slot_start + timedelta(minutes=duration_minutes),
+                scheduling_url=item.get("scheduling_url"),
+            )
+        )
+
+    return AdminAvailableTimesResponse(
+        therapist_id=therapist_id,
+        duration_minutes=duration_minutes,
+        calendly_event_type_uri=event_type.calendly_event_type_uri,
+        slots=slots,
+    )
 
 
 @router.patch("/{therapist_id}", response_model=TherapistResponse)
