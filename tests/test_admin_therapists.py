@@ -1,9 +1,10 @@
 """Tests for admin therapist endpoints."""
 
 import pytest
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
-from app.core.auth import get_current_admin
+from app.core.auth import get_current_admin, get_current_approved_user
 from app.main import app
 from app.models import Therapist, TherapistSpecialty, TherapistSpecialtyMap, User
 
@@ -25,6 +26,55 @@ def override_admin_auth(db_session: Session):
     app.dependency_overrides[get_current_admin] = lambda: admin
     yield
     app.dependency_overrides.pop(get_current_admin, None)
+
+
+class TestPendingAccountLinking:
+    """First-login linking of admin-provisioned (pending:) therapist accounts."""
+
+    def test_first_login_links_pending_account_by_email(self, db_session: Session):
+        provisioned = User(
+            neon_auth_sub="pending:linkme@test.com",
+            email="linkme@test.com",
+            display_name="Dr. Link",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(provisioned)
+        db_session.commit()
+        db_session.refresh(provisioned)
+
+        resolved = get_current_approved_user(
+            required_role="therapist",
+            current_user={"user_id": "real-neon-sub-xyz", "email": "linkme@test.com"},
+            db=db_session,
+        )
+
+        assert resolved.id == provisioned.id
+        assert resolved.neon_auth_sub == "real-neon-sub-xyz"
+
+    def test_login_does_not_overwrite_non_pending_account(self, db_session: Session):
+        existing = User(
+            neon_auth_sub="real-existing-sub",
+            email="solid@test.com",
+            display_name="Dr. Solid",
+            role="therapist",
+            is_active=True,
+        )
+        db_session.add(existing)
+        db_session.commit()
+        db_session.refresh(existing)
+
+        # Unknown sub but colliding email must NOT relink a real account.
+        with pytest.raises(HTTPException) as exc:
+            get_current_approved_user(
+                required_role="therapist",
+                current_user={"user_id": "intruder-sub", "email": "solid@test.com"},
+                db=db_session,
+            )
+        assert exc.value.status_code == 403
+
+        refreshed = db_session.get(User, existing.id)
+        assert refreshed.neon_auth_sub == "real-existing-sub"
 
 
 class TestCreateTherapist:
@@ -78,6 +128,31 @@ class TestCreateTherapist:
         data = response.json()
         assert data["license_number"] is None
         assert data["calendly_user_uri"] is None
+
+    def test_create_therapist_without_neon_auth_sub_uses_pending_sentinel(
+        self, client, db_session: Session
+    ):
+        """Admin-provisioned therapist (no neon_auth_sub) gets a pending: sentinel sub."""
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "Provisioned@Test.com",
+                "display_name": "Dr. Provisioned",
+                "license_number": "PT-555",
+                "is_female": True,
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["is_active"] is True
+        assert data["is_female"] is True
+
+        user = db_session.get(User, data["user_id"])
+        assert user is not None
+        assert user.role == "therapist"
+        # Sentinel keyed by normalized (lowercased) email.
+        assert user.neon_auth_sub == "pending:provisioned@test.com"
 
     def test_create_therapist_with_license_number_normalizes(self, client, db_session: Session):
         response = client.post(
