@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.services.naming import invoice_filename
+from app.services.naming import _FIXED_SUFFIX, invoice_filename
 
 
 def test_invoice_filename_slugifies_client_name() -> None:
@@ -11,7 +11,7 @@ def test_invoice_filename_slugifies_client_name() -> None:
         client_name="  Jane   Doe / PT  ",
         date_value=datetime(2026, 5, 6, 8, 0, tzinfo=timezone.utc),
     )
-    assert name == "jane-doe-pt_2026-05-06_AFIXEDSTRING_7.pdf"
+    assert name == f"jane-doe-pt_2026-05-06_{_FIXED_SUFFIX}_7.pdf"
 
 
 def test_invoice_filename_falls_back_when_client_name_missing() -> None:
@@ -20,7 +20,7 @@ def test_invoice_filename_falls_back_when_client_name_missing() -> None:
         client_name=None,
         date_value=datetime(2026, 5, 6, 8, 0, tzinfo=timezone.utc),
     )
-    assert name == "client-42_2026-05-06_AFIXEDSTRING_42.pdf"
+    assert name == f"client-42_2026-05-06_{_FIXED_SUFFIX}_42.pdf"
 
 
 def test_invoice_filename_applies_invoice_timezone_for_date_part(monkeypatch) -> None:
@@ -32,4 +32,4 @@ def test_invoice_filename_applies_invoice_timezone_for_date_part(monkeypatch) ->
         client_name="Alex",
         date_value=datetime(2026, 5, 6, 16, 30, tzinfo=timezone.utc),
     )
-    assert name == "alex_2026-05-07_AFIXEDSTRING_9.pdf"
+    assert name == f"alex_2026-05-07_{_FIXED_SUFFIX}_9.pdf"

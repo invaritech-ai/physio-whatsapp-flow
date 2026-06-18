@@ -276,6 +276,39 @@ def test_admin_reports_payroll_estimate_is_zero_for_now(client, db_session: Sess
     assert item["currency"] == "HKD"
 
 
+def test_admin_reports_payroll_counts_new_durations(client, db_session: Session):
+    """Payroll payable_minutes aggregates 15- and 60-minute completed sessions."""
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, "pay-dur")
+    client_row = _create_client(db_session, "+85296660044", "Duration Client")
+    now = datetime.now(timezone.utc)
+    period_from = now - timedelta(days=1)
+    period_to = now + timedelta(days=1)
+
+    for minutes in (15, 60):
+        _create_session(
+            db_session,
+            client_id=client_row.id,
+            therapist_id=therapist.id,
+            start_time=now - timedelta(minutes=minutes),
+            duration_minutes=minutes,
+            status="completed",
+            charge_amount_cents=None,
+        )
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            "/api/v1/admin/reports/therapist-payroll",
+            params={"from": period_from.isoformat(), "to": period_to.isoformat()},
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["completed_sessions"] == 2
+    assert item["payable_minutes"] == 75
+    assert item["estimated_payable_cents"] == 0
+
+
 def test_admin_reports_reject_invalid_range(client, db_session: Session):
     admin = _create_admin(db_session)
     now = datetime.now(timezone.utc)

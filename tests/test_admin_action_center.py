@@ -230,8 +230,10 @@ def test_action_center_summary_returns_expected_counts(client, db_session: Sessi
     assert payload["therapists_missing_calendly"] == 2
     assert payload["therapists_missing_specialties"] == 2
     assert payload["active_clients_in_window"] == 2
-    assert payload["clients_missing_plan_30"] == 1
-    assert payload["clients_missing_plan_45"] == 1
+    assert payload["clients_missing_plan_by_duration"]["15"] == 2
+    assert payload["clients_missing_plan_by_duration"]["30"] == 1
+    assert payload["clients_missing_plan_by_duration"]["45"] == 1
+    assert payload["clients_missing_plan_by_duration"]["60"] == 2
     assert payload["active_clients_missing_any_plan_assignment"] == 2
     assert payload["clients_with_receipting_backlog"] == 1
     assert payload["past_sessions_missing_payment_record"] == 1
@@ -278,32 +280,32 @@ def test_action_center_summary_honors_lookback_and_threshold(client, db_session:
         start_time=now - timedelta(hours=2),
     )
 
+    plan_15 = BillingPlan(name="Window 15", duration_minutes=15, amount_cents=40000, currency="HKD", is_active=True)
     plan_30 = BillingPlan(name="Window 30", duration_minutes=30, amount_cents=70000, currency="HKD", is_active=True)
     plan_45 = BillingPlan(name="Window 45", duration_minutes=45, amount_cents=90000, currency="HKD", is_active=True)
+    plan_60 = BillingPlan(name="Window 60", duration_minutes=60, amount_cents=130000, currency="HKD", is_active=True)
+    db_session.add(plan_15)
     db_session.add(plan_30)
     db_session.add(plan_45)
+    db_session.add(plan_60)
     db_session.commit()
+    db_session.refresh(plan_15)
     db_session.refresh(plan_30)
     db_session.refresh(plan_45)
+    db_session.refresh(plan_60)
 
-    db_session.add(
-        ClientPlanAssignment(
-            client_id=recent_client.id,
-            duration_minutes=30,
-            billing_plan_id=plan_30.id,
-            assigned_by_user_id=admin.id,
-            is_active=True,
+    # Fully configure the recent client across all supported plan durations so it
+    # produces zero "missing plan" alerts.
+    for plan in (plan_15, plan_30, plan_45, plan_60):
+        db_session.add(
+            ClientPlanAssignment(
+                client_id=recent_client.id,
+                duration_minutes=plan.duration_minutes,
+                billing_plan_id=plan.id,
+                assigned_by_user_id=admin.id,
+                is_active=True,
+            )
         )
-    )
-    db_session.add(
-        ClientPlanAssignment(
-            client_id=recent_client.id,
-            duration_minutes=45,
-            billing_plan_id=plan_45.id,
-            assigned_by_user_id=admin.id,
-            is_active=True,
-        )
-    )
     db_session.add(
         ClientFinancial(
             client_id=old_client.id,
@@ -331,8 +333,10 @@ def test_action_center_summary_honors_lookback_and_threshold(client, db_session:
     assert response.status_code == 200
     payload = response.json()
     assert payload["active_clients_in_window"] == 1
-    assert payload["clients_missing_plan_30"] == 0
-    assert payload["clients_missing_plan_45"] == 0
+    assert payload["clients_missing_plan_by_duration"]["15"] == 0
+    assert payload["clients_missing_plan_by_duration"]["30"] == 0
+    assert payload["clients_missing_plan_by_duration"]["45"] == 0
+    assert payload["clients_missing_plan_by_duration"]["60"] == 0
     assert payload["active_clients_missing_any_plan_assignment"] == 0
     assert payload["clients_with_receipting_backlog"] == 1
     assert payload["past_sessions_missing_payment_record"] == 1
@@ -394,17 +398,13 @@ def test_action_center_summary_debug_ids_payload(client, db_session: Session):
     payload = response.json()
     assert payload["debug_ids"] is not None
     assert payload["debug_ids"]["pending_access_request_ids"] != []
-    assert payload["debug_ids"]["clients_missing_plan_30_ids"] == [client_row.id]
-    assert payload["debug_ids"]["clients_missing_plan_45_ids"] == [client_row.id]
+    missing_by_duration = payload["debug_ids"]["clients_missing_plan_ids_by_duration"]
+    assert set(missing_by_duration.keys()) == {"15", "30", "45", "60"}
+    for duration in ("15", "30", "45", "60"):
+        assert missing_by_duration[duration] == [client_row.id]
     assert payload["debug_ids"]["clients_missing_any_plan_assignment_ids"] == [client_row.id]
     assert payload["debug_ids"]["past_sessions_missing_payment_record_ids"] != []
     assert payload["debug_ids"]["active_clients_missing_financial_profile_ids"] == [client_row.id]
-    # Backward-compatible keys (without _ids suffix) are always present.
-    assert payload["debug_ids"]["clients_missing_plan_30"] == [client_row.id]
-    assert payload["debug_ids"]["clients_missing_plan_45"] == [client_row.id]
-    assert payload["debug_ids"]["active_clients_missing_any_plan_assignment"] == [client_row.id]
-    assert payload["debug_ids"]["past_sessions_missing_payment_record"] != []
-    assert payload["debug_ids"]["active_clients_missing_financial_profile"] == [client_row.id]
 
 
 def test_action_center_summary_debug_ids_empty_lists_are_serialized(client, db_session: Session):
@@ -420,13 +420,12 @@ def test_action_center_summary_debug_ids_empty_lists_are_serialized(client, db_s
     debug = response.json()["debug_ids"]
     assert debug is not None
     assert debug["pending_access_request_ids"] == []
-    assert debug["clients_missing_plan_30_ids"] == []
-    assert debug["clients_missing_plan_45_ids"] == []
+    assert debug["clients_missing_plan_ids_by_duration"] == {
+        "15": [],
+        "30": [],
+        "45": [],
+        "60": [],
+    }
     assert debug["clients_missing_any_plan_assignment_ids"] == []
     assert debug["past_sessions_missing_payment_record_ids"] == []
     assert debug["active_clients_missing_financial_profile_ids"] == []
-    assert debug["clients_missing_plan_30"] == []
-    assert debug["clients_missing_plan_45"] == []
-    assert debug["active_clients_missing_any_plan_assignment"] == []
-    assert debug["past_sessions_missing_payment_record"] == []
-    assert debug["active_clients_missing_financial_profile"] == []

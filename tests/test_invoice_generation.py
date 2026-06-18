@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.invoice_latex import write_latex_invoice_pdf_file
+from app.services.naming import _FIXED_SUFFIX
 
 
 def test_write_latex_invoice_pdf_file_uses_canonical_filename(monkeypatch, tmp_path: Path) -> None:
@@ -46,5 +47,5 @@ def test_write_latex_invoice_pdf_file_uses_canonical_filename(monkeypatch, tmp_p
         issued_at=issued_at,
     )
 
-    assert destination.name == "jane-doe_2026-05-06_AFIXEDSTRING_99.pdf"
+    assert destination.name == f"jane-doe_2026-05-06_{_FIXED_SUFFIX}_99.pdf"
     assert destination.exists()

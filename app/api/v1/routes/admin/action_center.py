@@ -12,6 +12,7 @@ from app.api.v1.schemas.action_center import (
 )
 from app.core.auth import get_current_admin
 from app.db.session import get_session
+from app.services.pricing import SUPPORTED_PLAN_DURATIONS
 from app.models import (
     AccessRequest,
     ClientFinancial,
@@ -86,60 +87,43 @@ def get_action_center_summary(
         select(func.count()).select_from(active_clients_subquery)
     ).one()
 
-    clients_missing_plan_30 = db.exec(
-        select(func.count())
-        .select_from(active_clients_subquery)
-        .outerjoin(
-            ClientPlanAssignment,
-            and_(
-                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
-                ClientPlanAssignment.duration_minutes == 30,
-                ClientPlanAssignment.is_active == True,  # noqa: E712
-            ),
-        )
-        .where(ClientPlanAssignment.id.is_(None))
-    ).one()
-
-    clients_missing_plan_45 = db.exec(
-        select(func.count())
-        .select_from(active_clients_subquery)
-        .outerjoin(
-            ClientPlanAssignment,
-            and_(
-                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
-                ClientPlanAssignment.duration_minutes == 45,
-                ClientPlanAssignment.is_active == True,  # noqa: E712
-            ),
-        )
-        .where(ClientPlanAssignment.id.is_(None))
-    ).one()
-
-    assignment_30_exists = (
-        select(ClientPlanAssignment.id)
-        .where(
-            and_(
-                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
-                ClientPlanAssignment.duration_minutes == 30,
-                ClientPlanAssignment.is_active == True,  # noqa: E712
+    def _missing_plan_count_query(duration: int):
+        return (
+            select(func.count())
+            .select_from(active_clients_subquery)
+            .outerjoin(
+                ClientPlanAssignment,
+                and_(
+                    ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                    ClientPlanAssignment.duration_minutes == duration,
+                    ClientPlanAssignment.is_active == True,  # noqa: E712
+                ),
             )
+            .where(ClientPlanAssignment.id.is_(None))
         )
-        .exists()
-    )
-    assignment_45_exists = (
-        select(ClientPlanAssignment.id)
-        .where(
-            and_(
-                ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
-                ClientPlanAssignment.duration_minutes == 45,
-                ClientPlanAssignment.is_active == True,  # noqa: E712
+
+    clients_missing_plan_by_duration = {
+        str(duration): db.exec(_missing_plan_count_query(duration)).one()
+        for duration in SUPPORTED_PLAN_DURATIONS
+    }
+
+    def _assignment_exists(duration: int):
+        return (
+            select(ClientPlanAssignment.id)
+            .where(
+                and_(
+                    ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                    ClientPlanAssignment.duration_minutes == duration,
+                    ClientPlanAssignment.is_active == True,  # noqa: E712
+                )
             )
+            .exists()
         )
-        .exists()
-    )
+
     active_clients_missing_any_plan_assignment = db.exec(
         select(func.count())
         .select_from(active_clients_subquery)
-        .where(or_(~assignment_30_exists, ~assignment_45_exists))
+        .where(or_(*[~_assignment_exists(d) for d in SUPPORTED_PLAN_DURATIONS]))
     ).one()
 
     clients_with_receipting_backlog = db.exec(
@@ -180,34 +164,31 @@ def get_action_center_summary(
             .where(AccessRequest.status == "pending")
             .order_by(AccessRequest.requested_at.desc(), AccessRequest.id.desc())
         ).all()
-        clients_missing_plan_30_ids = db.exec(
-            select(active_clients_subquery.c.client_id)
-            .outerjoin(
-                ClientPlanAssignment,
-                and_(
-                    ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
-                    ClientPlanAssignment.duration_minutes == 30,
-                    ClientPlanAssignment.is_active == True,  # noqa: E712
-                ),
+        def _missing_plan_ids_query(duration: int):
+            return (
+                select(active_clients_subquery.c.client_id)
+                .outerjoin(
+                    ClientPlanAssignment,
+                    and_(
+                        ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
+                        ClientPlanAssignment.duration_minutes == duration,
+                        ClientPlanAssignment.is_active == True,  # noqa: E712
+                    ),
+                )
+                .where(ClientPlanAssignment.id.is_(None))
+                .order_by(active_clients_subquery.c.client_id)
             )
-            .where(ClientPlanAssignment.id.is_(None))
-            .order_by(active_clients_subquery.c.client_id)
-        ).all()
-        clients_missing_plan_45_ids = db.exec(
-            select(active_clients_subquery.c.client_id)
-            .outerjoin(
-                ClientPlanAssignment,
-                and_(
-                    ClientPlanAssignment.client_id == active_clients_subquery.c.client_id,
-                    ClientPlanAssignment.duration_minutes == 45,
-                    ClientPlanAssignment.is_active == True,  # noqa: E712
-                ),
-            )
-            .where(ClientPlanAssignment.id.is_(None))
-            .order_by(active_clients_subquery.c.client_id)
-        ).all()
+
+        clients_missing_plan_ids_by_duration = {
+            str(duration): list(db.exec(_missing_plan_ids_query(duration)).all())
+            for duration in SUPPORTED_PLAN_DURATIONS
+        }
         clients_missing_any_plan_assignment_ids = sorted(
-            set(clients_missing_plan_30_ids) | set(clients_missing_plan_45_ids)
+            {
+                client_id
+                for ids in clients_missing_plan_ids_by_duration.values()
+                for client_id in ids
+            }
         )
         past_sessions_missing_payment_record_ids = db.exec(
             select(func.distinct(TherapySession.id))
@@ -232,16 +213,10 @@ def get_action_center_summary(
         ).all()
         debug_ids = AdminActionCenterDebugIds(
             pending_access_request_ids=pending_access_request_ids,
-            clients_missing_plan_30_ids=clients_missing_plan_30_ids,
-            clients_missing_plan_45_ids=clients_missing_plan_45_ids,
+            clients_missing_plan_ids_by_duration=clients_missing_plan_ids_by_duration,
             clients_missing_any_plan_assignment_ids=clients_missing_any_plan_assignment_ids,
             past_sessions_missing_payment_record_ids=past_sessions_missing_payment_record_ids,
             active_clients_missing_financial_profile_ids=active_clients_missing_financial_profile_ids,
-            clients_missing_plan_30=clients_missing_plan_30_ids,
-            clients_missing_plan_45=clients_missing_plan_45_ids,
-            active_clients_missing_any_plan_assignment=clients_missing_any_plan_assignment_ids,
-            past_sessions_missing_payment_record=past_sessions_missing_payment_record_ids,
-            active_clients_missing_financial_profile=active_clients_missing_financial_profile_ids,
         )
 
     return AdminActionCenterSummaryResponse(
@@ -253,8 +228,7 @@ def get_action_center_summary(
         therapists_missing_license=therapists_missing_license,
         therapists_missing_calendly=therapists_missing_calendly,
         therapists_missing_specialties=therapists_missing_specialties,
-        clients_missing_plan_30=clients_missing_plan_30,
-        clients_missing_plan_45=clients_missing_plan_45,
+        clients_missing_plan_by_duration=clients_missing_plan_by_duration,
         active_clients_missing_any_plan_assignment=active_clients_missing_any_plan_assignment,
         clients_with_receipting_backlog=clients_with_receipting_backlog,
         past_sessions_missing_payment_record=past_sessions_missing_payment_record,

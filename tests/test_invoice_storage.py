@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import invoice_storage
+from app.services.naming import _FIXED_SUFFIX
 
 pytestmark = pytest.mark.no_s3_mock
 
@@ -55,11 +56,11 @@ def test_upload_to_s3_sends_content_length_header(monkeypatch, tmp_path):
     )
 
     # No public_base_url → stable s3:// reference (presigned URL comes via resolve_invoice_pdf_url)
-    assert result == "s3://my-bucket/invoices/jane-doe_2026-05-06_AFIXEDSTRING_3.pdf"
+    assert result == f"s3://my-bucket/invoices/jane-doe_2026-05-06_{_FIXED_SUFFIX}_3.pdf"
     assert len(fake_s3.put_object_calls) == 1
     call = fake_s3.put_object_calls[0]
     assert call["Bucket"] == "my-bucket"
-    assert call["Key"] == "invoices/jane-doe_2026-05-06_AFIXEDSTRING_3.pdf"
+    assert call["Key"] == f"invoices/jane-doe_2026-05-06_{_FIXED_SUFFIX}_3.pdf"
     assert call["ContentType"] == "application/pdf"
     assert call["ContentLength"] == len(payload)
 
@@ -90,7 +91,7 @@ def test_upload_to_s3_uses_public_base_url_when_configured(monkeypatch, tmp_path
 
     assert (
         result
-        == "https://cdn.example.com/public/invoices/client-12_2026-05-06_AFIXEDSTRING_12.pdf"
+        == f"https://cdn.example.com/public/invoices/client-12_2026-05-06_{_FIXED_SUFFIX}_12.pdf"
     )
     assert len(fake_s3.put_object_calls) == 1
     assert len(fake_s3.generate_presigned_url_calls) == 0

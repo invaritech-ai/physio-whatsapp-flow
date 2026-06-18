@@ -821,6 +821,70 @@ class TestSaveCalendly:
             "https://api.calendly.com/event_types/SHARED",
         ]
 
+    def test_save_calendly_allows_optional_60_min_slot(
+        self,
+        client,
+        db_session: Session,
+        therapist_no_uri: Therapist,
+        mock_jwt_therapist,
+    ):
+        user_info = {
+            "uri": "https://api.calendly.com/users/TESTUSER123",
+            "name": "Dr. Test",
+            "email": "test@test.com",
+        }
+        event_types = [
+            {
+                "uri": "https://api.calendly.com/event_types/30MIN",
+                "duration": 30,
+                "name": "30 Min Session",
+                "scheduling_url": "https://calendly.com/test/30min",
+                "active": True,
+            },
+            {
+                "uri": "https://api.calendly.com/event_types/45MIN",
+                "duration": 45,
+                "name": "45 Min Session",
+                "scheduling_url": "https://calendly.com/test/45min",
+                "active": True,
+            },
+            {
+                "uri": "https://api.calendly.com/event_types/60MIN",
+                "duration": 60,
+                "name": "60 Min Session",
+                "scheduling_url": "https://calendly.com/test/60min",
+                "active": True,
+            },
+        ]
+
+        with patch("app.services.therapist_onboarding.get_user_info_with_pat") as mock_user, \
+             patch("app.services.therapist_onboarding.get_event_types_with_pat") as mock_events:
+            mock_user.return_value = user_info
+            mock_events.return_value = event_types
+
+            response = client.post(
+                "/api/v1/therapist/onboarding/calendly",
+                json={
+                    "calendly_pat": "valid_token_123",
+                    "slot_mapping": {
+                        "30": "https://calendly.com/test/30min",
+                        "45": "https://calendly.com/test/45min",
+                        "60": "https://calendly.com/test/60min",
+                    },
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [item["duration_minutes"] for item in data["slot_mapping"]] == [30, 45, 60]
+
+        stmt = select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist_no_uri.id
+        ).order_by(TherapistEventType.duration_minutes.asc())
+        mapped_event_types = db_session.exec(stmt).all()
+        assert [item.duration_minutes for item in mapped_event_types] == [30, 45, 60]
+
     def test_save_calendly_rejects_unknown_event_type_uri(
         self,
         client,

@@ -329,7 +329,9 @@ def test_update_admin_session_reassigns_billing_plan(client, db_session: Session
     assert assignment.notes == "Admin reassigned"
 
 
-def test_update_admin_session_rejects_duration_mismatch(client, db_session: Session):
+def test_update_admin_session_syncs_duration_to_assigned_plan(client, db_session: Session):
+    """Assigning a plan of a different duration syncs the session to that plan's
+    duration so downstream billing reflects the actual delivered length."""
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, suffix="mismatch")
     client_row = _create_client(db_session, phone="+85295550006", name="Mismatch Client")
@@ -353,8 +355,17 @@ def test_update_admin_session_rejects_duration_mismatch(client, db_session: Sess
             headers=_auth_headers(),
         )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "plan_duration_mismatch"
+    assert response.status_code == 200
+    assert response.json()["duration_minutes"] == 45
+
+    assignment = db_session.exec(
+        select(ClientPlanAssignment).where(
+            ClientPlanAssignment.client_id == client_row.id,
+            ClientPlanAssignment.duration_minutes == 45,
+        )
+    ).first()
+    assert assignment is not None
+    assert assignment.billing_plan_id == plan_45.id
 
 
 def test_get_admin_session_clinical_note(client, db_session: Session):
