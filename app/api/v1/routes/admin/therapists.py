@@ -70,9 +70,14 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
     license_number = _normalize_and_validate_license_number(data.license_number)
     _ensure_unique_license_number(db, license_number)
 
+    # Admin-provisioned therapists may omit neon_auth_sub; use a pending sentinel
+    # keyed by email. On first Neon login, auth links the real sub to this record
+    # (see get_current_approved_user). Email uniqueness keeps the sentinel unique.
+    neon_auth_sub = data.neon_auth_sub or f"pending:{data.email.strip().lower()}"
+
     # Create User record
     user = User(
-        neon_auth_sub=data.neon_auth_sub,
+        neon_auth_sub=neon_auth_sub,
         email=data.email,
         display_name=data.display_name,
         role="therapist",
@@ -87,6 +92,7 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
         display_name=data.display_name,
         license_number=license_number,
         calendly_user_uri=data.calendly_user_uri,
+        is_female=data.is_female,
         is_active=True,
     )
     db.add(therapist)
