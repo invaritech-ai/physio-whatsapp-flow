@@ -53,13 +53,11 @@ def _build_client_assignment_response(
     client_id: int,
     plan_map: dict[tuple[int, int], dict[str, object]],
 ) -> ClientPlanAssignmentsResponse:
-    raw_30 = plan_map.get((client_id, 30))
-    raw_45 = plan_map.get((client_id, 45))
-    return ClientPlanAssignmentsResponse(
-        client_id=client_id,
-        duration_30=ClientPlanAssignmentSummary(**raw_30) if raw_30 else None,
-        duration_45=ClientPlanAssignmentSummary(**raw_45) if raw_45 else None,
-    )
+    assignments: dict[str, ClientPlanAssignmentSummary | None] = {}
+    for duration in SUPPORTED_PLAN_DURATIONS:
+        raw = plan_map.get((client_id, duration))
+        assignments[str(duration)] = ClientPlanAssignmentSummary(**raw) if raw else None
+    return ClientPlanAssignmentsResponse(client_id=client_id, assignments=assignments)
 
 
 @router.get("/plans", response_model=list[BillingPlanResponse])

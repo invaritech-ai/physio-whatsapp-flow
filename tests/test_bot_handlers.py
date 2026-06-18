@@ -324,6 +324,24 @@ class TestHandleAwaitingDuration:
         conv_data = json.loads(client.conversation_data or "{}")
         assert conv_data.get("duration") == 30
 
+    def test_valid_duration_choice_3_saves_60min(
+        self, db_session, sample_specialties
+    ):
+        """Choice 3 should save 60 minutes."""
+        client = Client(
+            phone_e164="+85212345678",
+            name="John",
+            conversation_state=states.AWAITING_DURATION,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_duration(client, "3", db_session)
+
+        assert next_state == states.AWAITING_MATCH_PREFERENCE
+        conv_data = json.loads(client.conversation_data or "{}")
+        assert conv_data.get("duration") == 60
+
     def test_multiple_duration_numbers_rejects(
         self, db_session, sample_specialties
     ):
@@ -1025,6 +1043,6 @@ class TestNoTherapistMatch:
         next_state, response = handle_awaiting_days(client, "1", db_session)
 
         assert next_state == states.IDLE
-        assert "no therapists" in response.lower()
+        assert "couldn't find an available therapist" in response.lower()
         assert client.conversation_data is None
 

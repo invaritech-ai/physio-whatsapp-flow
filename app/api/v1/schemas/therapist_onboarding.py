@@ -180,20 +180,21 @@ class SaveCalendlyRequest(BaseModel):
     )
     slot_mapping: dict[str, str] = Field(
         ...,
-        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'. Both may share the same URL.",
+        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'; '60' is optional. URLs may be shared.",
     )
 
     @model_validator(mode="after")
     def validate_slot_mapping(self) -> "SaveCalendlyRequest":
         required_keys = {"30", "45"}
+        allowed_keys = {"30", "45", "60"}
         provided_keys = {key.strip() for key in self.slot_mapping.keys()}
         missing = required_keys - provided_keys
         if missing:
             raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
-        extra = provided_keys - required_keys
+        extra = provided_keys - allowed_keys
         if extra:
             raise ValueError(
-                f"Unexpected durations: {', '.join(sorted(extra))}. Only 30 and 45 allowed."
+                f"Unexpected durations: {', '.join(sorted(extra))}. Only 30, 45 and 60 allowed."
             )
 
         normalized_mapping: dict[str, str] = {}
@@ -212,19 +213,20 @@ class UpdateSlotMappingRequest(BaseModel):
 
     slot_mapping: dict[str, str] = Field(
         ...,
-        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'.",
+        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'; '60' is optional.",
     )
 
     @model_validator(mode="after")
     def validate_slot_mapping(self) -> "UpdateSlotMappingRequest":
         required_keys = {"30", "45"}
+        allowed_keys = {"30", "45", "60"}
         provided_keys = {key.strip() for key in self.slot_mapping.keys()}
         missing = required_keys - provided_keys
         if missing:
             raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
-        extra = provided_keys - required_keys
+        extra = provided_keys - allowed_keys
         if extra:
-            raise ValueError(f"Unexpected durations: {', '.join(sorted(extra))}. Only 30 and 45 allowed.")
+            raise ValueError(f"Unexpected durations: {', '.join(sorted(extra))}. Only 30, 45 and 60 allowed.")
         normalized: dict[str, str] = {}
         for k, url in self.slot_mapping.items():
             url = url.strip()

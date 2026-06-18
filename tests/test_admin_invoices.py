@@ -7,6 +7,7 @@ from unittest.mock import patch
 from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.services.naming import _FIXED_SUFFIX
 from app.models import (
     Client,
     ClientFinancial,
@@ -150,7 +151,7 @@ def test_generate_invoice_success_updates_financials_and_serves_pdf(client, db_s
     assert data["amount_cents"] == 65000
     assert data["status"] == "issued"
     assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/")
-    assert f"AFIXEDSTRING_{data['id']}.pdf" in data["pdf_url"]
+    assert f"{_FIXED_SUFFIX}_{data['id']}.pdf" in data["pdf_url"]
 
     financial = db_session.exec(
         select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)
@@ -221,7 +222,7 @@ def test_generate_invoice_accepts_optional_metadata_and_renders_provider_details
     assert data["diagnosis"] == "Bilateral plantar fasciitis"
     assert data["special_notes"] == "Bring insurer card"
     assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/")
-    assert f"AFIXEDSTRING_{data['id']}.pdf" in data["pdf_url"]
+    assert f"{_FIXED_SUFFIX}_{data['id']}.pdf" in data["pdf_url"]
 
 
 def test_generate_invoice_uses_fallbacks_for_optional_metadata(client, db_session: Session):
@@ -553,7 +554,7 @@ def test_generate_invoice_latex_falls_back_to_basic_when_engine_missing(client, 
     assert response.status_code == 201
     data = response.json()
     assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/")
-    assert f"AFIXEDSTRING_{data['id']}.pdf" in data["pdf_url"]
+    assert f"{_FIXED_SUFFIX}_{data['id']}.pdf" in data["pdf_url"]
 
 
 def test_generate_invoice_sessionless_supervised_physio_payload(client, db_session: Session):
@@ -600,7 +601,7 @@ def test_generate_invoice_sessionless_supervised_physio_payload(client, db_sessi
     assert "therapist passive review" in data["reference_note"].lower()
     assert data["payment_mode"] == "N/A"
     assert data["pdf_url"].startswith("https://test-bucket.s3.example.com/invoices/")
-    assert f"AFIXEDSTRING_{data['id']}.pdf" in data["pdf_url"]
+    assert f"{_FIXED_SUFFIX}_{data['id']}.pdf" in data["pdf_url"]
 
     financial = db_session.exec(
         select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)

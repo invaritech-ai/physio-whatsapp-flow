@@ -110,7 +110,7 @@ def _therapist_auth_context(user: User):
     )
 
 
-def test_get_client_plans_returns_explicit_null_for_30_and_45(client, db_session: Session):
+def test_get_client_plans_returns_null_for_all_supported_durations(client, db_session: Session):
     admin = _create_admin(db_session)
     client_row = _create_client(db_session)
 
@@ -120,8 +120,8 @@ def test_get_client_plans_returns_explicit_null_for_30_and_45(client, db_session
     assert response.status_code == 200
     payload = response.json()
     assert payload["client_id"] == client_row.id
-    assert payload["duration_30"] is None
-    assert payload["duration_45"] is None
+    assert set(payload["assignments"].keys()) == {"15", "30", "45", "60"}
+    assert all(value is None for value in payload["assignments"].values())
 
 
 def test_create_and_upsert_client_plans(client, db_session: Session):
@@ -158,13 +158,44 @@ def test_create_and_upsert_client_plans(client, db_session: Session):
     assert plan_45_response.status_code == 201
     plan_45_id = plan_45_response.json()["id"]
 
+    # New durations introduced for session-plan support: 15 and 60.
+    with _admin_auth_context(admin):
+        plan_15_response = client.post(
+            "/api/v1/admin/plans",
+            json={
+                "name": "Short 15",
+                "duration_minutes": 15,
+                "amount_cents": 40000,
+                "currency": "HKD",
+                "is_active": True,
+            },
+            headers=_auth_headers(),
+        )
+        plan_60_response = client.post(
+            "/api/v1/admin/plans",
+            json={
+                "name": "Extended 60",
+                "duration_minutes": 60,
+                "amount_cents": 130000,
+                "currency": "HKD",
+                "is_active": True,
+            },
+            headers=_auth_headers(),
+        )
+    assert plan_15_response.status_code == 201
+    assert plan_60_response.status_code == 201
+    plan_15_id = plan_15_response.json()["id"]
+    plan_60_id = plan_60_response.json()["id"]
+
     with _admin_auth_context(admin):
         upsert_response = client.put(
             f"/api/v1/admin/clients/{client_row.id}/plans",
             json={
                 "assignments": [
+                    {"duration_minutes": 15, "billing_plan_id": plan_15_id},
                     {"duration_minutes": 30, "billing_plan_id": plan_30_id},
                     {"duration_minutes": 45, "billing_plan_id": plan_45_id},
+                    {"duration_minutes": 60, "billing_plan_id": plan_60_id},
                 ]
             },
             headers=_auth_headers(),
@@ -172,8 +203,10 @@ def test_create_and_upsert_client_plans(client, db_session: Session):
 
     assert upsert_response.status_code == 200
     payload = upsert_response.json()
-    assert payload["duration_30"]["plan_id"] == plan_30_id
-    assert payload["duration_45"]["plan_id"] == plan_45_id
+    assert payload["assignments"]["15"]["plan_id"] == plan_15_id
+    assert payload["assignments"]["30"]["plan_id"] == plan_30_id
+    assert payload["assignments"]["45"]["plan_id"] == plan_45_id
+    assert payload["assignments"]["60"]["plan_id"] == plan_60_id
 
 
 def test_upsert_client_plan_rejects_duration_mismatch(client, db_session: Session):
