@@ -22,3 +22,7 @@ class TherapistEventType(SQLModel, table=True):
     duration_minutes: int
     scheduling_url: str  # Public booking link
     is_active: bool = Field(default=True)
+    # Optional per-therapist price for this session length. When set, it takes
+    # precedence over client billing plans when resolving the expected charge.
+    amount_cents: int | None = Field(default=None)
+    currency: str | None = Field(default=None, max_length=8)

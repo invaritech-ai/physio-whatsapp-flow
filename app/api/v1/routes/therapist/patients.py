@@ -18,7 +18,11 @@ from app.services.clinical_note_visibility import (
     clinical_note_preview,
     latest_session_note_by_session_id,
 )
-from app.services.pricing import load_active_plan_map, resolve_expected_charge
+from app.services.pricing import (
+    load_active_plan_map,
+    load_therapist_slot_price_map,
+    resolve_expected_charge,
+)
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/therapist/patients", tags=["Therapist Patients"])
@@ -208,6 +212,9 @@ def list_therapist_patient_sessions(
     stmt = stmt.order_by(TherapySession.start_time.desc()).offset(offset).limit(limit)
     sessions = db.exec(stmt).all()
     plan_map = load_active_plan_map(db, client_ids={client_id})
+    slot_price_map = load_therapist_slot_price_map(
+        db, therapist_ids={s.therapist_id for s in sessions}
+    )
     session_ids = [s.id for s in sessions if s.id is not None]
     note_map = latest_session_note_by_session_id(
         db,
@@ -219,6 +226,7 @@ def list_therapist_patient_sessions(
         expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
             session,
             plan_map=plan_map,
+            slot_price_map=slot_price_map,
         )
         note = note_map.get(session.id) if session.id is not None else None
         rows.append(

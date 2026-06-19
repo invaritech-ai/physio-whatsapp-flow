@@ -50,7 +50,11 @@ from app.services.invoice_generation import (
 )
 from app.services.invoice_storage import resolve_invoice_pdf_url
 from app.services.invoice_whatsapp import send_invoice_whatsapp
-from app.services.pricing import load_active_plan_map, resolve_expected_charge
+from app.services.pricing import (
+    load_active_plan_map,
+    load_therapist_slot_price_map,
+    resolve_expected_charge,
+)
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
 router = APIRouter(prefix="/admin/invoices", tags=["Admin - Invoices"])
@@ -477,7 +481,10 @@ def _resolve_invoice_fields(
     default_amount_cents: int | None = None
     if session_row is not None:
         plan_map = load_active_plan_map(db, client_ids={payload.client_id})
-        default_amount_cents, _, _ = resolve_expected_charge(session_row, plan_map=plan_map)
+        slot_price_map = load_therapist_slot_price_map(db, therapist_ids={session_row.therapist_id})
+        default_amount_cents, _, _ = resolve_expected_charge(
+            session_row, plan_map=plan_map, slot_price_map=slot_price_map
+        )
 
     amount_cents = payload.amount_cents if payload.amount_cents is not None else default_amount_cents
     if amount_cents is None or amount_cents <= 0:

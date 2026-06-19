@@ -539,18 +539,24 @@ def save_calendly(
             url_to_event_type=url_to_event_type,
             uri_to_event_type=uri_to_event_type,
         )
+        amount = (data.slot_prices or {}).get(duration_str)
+        currency = settings.default_currency if amount is not None else None
         event_type = TherapistEventType(
             therapist_id=therapist.id,
             calendly_event_type_uri=calendly_event_type_uri,
             duration_minutes=int(duration_str),
             scheduling_url=scheduling_url,
             is_active=True,
+            amount_cents=amount,
+            currency=currency,
         )
         db.add(event_type)
         slot_mapping_response.append(SlotMappingInfo(
             duration_minutes=int(duration_str),
             calendly_event_type_uri=calendly_event_type_uri,
             scheduling_url=scheduling_url,
+            amount_cents=amount,
+            currency=currency,
         ))
 
     # Activate therapist
@@ -640,10 +646,14 @@ def update_slot_mapping(
             scheduling_url = mapping_value
             calendly_uri = live_url_to_uri.get(normalized_value) or url_to_uri.get(normalized_value)
 
+        amount = (data.slot_prices or {}).get(duration_str)
+        currency = settings.default_currency if amount is not None else None
         existing = next((et for et in all_event_types if et.duration_minutes == duration), None)
         if existing:
             existing.scheduling_url = scheduling_url
             existing.calendly_event_type_uri = calendly_uri
+            existing.amount_cents = amount
+            existing.currency = currency
             # Re-activate: a prior sync may have turned this row off. Without this the
             # saved mapping stays hidden (the profile only returns is_active rows).
             existing.is_active = True
@@ -655,12 +665,16 @@ def update_slot_mapping(
                 scheduling_url=scheduling_url,
                 calendly_event_type_uri=calendly_uri,
                 is_active=True,
+                amount_cents=amount,
+                currency=currency,
             ))
 
         slot_mapping_response.append(SlotMappingInfo(
             duration_minutes=duration,
             calendly_event_type_uri=calendly_uri,
             scheduling_url=scheduling_url,
+            amount_cents=amount,
+            currency=currency,
         ))
 
     db.commit()
