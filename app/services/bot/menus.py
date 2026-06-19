@@ -43,6 +43,15 @@ def build_welcome_menu() -> str:
     )
 
 
+def build_preferred_name_prompt(name: str) -> str:
+    """Ask the client what they'd like to be called (after the official name)."""
+    return (
+        f"Thanks, {name}! 😊\n\n"
+        "And what would you like us to call you? "
+        "(Reply 'skip' to use your first name.)"
+    )
+
+
 def build_booking_path_menu(name: str, can_manage_booking: bool = True) -> str:
     """Build booking-path menu for clients without a preferred therapist shortcut."""
     manage_line = "3️⃣ Reschedule or cancel\n\n" if can_manage_booking else ""

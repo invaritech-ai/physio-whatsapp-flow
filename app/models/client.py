@@ -12,7 +12,8 @@ class Client(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     phone_e164: str = Field(unique=True, index=True)  # E.164 format: +85212345678
-    name: str | None = None
+    name: str | None = None  # Official/HKID name — used on receipts
+    preferred_name: str | None = None  # What the client likes to be called — used in conversational messages
     email: str | None = Field(default=None, index=True)
     date_of_birth: date | None = None
     address: str | None = Field(default=None, sa_column=sa.Column(sa.Text(), nullable=True))

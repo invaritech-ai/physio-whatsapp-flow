@@ -225,6 +225,7 @@ def create_client(
     client = Client(
         phone_e164=data.phone_e164,
         name=data.name,
+        preferred_name=data.preferred_name,
         email=str(data.email) if data.email else None,
         date_of_birth=data.date_of_birth,
         address=data.address,
@@ -265,6 +266,8 @@ def update_client(
         client.phone_e164 = data.phone_e164
     if "name" in data.model_fields_set:
         client.name = data.name
+    if "preferred_name" in data.model_fields_set:
+        client.preferred_name = data.preferred_name
     if "email" in data.model_fields_set:
         client.email = str(data.email) if data.email else None
     if "date_of_birth" in data.model_fields_set:
