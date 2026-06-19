@@ -154,6 +154,155 @@ class TestCreateTherapist:
         # Sentinel keyed by normalized (lowercased) email.
         assert user.neon_auth_sub == "pending:provisioned@test.com"
 
+    def test_create_therapist_with_calendly_pat_provisions_calendly(
+        self, client, db_session: Session, monkeypatch
+    ):
+        """When a Calendly PAT is supplied, the PAT is validated + stored and event types synced."""
+        monkeypatch.setattr(
+            "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+            lambda pat: (True, {"user_uri": "https://api.calendly.com/users/ABC"}, []),
+        )
+        synced = {"called": False}
+
+        def fake_sync(db, therapist, calendly_pat=None):
+            synced["called"] = True
+            return [], []
+
+        monkeypatch.setattr("app.api.v1.routes.admin.therapists.sync_event_types", fake_sync)
+
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "cal@test.com",
+                "display_name": "Dr. Cal",
+                "calendly_pat": "pat-token-123",
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["calendly_user_uri"] == "https://api.calendly.com/users/ABC"
+        assert synced["called"] is True
+
+        therapist = db_session.get(Therapist, data["id"])
+        assert therapist.calendly_pat_encrypted is not None
+        assert therapist.calendly_pat_encrypted != "pat-token-123"  # stored encrypted
+
+    def test_admin_validate_calendly_returns_event_types(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+            lambda pat: (
+                True,
+                {
+                    "valid": True,
+                    "user_uri": "https://api.calendly.com/users/ABC",
+                    "name": "Dr. Cal",
+                    "email": "cal@test.com",
+                    "event_types_found": 1,
+                    "event_types": [
+                        {
+                            "calendly_event_type_uri": "https://api.calendly.com/event_types/E30",
+                            "duration_minutes": 30,
+                            "name": "30 min",
+                            "scheduling_url": "https://calendly.com/cal/30",
+                        }
+                    ],
+                    "warnings": [],
+                },
+                [],
+            ),
+        )
+        response = client.post(
+            "/api/v1/admin/therapists/validate-calendly",
+            json={"calendly_pat": "good-token"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is True
+        assert data["event_types"][0]["duration_minutes"] == 30
+
+    def test_create_therapist_with_slot_mapping_creates_event_types(
+        self, client, db_session: Session, monkeypatch
+    ):
+        from app.models import TherapistEventType
+
+        monkeypatch.setattr(
+            "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+            lambda pat: (
+                True,
+                {
+                    "valid": True,
+                    "user_uri": "https://api.calendly.com/users/ABC",
+                    "name": "Dr. Map",
+                    "email": "map@test.com",
+                    "event_types_found": 2,
+                    "event_types": [
+                        {
+                            "calendly_event_type_uri": "https://api.calendly.com/event_types/E30",
+                            "duration_minutes": 30,
+                            "name": "30 min",
+                            "scheduling_url": "https://calendly.com/map/30",
+                        },
+                        {
+                            "calendly_event_type_uri": "https://api.calendly.com/event_types/E45",
+                            "duration_minutes": 45,
+                            "name": "45 min",
+                            "scheduling_url": "https://calendly.com/map/45",
+                        },
+                    ],
+                    "warnings": [],
+                },
+                [],
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "map@test.com",
+                "display_name": "Dr. Map",
+                "calendly_pat": "good-token",
+                "slot_mapping": {
+                    "30": "https://calendly.com/map/30",
+                    "45": "https://calendly.com/map/45",
+                },
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        rows = db_session.exec(
+            select(TherapistEventType)
+            .where(TherapistEventType.therapist_id == data["id"])
+            .order_by(TherapistEventType.duration_minutes)
+        ).all()
+        assert [r.duration_minutes for r in rows] == [30, 45]
+        assert rows[0].calendly_event_type_uri == "https://api.calendly.com/event_types/E30"
+        assert rows[1].scheduling_url == "https://calendly.com/map/45"
+
+    def test_create_therapist_with_invalid_calendly_pat_rolls_back(
+        self, client, db_session: Session, monkeypatch
+    ):
+        """Invalid PAT returns 400 and leaves no orphaned user/therapist."""
+        monkeypatch.setattr(
+            "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+            lambda pat: (False, {}, ["Invalid Calendly token"]),
+        )
+
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "badcal@test.com",
+                "display_name": "Dr. BadCal",
+                "calendly_pat": "bad-token",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Invalid Calendly token" in response.json()["detail"]
+        # Rolled back: no user persisted for this email.
+        assert db_session.exec(select(User).where(User.email == "badcal@test.com")).first() is None
+
     def test_create_therapist_with_license_number_normalizes(self, client, db_session: Session):
         response = client.post(
             "/api/v1/admin/therapists",

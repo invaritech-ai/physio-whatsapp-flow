@@ -5,10 +5,18 @@ from sqlmodel import Session, func, select
 
 from app.core.auth import get_current_admin, is_bot_only_suspend_email
 from app.core.config import settings
-from app.core.encryption import decrypt_string
+from app.core.encryption import decrypt_string, encrypt_string
 from app.db.session import get_session
 from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
-from app.api.v1.schemas.therapist_onboarding import CalendlyWebhookCheckResponse
+from app.api.v1.schemas.therapist_onboarding import (
+    CalendlyWebhookCheckResponse,
+    ValidateCalendlyRequest,
+    ValidateCalendlyResponse,
+)
+from app.api.v1.routes.therapist.onboarding import (
+    _build_validate_calendly_response,
+    _normalize_slot_mapping_entry,
+)
 from app.api.v1.schemas.therapist import (
     TherapistCreate,
     TherapistUpdate,
@@ -20,6 +28,7 @@ from app.api.v1.schemas.therapist_onboarding import SlotMappingInfo
 from app.api.v1.schemas.specialty import SpecialtyResponse
 from app.services.calendly_webhooks import CalendlyWebhookError, check_webhook_registration
 from app.services.license_numbers import is_valid_license_number, normalize_license_number
+from app.services.therapist_onboarding import sync_event_types, validate_calendly_pat
 
 router = APIRouter(prefix="/admin/therapists", tags=["Admin - Therapists"])
 
@@ -46,6 +55,33 @@ def _ensure_unique_license_number(
     ).first()
     if existing and existing.id != ignore_therapist_id:
         raise HTTPException(status_code=400, detail="license_number_already_exists")
+
+
+def _calendly_event_lookups(validation_data: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Build scheduling-url and event-type-uri lookups from validated Calendly events."""
+    url_to_event_type: dict[str, dict] = {}
+    uri_to_event_type: dict[str, dict] = {}
+    for et in validation_data["event_types"]:
+        uri = (et.get("calendly_event_type_uri") or "").rstrip("/")
+        if uri and uri not in uri_to_event_type:
+            uri_to_event_type[uri] = et
+        url = (et.get("scheduling_url") or "").rstrip("/")
+        if url and url not in url_to_event_type:
+            url_to_event_type[url] = et
+    return url_to_event_type, uri_to_event_type
+
+
+@router.post("/validate-calendly", response_model=ValidateCalendlyResponse)
+def admin_validate_calendly(
+    data: ValidateCalendlyRequest,
+    admin: User = Depends(get_current_admin),
+):
+    """Validate a Calendly PAT and preview its event types (admin create flow)."""
+    _ = admin
+    valid, validation_data, errors = validate_calendly_pat(data.calendly_pat)
+    if not valid:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly token")
+    return _build_validate_calendly_response(validation_data)
 
 
 @router.post("", response_model=TherapistResponse, status_code=201)
@@ -88,6 +124,48 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
         is_active=True,
     )
     db.add(therapist)
+    db.flush()  # Assign therapist.id before optional Calendly setup
+
+    # Optional: set up via Calendly at create time. Validates the PAT and stores it
+    # encrypted so the therapist is immediately bookable. When an explicit slot_mapping
+    # is supplied, event types are created from it; otherwise they are auto-synced.
+    if data.calendly_pat:
+        pat = data.calendly_pat.strip()
+        valid, validation_data, errors = validate_calendly_pat(pat)
+        if not valid:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=errors[0] if errors else "invalid_calendly_token")
+        therapist.calendly_user_uri = validation_data["user_uri"]
+        therapist.calendly_pat_encrypted = encrypt_string(pat)
+        db.add(therapist)
+
+        if data.slot_mapping:
+            url_to_event_type, uri_to_event_type = _calendly_event_lookups(validation_data)
+            try:
+                for duration_str, mapping_value in data.slot_mapping.items():
+                    scheduling_url, calendly_event_type_uri = _normalize_slot_mapping_entry(
+                        mapping_value,
+                        url_to_event_type=url_to_event_type,
+                        uri_to_event_type=uri_to_event_type,
+                    )
+                    db.add(
+                        TherapistEventType(
+                            therapist_id=therapist.id,
+                            calendly_event_type_uri=calendly_event_type_uri,
+                            duration_minutes=int(duration_str),
+                            scheduling_url=scheduling_url,
+                            is_active=True,
+                        )
+                    )
+            except HTTPException:
+                db.rollback()
+                raise
+        else:
+            _, sync_errors = sync_event_types(db, therapist, calendly_pat=pat)
+            if sync_errors:
+                db.rollback()
+                raise HTTPException(status_code=400, detail=sync_errors[0])
+
     db.commit()
     db.refresh(therapist)
 

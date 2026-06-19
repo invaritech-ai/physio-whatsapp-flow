@@ -31,6 +31,12 @@ class TherapistCreate(BaseModel):
     license_number: str | None = Field(default=None, min_length=3, max_length=64)
     is_female: bool = False
     calendly_user_uri: str | None = Field(None, description="Calendly user URI")
+    # Optional: when provided, the therapist is set up via Calendly at create time —
+    # the PAT is validated + stored encrypted so the therapist is immediately bookable.
+    calendly_pat: str | None = Field(default=None, min_length=1, description="Calendly Personal Access Token")
+    # Optional explicit slot mapping {duration_minutes(str): scheduling_url}. When given
+    # (with calendly_pat), event types are created from it; otherwise they are auto-synced.
+    slot_mapping: dict[str, str] | None = Field(default=None, description="Map of duration -> Calendly scheduling URL")
 
 
 class TherapistUpdate(BaseModel):
