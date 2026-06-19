@@ -23,6 +23,7 @@ class ClientListItem(BaseModel):
 
     id: int
     name: str | None
+    preferred_name: str | None = None
     phone_e164: str
     email: str | None
     date_of_birth: date | None
@@ -43,6 +44,7 @@ class ClientDetailResponse(BaseModel):
 
     id: int
     name: str | None
+    preferred_name: str | None = None
     phone_e164: str
     email: str | None
     date_of_birth: date | None
@@ -82,6 +84,7 @@ class ClientCreate(BaseModel):
 
     phone_e164: str = Field(..., pattern=r"^\+[1-9]\d{1,14}$")
     name: str | None = Field(default=None, max_length=120)
+    preferred_name: str | None = Field(default=None, max_length=120)
     email: EmailStr | None = None
     date_of_birth: date | None = None
     address: str | None = Field(default=None, max_length=1000)
@@ -95,6 +98,7 @@ class ClientUpdate(BaseModel):
 
     phone_e164: str | None = Field(default=None, pattern=r"^\+[1-9]\d{1,14}$")
     name: str | None = Field(default=None, max_length=120)
+    preferred_name: str | None = Field(default=None, max_length=120)
     email: EmailStr | None = None
     date_of_birth: date | None = None
     address: str | None = Field(default=None, max_length=1000)
