@@ -21,6 +21,7 @@ from app.services.bot.handlers import (
     handle_awaiting_match_preference,
     handle_awaiting_match_confirm,
     handle_awaiting_name,
+    handle_awaiting_preferred_name,
     handle_awaiting_time_band,
     handle_idle,
     handle_reschedule_request,
@@ -236,7 +237,7 @@ class TestHandleAwaitingName:
 
         next_state, response = handle_awaiting_name(client, "john smith", db_session)
 
-        assert next_state == states.AWAITING_BOOKING_PATH
+        assert next_state == states.AWAITING_PREFERRED_NAME
         assert client.name == "John Smith"  # Should be title-cased
         assert "John Smith" in response
 
@@ -252,7 +253,7 @@ class TestHandleAwaitingName:
             client, "I am Avi. Nice to meet you", db_session
         )
 
-        assert next_state == states.AWAITING_BOOKING_PATH
+        assert next_state == states.AWAITING_PREFERRED_NAME
         assert client.name == "Avi"
         assert "Avi" in response
 
@@ -283,6 +284,39 @@ class TestHandleAwaitingName:
         assert next_state == states.AWAITING_NAME
         assert "name" in response.lower()
         assert client.name is None
+
+
+class TestHandleAwaitingPreferredName:
+    """Tests for handle_awaiting_preferred_name function."""
+
+    def test_preferred_name_saved_and_proceeds(self, db_session, sample_specialties):
+        client = Client(
+            phone_e164="+85212345678",
+            name="John Michael Smith",
+            conversation_state=states.AWAITING_PREFERRED_NAME,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_preferred_name(client, "John", db_session)
+
+        assert next_state == states.AWAITING_BOOKING_PATH
+        assert client.preferred_name == "John"
+        assert "John" in response  # greeting addresses preferred name
+
+    def test_skip_defaults_to_first_name(self, db_session, sample_specialties):
+        client = Client(
+            phone_e164="+85212345678",
+            name="John Michael Smith",
+            conversation_state=states.AWAITING_PREFERRED_NAME,
+        )
+        db_session.add(client)
+        db_session.commit()
+
+        next_state, response = handle_awaiting_preferred_name(client, "skip", db_session)
+
+        assert next_state == states.AWAITING_BOOKING_PATH
+        assert client.preferred_name == "John"
 
 
 class TestHandleAwaitingDuration:

@@ -59,6 +59,11 @@ def _extract_name(body: str) -> str:
     return " ".join(tokens[:4]).title()
 
 
+def _display_name(client) -> str | None:
+    """Name to address the client by in conversational messages (preferred, else official)."""
+    return client.preferred_name or client.name
+
+
 def _get_preferred_therapist_name(client, db: Session) -> str | None:
     """Get display name of client's preferred therapist, or None."""
     if not client.preferred_therapist_id:
@@ -74,7 +79,7 @@ def _return_to_main_menu_with_message(
     reset_conversation(client, db)
     therapist_name = _get_preferred_therapist_name(client, db)
     can_manage_booking = _can_manage_booking(client, db) if client.name else False
-    menu = menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking)
+    menu = menus.build_main_menu(_display_name(client), therapist_name, can_manage_booking=can_manage_booking)
     return (states.IDLE, f"{message}\n\n{menu}")
 
 
@@ -297,7 +302,7 @@ def check_global_keywords(
         can_manage_booking = False
         return (
             states.IDLE,
-            menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking),
+            menus.build_main_menu(_display_name(client), therapist_name, can_manage_booking=can_manage_booking),
         )
 
     if body_stripped == "book":
@@ -307,7 +312,7 @@ def check_global_keywords(
             can_manage_booking = False
             return (
                 states.AWAITING_BOOKING_PATH,
-                menus.build_booking_path_menu(client.name, can_manage_booking=can_manage_booking),
+                menus.build_booking_path_menu(_display_name(client), can_manage_booking=can_manage_booking),
             )
         return (states.AWAITING_NAME, menus.build_welcome_menu())
 
@@ -343,7 +348,7 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             )
             db.add(client)
             db.commit()
-            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
+            return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
         if choice == 2:
             update_conversation_data(
                 client,
@@ -353,7 +358,7 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             )
             db.add(client)
             db.commit()
-            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
+            return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
         if choice == 3:
             therapists = _list_active_therapists(db)
             if not therapists:
@@ -376,7 +381,7 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             update_conversation_data(client, book_by_name=False, rebooking=False)
             db.add(client)
             db.commit()
-            return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
+            return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
         if choice == 2:
             therapists = _list_active_therapists(db)
             if not therapists:
@@ -398,7 +403,7 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
     therapist_name = _get_preferred_therapist_name(client, db)
     return (
         states.IDLE,
-        menus.build_main_menu(client.name, therapist_name, can_manage_booking=can_manage_booking),
+        menus.build_main_menu(_display_name(client), therapist_name, can_manage_booking=can_manage_booking),
     )
 
 
@@ -417,7 +422,7 @@ def handle_awaiting_booking_path(client, body: str, db: Session) -> tuple[str, s
         update_conversation_data(client, book_by_name=False, rebooking=False)
         db.add(client)
         db.commit()
-        return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
+        return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
 
     if choice == 2:
         therapists = _list_active_therapists(db)
@@ -464,10 +469,40 @@ def handle_awaiting_name(client, body: str, db: Session) -> tuple[str, str]:
     client.name = name
     db.add(client)
     db.commit()
+    # Official name captured; now ask what the client prefers to be called.
+    return (
+        states.AWAITING_PREFERRED_NAME,
+        menus.build_preferred_name_prompt(name),
+    )
+
+
+def handle_awaiting_preferred_name(client, body: str, db: Session) -> tuple[str, str]:
+    """
+    Handle AWAITING_PREFERRED_NAME state - save what the client likes to be called.
+
+    Replying "skip"/"same" reuses the first word of their official name.
+    """
+    raw = (body or "").strip()
+    if raw.lower() in {"skip", "same"}:
+        preferred = (client.name or "").split()[0] if client.name else ""
+    else:
+        preferred = _extract_name(body)
+
+    if len(preferred) < 2:
+        return (
+            states.AWAITING_PREFERRED_NAME,
+            "Please tell us what you'd like to be called (at least 2 characters), or reply 'skip'.",
+        )
+    if preferred.isdigit():
+        return (states.AWAITING_PREFERRED_NAME, "Please enter a name, not a number.")
+
+    client.preferred_name = preferred
+    db.add(client)
+    db.commit()
     can_manage_booking = _can_manage_booking(client, db)
     return (
         states.AWAITING_BOOKING_PATH,
-        menus.build_booking_path_menu(name, can_manage_booking=can_manage_booking),
+        menus.build_booking_path_menu(preferred, can_manage_booking=can_manage_booking),
     )
 
 
@@ -501,7 +536,7 @@ def handle_awaiting_therapist_pick(client, body: str, db: Session) -> tuple[str,
     )
     db.add(client)
     db.commit()
-    return (states.AWAITING_DURATION, menus.build_duration_menu(client.name or ""))
+    return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
 
 
 def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
@@ -753,7 +788,7 @@ def handle_awaiting_match_confirm(client, body: str, db: Session) -> tuple[str, 
         can_manage_booking = _can_manage_booking(client, db)
         return (
             states.AWAITING_BOOKING_PATH,
-            menus.build_booking_path_menu(client.name or "", can_manage_booking=can_manage_booking),
+            menus.build_booking_path_menu(_display_name(client) or "", can_manage_booking=can_manage_booking),
         )
 
     conv_data = get_conversation_data(client)
@@ -813,6 +848,7 @@ def handle_reschedule_request(client, body: str, db: Session) -> tuple[str, str]
 HANDLER_MAP = {
     states.IDLE: handle_idle,
     states.AWAITING_NAME: handle_awaiting_name,
+    states.AWAITING_PREFERRED_NAME: handle_awaiting_preferred_name,
     states.AWAITING_BOOKING_PATH: handle_awaiting_booking_path,
     states.AWAITING_THERAPIST_PICK: handle_awaiting_therapist_pick,
     states.AWAITING_DURATION: handle_awaiting_duration,

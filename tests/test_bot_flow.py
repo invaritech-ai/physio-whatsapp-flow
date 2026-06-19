@@ -35,15 +35,25 @@ class TestNewClientFlow:
         assert client is not None
         assert client.conversation_state == states.AWAITING_NAME
 
-        # Message 2: Provide name → proceeds to booking-path selection
+        # Message 2: Provide official name → proceeds to preferred-name prompt
         form_data["Body"] = "John Smith"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_BOOKING_PATH
+        assert result["next_state"] == states.AWAITING_PREFERRED_NAME
         db_session.refresh(client)
         assert client.name == "John Smith"
+
+        # Message 2b: Provide preferred name → proceeds to booking-path selection
+        form_data["Body"] = "John"
+        form_data["MessageSid"] = "SM002b"
+        result = process_message(form_data, db_session)
+
+        assert result["status"] == "success"
+        assert result["next_state"] == states.AWAITING_BOOKING_PATH
+        db_session.refresh(client)
+        assert client.preferred_name == "John"
 
         # Message 3: Choose smart match path
         form_data["Body"] = "1"
@@ -91,13 +101,13 @@ class TestNewClientFlow:
         assert client.preferred_therapist_id == sample_therapist.id
         assert client.conversation_data is None  # Reset after completion
 
-        # Verify all messages logged (7 inbound + 7 outbound = 14 total)
+        # Verify all messages logged (8 inbound + 8 outbound = 16 total)
         message_logs = db_session.exec(select(MessageLog)).all()
-        assert len(message_logs) == 14
+        assert len(message_logs) == 16
         inbound_logs = [m for m in message_logs if m.direction == "inbound"]
         outbound_logs = [m for m in message_logs if m.direction == "outbound"]
-        assert len(inbound_logs) == 7
-        assert len(outbound_logs) == 7
+        assert len(inbound_logs) == 8
+        assert len(outbound_logs) == 8
 
     def test_invalid_input_recovery(
         self, db_session, sample_specialties, sample_therapist, mock_send_whatsapp
@@ -112,9 +122,14 @@ class TestNewClientFlow:
         }
         process_message(form_data, db_session)
 
-        # Provide name
+        # Provide official name
         form_data["Body"] = "Jane"
         form_data["MessageSid"] = "SM002"
+        process_message(form_data, db_session)
+
+        # Provide preferred name
+        form_data["Body"] = "Jane"
+        form_data["MessageSid"] = "SM002b"
         process_message(form_data, db_session)
 
         # Choose smart-match path first
