@@ -87,10 +87,12 @@ def _persist_slot_mapping_simple(
     *,
     slot_mapping: dict[str, str],
     slot_payouts: dict[str, int] | None = None,
+    extra_durations: list[str] | None = None,
 ) -> list[TherapistEventType]:
     """Replace a therapist's event types from raw booking links + optional
     therapist payouts, without a Calendly PAT. Preserves the Calendly event-type
-    URI for links that are unchanged from the existing mapping.
+    URI for links that are unchanged from the existing mapping. `extra_durations`
+    are offered session lengths with no booking link yet (URL added later).
     """
     existing = db.exec(
         select(TherapistEventType).where(TherapistEventType.therapist_id == therapist.id)
@@ -106,15 +108,36 @@ def _persist_slot_mapping_simple(
 
     payouts = slot_payouts or {}
     created: list[TherapistEventType] = []
+    seen: set[int] = set()
     for duration_str, raw_url in slot_mapping.items():
         link = (raw_url or "").strip()
         if not link:
             continue
+        duration = int(duration_str)
+        seen.add(duration)
         row = TherapistEventType(
             therapist_id=therapist.id,
             calendly_event_type_uri=uri_by_url.get(link.rstrip("/")),
-            duration_minutes=int(duration_str),
+            duration_minutes=duration,
             scheduling_url=link,
+            is_active=True,
+            payout_cents=payouts.get(duration_str),
+        )
+        db.add(row)
+        created.append(row)
+    for duration_str in extra_durations or []:
+        try:
+            duration = int(duration_str)
+        except (TypeError, ValueError):
+            continue
+        if duration in seen:
+            continue
+        seen.add(duration)
+        row = TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri=None,
+            duration_minutes=duration,
+            scheduling_url=None,
             is_active=True,
             payout_cents=payouts.get(duration_str),
         )
@@ -130,9 +153,11 @@ def _persist_slot_mapping_with_prices(
     slot_mapping: dict[str, str],
     validation_data: dict,
     slot_payouts: dict[str, int] | None = None,
+    extra_durations: list[str] | None = None,
 ) -> list[TherapistEventType]:
     """Replace a therapist's event types from a {duration: scheduling_url} map, with
     optional therapist payouts. Resolves event-type URIs against validated events.
+    `extra_durations` are offered lengths with no booking link yet.
     """
     url_to_event_type, uri_to_event_type = _calendly_event_lookups(validation_data)
     existing = db.exec(
@@ -144,17 +169,38 @@ def _persist_slot_mapping_with_prices(
 
     payouts = slot_payouts or {}
     created: list[TherapistEventType] = []
+    seen: set[int] = set()
     for duration_str, mapping_value in slot_mapping.items():
         scheduling_url, calendly_event_type_uri = _normalize_slot_mapping_entry(
             mapping_value,
             url_to_event_type=url_to_event_type,
             uri_to_event_type=uri_to_event_type,
         )
+        duration = int(duration_str)
+        seen.add(duration)
         row = TherapistEventType(
             therapist_id=therapist.id,
             calendly_event_type_uri=calendly_event_type_uri,
-            duration_minutes=int(duration_str),
+            duration_minutes=duration,
             scheduling_url=scheduling_url,
+            is_active=True,
+            payout_cents=payouts.get(duration_str),
+        )
+        db.add(row)
+        created.append(row)
+    for duration_str in extra_durations or []:
+        try:
+            duration = int(duration_str)
+        except (TypeError, ValueError):
+            continue
+        if duration in seen:
+            continue
+        seen.add(duration)
+        row = TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri=None,
+            duration_minutes=duration,
+            scheduling_url=None,
             is_active=True,
             payout_cents=payouts.get(duration_str),
         )
@@ -279,6 +325,7 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
                     slot_mapping=data.slot_mapping,
                     validation_data=validation_data,
                     slot_payouts=data.slot_payouts,
+                    extra_durations=data.slot_durations,
                 )
             except HTTPException:
                 db.rollback()
@@ -297,11 +344,13 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
                 db.rollback()
                 raise HTTPException(status_code=400, detail=sync_errors[0])
     elif data.slot_mapping:
-        # No PAT: persist booking links + payouts directly.
+        # No PAT: persist booking links + payouts directly. Any offered durations
+        # without a link (slot_durations) are stored as link-less rows too.
         _persist_slot_mapping_simple(
             db, therapist,
             slot_mapping=data.slot_mapping,
             slot_payouts=data.slot_payouts,
+            extra_durations=data.slot_durations,
         )
     elif data.slot_durations:
         # No PAT and no links yet: record the offered session lengths (+ optional
