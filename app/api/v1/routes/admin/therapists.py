@@ -86,11 +86,10 @@ def _persist_slot_mapping_simple(
     therapist: Therapist,
     *,
     slot_mapping: dict[str, str],
-    slot_prices: dict[str, int] | None,
     slot_payouts: dict[str, int] | None = None,
 ) -> list[TherapistEventType]:
-    """Replace a therapist's event types from raw booking links + optional prices
-    and therapist payouts, without a Calendly PAT. Preserves the Calendly event-type
+    """Replace a therapist's event types from raw booking links + optional
+    therapist payouts, without a Calendly PAT. Preserves the Calendly event-type
     URI for links that are unchanged from the existing mapping.
     """
     existing = db.exec(
@@ -105,22 +104,18 @@ def _persist_slot_mapping_simple(
         db.delete(et)
     db.flush()
 
-    prices = slot_prices or {}
     payouts = slot_payouts or {}
     created: list[TherapistEventType] = []
     for duration_str, raw_url in slot_mapping.items():
         link = (raw_url or "").strip()
         if not link:
             continue
-        amount = prices.get(duration_str)
         row = TherapistEventType(
             therapist_id=therapist.id,
             calendly_event_type_uri=uri_by_url.get(link.rstrip("/")),
             duration_minutes=int(duration_str),
             scheduling_url=link,
             is_active=True,
-            amount_cents=amount,
-            currency=settings.default_currency if amount is not None else None,
             payout_cents=payouts.get(duration_str),
         )
         db.add(row)
@@ -133,13 +128,11 @@ def _persist_slot_mapping_with_prices(
     therapist: Therapist,
     *,
     slot_mapping: dict[str, str],
-    slot_prices: dict[str, int] | None,
     validation_data: dict,
     slot_payouts: dict[str, int] | None = None,
 ) -> list[TherapistEventType]:
     """Replace a therapist's event types from a {duration: scheduling_url} map, with
-    optional per-duration prices and therapist payouts. Resolves event-type URIs
-    against validated events.
+    optional therapist payouts. Resolves event-type URIs against validated events.
     """
     url_to_event_type, uri_to_event_type = _calendly_event_lookups(validation_data)
     existing = db.exec(
@@ -149,7 +142,6 @@ def _persist_slot_mapping_with_prices(
         db.delete(et)
     db.flush()
 
-    prices = slot_prices or {}
     payouts = slot_payouts or {}
     created: list[TherapistEventType] = []
     for duration_str, mapping_value in slot_mapping.items():
@@ -158,15 +150,54 @@ def _persist_slot_mapping_with_prices(
             url_to_event_type=url_to_event_type,
             uri_to_event_type=uri_to_event_type,
         )
-        amount = prices.get(duration_str)
         row = TherapistEventType(
             therapist_id=therapist.id,
             calendly_event_type_uri=calendly_event_type_uri,
             duration_minutes=int(duration_str),
             scheduling_url=scheduling_url,
             is_active=True,
-            amount_cents=amount,
-            currency=settings.default_currency if amount is not None else None,
+            payout_cents=payouts.get(duration_str),
+        )
+        db.add(row)
+        created.append(row)
+    return created
+
+
+def _persist_slot_durations(
+    db: Session,
+    therapist: Therapist,
+    *,
+    slot_durations: list[str],
+    slot_payouts: dict[str, int] | None = None,
+) -> list[TherapistEventType]:
+    """Record the session lengths a therapist offers (+ optional payout) without a
+    booking link yet. The scheduling_url is filled in later from the edit screen.
+    Replaces the therapist's existing event types.
+    """
+    existing = db.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist.id)
+    ).all()
+    for et in existing:
+        db.delete(et)
+    db.flush()
+
+    payouts = slot_payouts or {}
+    created: list[TherapistEventType] = []
+    seen: set[int] = set()
+    for duration_str in slot_durations:
+        try:
+            duration = int(duration_str)
+        except (TypeError, ValueError):
+            continue
+        if duration in seen:
+            continue
+        seen.add(duration)
+        row = TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri=None,
+            duration_minutes=duration,
+            scheduling_url=None,
+            is_active=True,
             payout_cents=payouts.get(duration_str),
         )
         db.add(row)
@@ -246,24 +277,38 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
                 _persist_slot_mapping_with_prices(
                     db, therapist,
                     slot_mapping=data.slot_mapping,
-                    slot_prices=data.slot_prices,
                     validation_data=validation_data,
                     slot_payouts=data.slot_payouts,
                 )
             except HTTPException:
                 db.rollback()
                 raise
+        elif data.slot_durations:
+            # Verified the token but the admin chose offered durations (no links yet).
+            # Keep that selection; booking links are added later from the edit screen.
+            _persist_slot_durations(
+                db, therapist,
+                slot_durations=data.slot_durations,
+                slot_payouts=data.slot_payouts,
+            )
         else:
             _, sync_errors = sync_event_types(db, therapist, calendly_pat=pat)
             if sync_errors:
                 db.rollback()
                 raise HTTPException(status_code=400, detail=sync_errors[0])
     elif data.slot_mapping:
-        # No PAT: persist booking links + prices + payouts directly.
+        # No PAT: persist booking links + payouts directly.
         _persist_slot_mapping_simple(
             db, therapist,
             slot_mapping=data.slot_mapping,
-            slot_prices=data.slot_prices,
+            slot_payouts=data.slot_payouts,
+        )
+    elif data.slot_durations:
+        # No PAT and no links yet: record the offered session lengths (+ optional
+        # payout). Booking links are added later from the therapist's edit screen.
+        _persist_slot_durations(
+            db, therapist,
+            slot_durations=data.slot_durations,
             slot_payouts=data.slot_payouts,
         )
 
@@ -375,8 +420,6 @@ def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_adm
             duration_minutes=et.duration_minutes,
             scheduling_url=et.scheduling_url,
             calendly_event_type_uri=et.calendly_event_type_uri,
-            amount_cents=et.amount_cents,
-            currency=et.currency,
             payout_cents=et.payout_cents,
         )
         for et in event_types
@@ -428,7 +471,6 @@ def admin_update_slot_mapping(
             created = _persist_slot_mapping_with_prices(
                 db, therapist,
                 slot_mapping=data.slot_mapping,
-                slot_prices=data.slot_prices,
                 validation_data=validation_data,
                 slot_payouts=data.slot_payouts,
             )
@@ -440,7 +482,6 @@ def admin_update_slot_mapping(
         created = _persist_slot_mapping_simple(
             db, therapist,
             slot_mapping=data.slot_mapping,
-            slot_prices=data.slot_prices,
             slot_payouts=data.slot_payouts,
         )
 
@@ -450,8 +491,6 @@ def admin_update_slot_mapping(
             duration_minutes=et.duration_minutes,
             scheduling_url=et.scheduling_url,
             calendly_event_type_uri=et.calendly_event_type_uri,
-            amount_cents=et.amount_cents,
-            currency=et.currency,
             payout_cents=et.payout_cents,
         )
         for et in sorted(created, key=lambda e: e.duration_minutes)
