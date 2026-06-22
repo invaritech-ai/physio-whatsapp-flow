@@ -130,10 +130,13 @@ class TestHandleIdle:
 
         next_state, response = handle_idle(client, "1", db_session)
 
-        assert next_state == states.AWAITING_DURATION
+        # Rebooking a preferred therapist now shows that therapist's own durations
+        # up front (no generic 45/30/60 prompt that could offer an unavailable one).
+        assert next_state == states.AWAITING_BY_NAME_DURATION_OPTIONS
         assert client.preferred_therapist_id == sample_therapist.id
         conv_data = json.loads(client.conversation_data or "{}")
         assert conv_data.get("rebooking") is True
+        assert conv_data.get("by_name_duration_therapist_id") == sample_therapist.id
 
     def test_preferred_therapist_choice_2_clears_and_books(
         self, db_session, sample_therapist

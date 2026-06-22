@@ -25,7 +25,7 @@ from app.services.matching import match_therapist
 logger = logging.getLogger(__name__)
 GREETING_KEYWORDS = {"hi", "hello", "hey", "menu", "reset", "start"}
 FEMALE_SPECIALTY_KEYWORDS = ("women", "female")
-SUPPORTED_BOOKING_DURATIONS = (45, 30)
+SUPPORTED_BOOKING_DURATIONS = (45, 30, 60)
 
 
 def _extract_name(body: str) -> str:
@@ -348,6 +348,15 @@ def handle_idle(client, body: str, db: Session) -> tuple[str, str]:
             )
             db.add(client)
             db.commit()
+            therapist = db.exec(
+                select(Therapist).where(
+                    Therapist.id == client.preferred_therapist_id,
+                    Therapist.is_active == True,  # noqa: E712
+                )
+            ).first()
+            if therapist:
+                # Show the preferred therapist's actual durations up front.
+                return _start_by_name_duration_selection(client, therapist, db)
             return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
         if choice == 2:
             update_conversation_data(
@@ -506,6 +515,55 @@ def handle_awaiting_preferred_name(client, body: str, db: Session) -> tuple[str,
     )
 
 
+def _start_by_name_duration_selection(client, therapist, db: Session) -> tuple[str, str]:
+    """Show only the durations the selected therapist actually offers (with a
+    booking link), so we never present a choice that gets rejected later."""
+    event_types = list(
+        db.exec(
+            select(TherapistEventType)
+            .where(
+                TherapistEventType.therapist_id == therapist.id,
+                TherapistEventType.duration_minutes.in_(SUPPORTED_BOOKING_DURATIONS),  # type: ignore[arg-type]
+                TherapistEventType.is_active == True,  # noqa: E712
+            )
+            .order_by(TherapistEventType.duration_minutes.desc(), TherapistEventType.id.asc())
+        ).all()
+    )
+    duration_option_map: dict[int, str] = {}
+    for candidate in event_types:
+        # Only offer durations that have a real booking link configured.
+        if candidate.duration_minutes in duration_option_map:
+            continue
+        if (candidate.scheduling_url or "").strip():
+            duration_option_map[candidate.duration_minutes] = candidate.scheduling_url
+
+    if not duration_option_map:
+        reset_conversation(client, db)
+        return (
+            states.IDLE,
+            f"Sorry, {therapist.display_name} does not currently have bookable durations. "
+            "Please type 'menu' to restart.",
+        )
+
+    duration_options = sorted(duration_option_map.keys(), reverse=True)
+    update_conversation_data(
+        client,
+        by_name_duration_options=[
+            {"duration_minutes": minutes, "scheduling_url": duration_option_map[minutes]}
+            for minutes in duration_options
+        ],
+        by_name_duration_therapist_id=therapist.id,
+    )
+    db.add(client)
+    db.commit()
+    return (
+        states.AWAITING_BY_NAME_DURATION_OPTIONS,
+        menus.build_by_name_available_duration_menu(
+            therapist.display_name, duration_options, is_fallback=False
+        ),
+    )
+
+
 def handle_awaiting_therapist_pick(client, body: str, db: Session) -> tuple[str, str]:
     """Handle deterministic therapist selection for book-by-name flow."""
     conv_data = get_conversation_data(client)
@@ -536,7 +594,17 @@ def handle_awaiting_therapist_pick(client, body: str, db: Session) -> tuple[str,
     )
     db.add(client)
     db.commit()
-    return (states.AWAITING_DURATION, menus.build_duration_menu(_display_name(client) or ""))
+    therapist = db.exec(
+        select(Therapist).where(
+            Therapist.id == selected_therapist_id,
+            Therapist.is_active == True,  # noqa: E712
+        )
+    ).first()
+    if not therapist:
+        reset_conversation(client, db)
+        return (states.IDLE, menus.build_error_message())
+    # Show that therapist's actual durations up front (no static 45/30/60 prompt).
+    return _start_by_name_duration_selection(client, therapist, db)
 
 
 def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
@@ -582,6 +650,9 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
                 TherapistEventType.is_active == True,  # noqa: E712
             )
         ).first()
+        # A duration with no booking link yet is not bookable — treat as unavailable.
+        if event_type and not (event_type.scheduling_url or "").strip():
+            event_type = None
         if not event_type:
             event_types = list(
                 db.exec(
@@ -596,7 +667,9 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
             )
             duration_option_map: dict[int, str] = {}
             for candidate in event_types:
-                if candidate.duration_minutes not in duration_option_map:
+                if candidate.duration_minutes in duration_option_map:
+                    continue
+                if (candidate.scheduling_url or "").strip():
                     duration_option_map[candidate.duration_minutes] = candidate.scheduling_url
 
             if not duration_option_map:

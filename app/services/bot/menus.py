@@ -257,20 +257,33 @@ def build_therapist_pick_menu(therapists: list[tuple[int, str]]) -> str:
 def build_by_name_available_duration_menu(
     therapist_name: str,
     duration_options_minutes: list[int],
+    *,
+    is_fallback: bool = True,
 ) -> str:
-    """Build menu for durations available for a selected therapist."""
+    """Build menu for durations available for a selected therapist.
+
+    ``is_fallback`` True is shown when the client's chosen duration wasn't
+    available; False is the first prompt for a therapist (shows only the
+    durations that therapist actually offers).
+    """
     if not duration_options_minutes:
         return (
             f"Sorry, {therapist_name} does not currently have bookable durations.\n\n"
             "Please type 'menu' to restart."
         )
 
-    lines = [
-        f"{therapist_name} does not offer your previous duration choice right now.",
-        "",
-        "Please choose one of the available durations:",
-        "",
-    ]
+    if is_fallback:
+        lines = [
+            f"{therapist_name} does not offer your previous duration choice right now.",
+            "",
+            "Please choose one of the available durations:",
+            "",
+        ]
+    else:
+        lines = [
+            f"How long would you like your session with {therapist_name} to be?",
+            "",
+        ]
     for idx, duration in enumerate(duration_options_minutes, 1):
         label = "45 minutes - Standard Appointment" if duration == 45 else f"{duration} minutes"
         lines.append(f"{_get_specialty_emoji(idx)} {label}")
