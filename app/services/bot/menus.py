@@ -192,14 +192,18 @@ def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | N
 
     lines = ["Here are your upcoming appointments:\n"]
 
+    any_manageable = False
     for idx, session in enumerate(upcoming_sessions, 1):
         lines.append(f"\n{idx}. {session['start_time']}")
         lines.append(f"   Therapist: {session['therapist_name']}")
         if session.get("within_cutoff"):
             lines.append(
-                f"   ⏰ Within 24 hours of the appointment — to change or cancel, please {admin_contact}."
+                "   ⏰ Sorry, we're unable to reschedule or cancel this appointment over WhatsApp "
+                "because it's less than 24 hours away."
             )
+            lines.append(f"   To change or cancel, please {admin_contact}.")
             continue
+        any_manageable = True
         reschedule_url = session.get("reschedule_url")
         cancel_url = session.get("cancel_url")
         if reschedule_url:
@@ -211,7 +215,9 @@ def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | N
         else:
             lines.append("   ❌ Cancel: Please reply 'help cancel' and admin will assist.")
 
-    lines.append("\n💡 Click the links above to manage your appointments.")
+    # Only point to links when at least one appointment can be managed here.
+    if any_manageable:
+        lines.append("\n💡 Click the links above to manage your appointments.")
 
     return "\n".join(lines)
 
@@ -245,20 +251,33 @@ def build_therapist_pick_menu(therapists: list[tuple[int, str]]) -> str:
 def build_by_name_available_duration_menu(
     therapist_name: str,
     duration_options_minutes: list[int],
+    *,
+    is_fallback: bool = True,
 ) -> str:
-    """Build menu for durations available for a selected therapist."""
+    """Build menu for durations available for a selected therapist.
+
+    ``is_fallback`` True is shown when the client's chosen duration wasn't
+    available; False is the first prompt for a therapist (shows only the
+    durations that therapist actually offers).
+    """
     if not duration_options_minutes:
         return (
             f"Sorry, {therapist_name} does not currently have bookable durations.\n\n"
             "Please type 'menu' to restart."
         )
 
-    lines = [
-        f"{therapist_name} does not offer your previous duration choice right now.",
-        "",
-        "Please choose one of the available durations:",
-        "",
-    ]
+    if is_fallback:
+        lines = [
+            f"{therapist_name} does not offer your previous duration choice right now.",
+            "",
+            "Please choose one of the available durations:",
+            "",
+        ]
+    else:
+        lines = [
+            f"How long would you like your session with {therapist_name} to be?",
+            "",
+        ]
     for idx, duration in enumerate(duration_options_minutes, 1):
         label = "45 minutes - Standard Appointment" if duration == 45 else f"{duration} minutes"
         lines.append(f"{_get_specialty_emoji(idx)} {label}")
