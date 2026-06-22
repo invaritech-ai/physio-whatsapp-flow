@@ -119,7 +119,7 @@ def test_within_24h_blocks_links_and_directs_to_admin(db_session):
     mock_links.assert_not_called()
 
     message = build_reschedule_menu(upcoming, admin_whatsapp="+85291234567")
-    assert "within 24 hours" in message.lower()
+    assert "less than 24 hours" in message.lower()
     assert "+85291234567" in message
     assert "calendly.com" not in message
 
@@ -142,4 +142,4 @@ def test_outside_24h_allows_links(db_session):
     assert upcoming[0]["within_cutoff"] is False
     message = build_reschedule_menu(upcoming, admin_whatsapp="+85291234567")
     assert "https://calendly.com/reschedulings/ABC123" in message
-    assert "within 24 hours" not in message.lower()
+    assert "less than 24 hours" not in message.lower()

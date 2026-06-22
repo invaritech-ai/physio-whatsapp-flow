@@ -4,7 +4,7 @@ import json
 
 from sqlmodel import select
 
-from app.models import Client, MessageLog, Therapist, User
+from app.models import Client, MessageLog, Therapist, TherapistEventType, User
 from app.services.bot import states
 from app.services.bot.router import process_message
 
@@ -189,7 +189,8 @@ class TestReturningClientFlow:
         result = process_message(form_data, db_session)
 
         assert result["status"] == "success"
-        assert result["next_state"] == states.AWAITING_DURATION
+        # Rebook now shows the preferred therapist's own durations directly.
+        assert result["next_state"] == states.AWAITING_BY_NAME_DURATION_OPTIONS
 
     def test_returning_client_without_preferred_therapist(
         self, db_session, mock_send_whatsapp
@@ -256,7 +257,7 @@ class TestRebookFlow:
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
-        assert result["next_state"] == states.AWAITING_DURATION
+        assert result["next_state"] == states.AWAITING_BY_NAME_DURATION_OPTIONS
 
         # Verify preferred therapist preserved
         db_session.refresh(client)
@@ -602,6 +603,18 @@ class TestMediaAndEmptyMessages:
         db_session.refresh(therapist1)
         db_session.refresh(therapist2)
 
+        # Preferred therapist needs a bookable duration so rebook can offer it.
+        db_session.add(
+            TherapistEventType(
+                therapist_id=therapist2.id,
+                duration_minutes=45,
+                scheduling_url="https://calendly.com/dr-two/45min",
+                calendly_event_type_uri="https://api.calendly.com/event_types/T2-45",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
         # Create client with preferred therapist 2
         client = Client(
             phone_e164="+85212345678",
@@ -626,7 +639,7 @@ class TestMediaAndEmptyMessages:
         form_data["Body"] = "1"
         form_data["MessageSid"] = "SM002"
         result = process_message(form_data, db_session)
-        assert result["next_state"] == states.AWAITING_DURATION
+        assert result["next_state"] == states.AWAITING_BY_NAME_DURATION_OPTIONS
 
         # Verify preferred therapist has been pinned for direct duration->link path.
         db_session.refresh(client)
