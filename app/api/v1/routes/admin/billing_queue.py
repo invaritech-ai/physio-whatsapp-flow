@@ -15,7 +15,6 @@ from app.models import User
 from app.services.billing_queue import QuickRange, _quick_range_bounds, get_billing_queue_optimized
 from app.services.pricing import (
     load_active_plan_map,
-    load_therapist_slot_price_map,
     resolve_expected_charge,
 )
 from app.services.timezone_utils import normalize_query_datetime, to_preferred_timezone
@@ -58,9 +57,7 @@ def get_billing_queue(
         return BillingQueueResponse(items=[], total=0, limit=limit, offset=offset, has_more=False)
 
     client_ids = {item["client_id"] for item in raw_items}
-    therapist_ids = {item["therapist_id"] for item in raw_items}
     plan_map = load_active_plan_map(db, client_ids=client_ids)
-    slot_price_map = load_therapist_slot_price_map(db, therapist_ids=therapist_ids)
 
     items: list[BillingQueueItem] = []
     for row in raw_items:
@@ -81,7 +78,7 @@ def get_billing_queue(
             currency=row["currency"],
         )
         expected_charge_cents, _, assigned_plan = resolve_expected_charge(
-            stub_session, plan_map=plan_map, slot_price_map=slot_price_map
+            stub_session, plan_map=plan_map
         )
         expected_charge_cents = (
             expected_charge_cents

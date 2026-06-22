@@ -280,6 +280,34 @@ class TestCreateTherapist:
         assert rows[0].calendly_event_type_uri == "https://api.calendly.com/event_types/E30"
         assert rows[1].scheduling_url == "https://calendly.com/map/45"
 
+    def test_create_therapist_with_slot_durations_no_links(self, client, db_session: Session):
+        """Admin can record offered session lengths (+ pay) with no booking link yet."""
+        from app.models import TherapistEventType
+
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "durations@test.com",
+                "display_name": "Dr. Durations",
+                "slot_durations": ["30", "60"],
+                "slot_payouts": {"30": 40000},
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        rows = db_session.exec(
+            select(TherapistEventType)
+            .where(TherapistEventType.therapist_id == data["id"])
+            .order_by(TherapistEventType.duration_minutes)
+        ).all()
+        assert [r.duration_minutes for r in rows] == [30, 60]
+        # No booking link / Calendly event yet — added later from the edit screen.
+        assert all(r.scheduling_url is None for r in rows)
+        assert all(r.calendly_event_type_uri is None for r in rows)
+        assert rows[0].payout_cents == 40000
+        assert rows[1].payout_cents is None
+
     def test_create_therapist_with_invalid_calendly_pat_rolls_back(
         self, client, db_session: Session, monkeypatch
     ):

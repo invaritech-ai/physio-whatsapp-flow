@@ -20,12 +20,11 @@ class TherapistEventType(SQLModel, table=True):
     therapist_id: int = Field(foreign_key="therapist.id", index=True)
     calendly_event_type_uri: str | None = Field(default=None, index=True)  # e.g., "https://api.calendly.com/event_types/XXXXX"
     duration_minutes: int
-    scheduling_url: str  # Public booking link
+    # Public booking link. Nullable: an admin can record the session lengths a
+    # therapist offers (duration + payout) before a booking link is set; the link
+    # is added later from the edit screen.
+    scheduling_url: str | None = Field(default=None)
     is_active: bool = Field(default=True)
-    # Optional per-therapist price for this session length. When set, it takes
-    # precedence over client billing plans when resolving the expected charge.
-    amount_cents: int | None = Field(default=None)
-    currency: str | None = Field(default=None, max_length=8)
     # Optional therapist compensation (payout) for completing a session of this
-    # duration — drives payroll. Independent of the client-facing amount_cents.
+    # duration — drives payroll. Independent of the client-facing billing plan.
     payout_cents: int | None = Field(default=None)

@@ -23,7 +23,6 @@ from app.services.calendly import get_event_type_available_times_with_pat
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 from app.services.pricing import (
     load_active_plan_map,
-    load_therapist_slot_price_map,
     resolve_expected_charge,
 )
 
@@ -52,12 +51,10 @@ def _build_list_item(
     therapist_name: str | None,
     preferred_timezone: str | None,
     plan_map: dict[tuple[int, int], dict[str, object]],
-    slot_price_map: dict[tuple[int, int], dict[str, object]] | None = None,
 ) -> AdminSessionListItem:
     expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
         row,
         plan_map=plan_map,
-        slot_price_map=slot_price_map,
     )
     return AdminSessionListItem(
         id=row.id,
@@ -85,12 +82,10 @@ def _build_detail_response(
     therapist_name: str | None,
     preferred_timezone: str | None,
     plan_map: dict[tuple[int, int], dict[str, object]],
-    slot_price_map: dict[tuple[int, int], dict[str, object]] | None = None,
 ) -> AdminSessionDetailResponse:
     expected_charge_cents, expected_charge_currency, assigned_plan = resolve_expected_charge(
         row,
         plan_map=plan_map,
-        slot_price_map=slot_price_map,
     )
     return AdminSessionDetailResponse(
         id=row.id,
@@ -222,7 +217,6 @@ def list_sessions(
         therapist_map = {item.id: item for item in therapist_rows}
 
     plan_map = load_active_plan_map(db, client_ids=client_ids)
-    slot_price_map = load_therapist_slot_price_map(db, therapist_ids=therapist_ids)
     items = [
         _build_list_item(
             row,
@@ -230,7 +224,6 @@ def list_sessions(
             therapist_name=therapist_map.get(row.therapist_id).display_name if therapist_map.get(row.therapist_id) else None,
             preferred_timezone=admin.preferred_timezone,
             plan_map=plan_map,
-            slot_price_map=slot_price_map,
         )
         for row in rows
     ]
@@ -331,14 +324,12 @@ def create_session(
     db.refresh(session)
 
     plan_map = load_active_plan_map(db, client_ids={client.id})
-    slot_price_map = load_therapist_slot_price_map(db, therapist_ids={session.therapist_id})
     return _build_detail_response(
         session,
         client_name=client.name,
         therapist_name=therapist.display_name,
         preferred_timezone=admin.preferred_timezone,
         plan_map=plan_map,
-        slot_price_map=slot_price_map,
     )
 
 
@@ -353,14 +344,12 @@ def get_session_detail(
     client = db.get(Client, row.client_id)
     therapist = db.get(Therapist, row.therapist_id)
     plan_map = load_active_plan_map(db, client_ids={row.client_id})
-    slot_price_map = load_therapist_slot_price_map(db, therapist_ids={row.therapist_id})
     return _build_detail_response(
         row,
         client_name=client.name if client else None,
         therapist_name=therapist.display_name if therapist else None,
         preferred_timezone=admin.preferred_timezone,
         plan_map=plan_map,
-        slot_price_map=slot_price_map,
     )
 
 
@@ -440,14 +429,12 @@ def update_session(
     client = db.get(Client, row.client_id)
     therapist = db.get(Therapist, row.therapist_id)
     plan_map = load_active_plan_map(db, client_ids={row.client_id})
-    slot_price_map = load_therapist_slot_price_map(db, therapist_ids={row.therapist_id})
     return _build_detail_response(
         row,
         client_name=client.name if client else None,
         therapist_name=therapist.display_name if therapist else None,
         preferred_timezone=admin.preferred_timezone,
         plan_map=plan_map,
-        slot_price_map=slot_price_map,
     )
 
 

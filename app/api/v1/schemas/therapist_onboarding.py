@@ -45,9 +45,7 @@ class SlotMappingInfo(BaseModel):
 
     duration_minutes: int
     calendly_event_type_uri: str | None = None
-    scheduling_url: str
-    amount_cents: int | None = None
-    currency: str | None = None
+    scheduling_url: str | None = None
     payout_cents: int | None = None
 
 
@@ -185,10 +183,6 @@ class SaveCalendlyRequest(BaseModel):
         ...,
         description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'; '60' is optional. URLs may be shared.",
     )
-    slot_prices: dict[str, int] | None = Field(
-        default=None,
-        description="Optional per-duration price in cents, keyed by duration minutes (e.g. {'30': 70000}).",
-    )
 
     @model_validator(mode="after")
     def validate_slot_mapping(self) -> "SaveCalendlyRequest":
@@ -221,10 +215,6 @@ class UpdateSlotMappingRequest(BaseModel):
     slot_mapping: dict[str, str] = Field(
         ...,
         description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'; '60' is optional.",
-    )
-    slot_prices: dict[str, int] | None = Field(
-        default=None,
-        description="Optional per-duration price in cents, keyed by duration minutes.",
     )
 
     @model_validator(mode="after")
