@@ -38,7 +38,9 @@ class TherapistCreate(BaseModel):
     # (with calendly_pat), event types are created from it; otherwise they are auto-synced.
     slot_mapping: dict[str, str] | None = Field(default=None, description="Map of duration -> Calendly scheduling URL")
     # Optional per-duration price in cents, keyed by duration minutes.
-    slot_prices: dict[str, int] | None = Field(default=None, description="Map of duration -> price in cents")
+    slot_prices: dict[str, int] | None = Field(default=None, description="Map of duration -> client price in cents")
+    # Optional per-duration therapist payout in cents, keyed by duration minutes.
+    slot_payouts: dict[str, int] | None = Field(default=None, description="Map of duration -> therapist payout in cents")
 
 
 class TherapistUpdate(BaseModel):
@@ -67,7 +69,8 @@ class AdminSlotMappingUpdateRequest(BaseModel):
     """Admin update of a therapist's booking-link slot mapping + per-slot prices."""
 
     slot_mapping: dict[str, str] = Field(..., description="duration -> Calendly scheduling URL")
-    slot_prices: dict[str, int] | None = Field(default=None, description="duration -> price in cents")
+    slot_prices: dict[str, int] | None = Field(default=None, description="duration -> client price in cents")
+    slot_payouts: dict[str, int] | None = Field(default=None, description="duration -> therapist payout in cents")
     # Optional: only needed when the therapist has no stored Calendly PAT yet.
     calendly_pat: str | None = Field(default=None, min_length=1)
 

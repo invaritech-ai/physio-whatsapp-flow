@@ -309,6 +309,93 @@ def test_admin_reports_payroll_counts_new_durations(client, db_session: Session)
     assert item["estimated_payable_cents"] == 0
 
 
+def _set_payout(db_session: Session, therapist_id: int, duration: int, payout_cents: int) -> None:
+    from app.models import TherapistEventType
+
+    db_session.add(
+        TherapistEventType(
+            therapist_id=therapist_id,
+            duration_minutes=duration,
+            scheduling_url=f"https://cal/{duration}",
+            is_active=True,
+            payout_cents=payout_cents,
+        )
+    )
+    db_session.commit()
+
+
+def test_admin_reports_payroll_uses_configured_payouts(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, "payout")
+    client_row = _create_client(db_session, "+85296660055", "Payout Client")
+    now = datetime.now(timezone.utc)
+    period_from = now - timedelta(days=1)
+    period_to = now + timedelta(days=1)
+
+    _set_payout(db_session, therapist.id, 30, 25000)
+    _set_payout(db_session, therapist.id, 45, 35000)
+    for minutes in (30, 30, 45):
+        _create_session(
+            db_session,
+            client_id=client_row.id,
+            therapist_id=therapist.id,
+            start_time=now - timedelta(minutes=minutes),
+            duration_minutes=minutes,
+            status="completed",
+            charge_amount_cents=None,
+        )
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            "/api/v1/admin/reports/therapist-payroll",
+            params={"from": period_from.isoformat(), "to": period_to.isoformat()},
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["completed_sessions"] == 3
+    # 2 x 30min @ 25000 + 1 x 45min @ 35000 = 85000
+    assert item["estimated_payable_cents"] == 85000
+
+
+def test_admin_reports_payroll_detail(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, "detail")
+    client_row = _create_client(db_session, "+85296660066", "Detail Client")
+    now = datetime.now(timezone.utc)
+    period_from = now - timedelta(days=1)
+    period_to = now + timedelta(days=1)
+
+    _set_payout(db_session, therapist.id, 30, 25000)
+    _set_payout(db_session, therapist.id, 45, 35000)
+    for minutes in (30, 45):
+        _create_session(
+            db_session,
+            client_id=client_row.id,
+            therapist_id=therapist.id,
+            start_time=now - timedelta(minutes=minutes),
+            duration_minutes=minutes,
+            status="completed",
+            charge_amount_cents=None,
+        )
+
+    with _admin_auth_context(admin):
+        response = client.get(
+            f"/api/v1/admin/reports/therapist-payroll/{therapist.id}",
+            params={"from": period_from.isoformat(), "to": period_to.isoformat()},
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_sessions"] == 2
+    assert data["total_minutes"] == 75
+    assert data["total_pay_cents"] == 60000
+    assert len(data["sessions"]) == 2
+    payouts = sorted(s["payout_cents"] for s in data["sessions"])
+    assert payouts == [25000, 35000]
+    assert all(s["client_name"] == "Detail Client" for s in data["sessions"])
+
+
 def test_admin_reports_reject_invalid_range(client, db_session: Session):
     admin = _create_admin(db_session)
     now = datetime.now(timezone.utc)

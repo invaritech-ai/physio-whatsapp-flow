@@ -1,15 +1,17 @@
 """Reschedule/cancel helper - lookup upcoming sessions for client."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 
 from sqlmodel import Session, select
 from sqlmodel import func
 
+from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.models import Session as TherapySession
 from app.models import Therapist
 from app.services.calendly import get_invitee_links_with_pat
+from app.services.timezone_utils import as_utc
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,8 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
 
     sessions = db.exec(stmt).all()
 
+    cutoff = timedelta(hours=settings.reschedule_min_hours_advance)
+
     result = []
     for session in sessions:
         # Get therapist name
@@ -51,11 +55,20 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
         # Format start time
         start_time_str = session.start_time.strftime("%A, %B %d at %I:%M %p")
 
-        # Fetch true client-facing links from invitee resource.
-        # Never expose raw Calendly API URIs to clients.
+        # Within the cutoff (e.g. <24h away) reschedule/cancel via WhatsApp is blocked:
+        # the client is directed to the admin instead, so we don't fetch/show links.
+        within_cutoff = (as_utc(session.start_time) - now) < cutoff
+
         reschedule_url = None
         cancel_url = None
-        if session.calendly_invitee_uri and therapist and therapist.calendly_pat_encrypted:
+        if (
+            not within_cutoff
+            and session.calendly_invitee_uri
+            and therapist
+            and therapist.calendly_pat_encrypted
+        ):
+            # Fetch true client-facing links from invitee resource.
+            # Never expose raw Calendly API URIs to clients.
             try:
                 pat = decrypt_string(therapist.calendly_pat_encrypted)
                 invitee_links = get_invitee_links_with_pat(session.calendly_invitee_uri, pat)
@@ -75,6 +88,7 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
                 "therapist_name": therapist_name,
                 "reschedule_url": reschedule_url,
                 "cancel_url": cancel_url,
+                "within_cutoff": within_cutoff,
             }
         )
 

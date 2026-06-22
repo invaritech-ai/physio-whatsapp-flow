@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     business_phone: str = "63121852"
     business_email: str = "hello@movementfitnesshk.com"
 
+    # Reschedule/cancel via WhatsApp is blocked within this many hours of the
+    # appointment; clients are directed to the admin WhatsApp number instead.
+    reschedule_min_hours_advance: int = 24
+    admin_whatsapp_number: str | None = None
+
     neon_auth_url: str | None = None
     neon_jwks_url: str | None = None
     neon_jwt_issuer: str | None = None
