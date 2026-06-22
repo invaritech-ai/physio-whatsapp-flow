@@ -87,10 +87,11 @@ def _persist_slot_mapping_simple(
     *,
     slot_mapping: dict[str, str],
     slot_prices: dict[str, int] | None,
+    slot_payouts: dict[str, int] | None = None,
 ) -> list[TherapistEventType]:
-    """Replace a therapist's event types from raw booking links + optional prices,
-    without a Calendly PAT. Preserves the Calendly event-type URI for links that
-    are unchanged from the existing mapping.
+    """Replace a therapist's event types from raw booking links + optional prices
+    and therapist payouts, without a Calendly PAT. Preserves the Calendly event-type
+    URI for links that are unchanged from the existing mapping.
     """
     existing = db.exec(
         select(TherapistEventType).where(TherapistEventType.therapist_id == therapist.id)
@@ -105,6 +106,7 @@ def _persist_slot_mapping_simple(
     db.flush()
 
     prices = slot_prices or {}
+    payouts = slot_payouts or {}
     created: list[TherapistEventType] = []
     for duration_str, raw_url in slot_mapping.items():
         link = (raw_url or "").strip()
@@ -119,6 +121,7 @@ def _persist_slot_mapping_simple(
             is_active=True,
             amount_cents=amount,
             currency=settings.default_currency if amount is not None else None,
+            payout_cents=payouts.get(duration_str),
         )
         db.add(row)
         created.append(row)
@@ -132,9 +135,11 @@ def _persist_slot_mapping_with_prices(
     slot_mapping: dict[str, str],
     slot_prices: dict[str, int] | None,
     validation_data: dict,
+    slot_payouts: dict[str, int] | None = None,
 ) -> list[TherapistEventType]:
     """Replace a therapist's event types from a {duration: scheduling_url} map, with
-    optional per-duration prices. Resolves event-type URIs against validated events.
+    optional per-duration prices and therapist payouts. Resolves event-type URIs
+    against validated events.
     """
     url_to_event_type, uri_to_event_type = _calendly_event_lookups(validation_data)
     existing = db.exec(
@@ -145,6 +150,7 @@ def _persist_slot_mapping_with_prices(
     db.flush()
 
     prices = slot_prices or {}
+    payouts = slot_payouts or {}
     created: list[TherapistEventType] = []
     for duration_str, mapping_value in slot_mapping.items():
         scheduling_url, calendly_event_type_uri = _normalize_slot_mapping_entry(
@@ -161,6 +167,7 @@ def _persist_slot_mapping_with_prices(
             is_active=True,
             amount_cents=amount,
             currency=settings.default_currency if amount is not None else None,
+            payout_cents=payouts.get(duration_str),
         )
         db.add(row)
         created.append(row)
@@ -241,6 +248,7 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
                     slot_mapping=data.slot_mapping,
                     slot_prices=data.slot_prices,
                     validation_data=validation_data,
+                    slot_payouts=data.slot_payouts,
                 )
             except HTTPException:
                 db.rollback()
@@ -251,11 +259,12 @@ def create_therapist(data: TherapistCreate, admin: User = Depends(get_current_ad
                 db.rollback()
                 raise HTTPException(status_code=400, detail=sync_errors[0])
     elif data.slot_mapping:
-        # No PAT: persist booking links + prices directly.
+        # No PAT: persist booking links + prices + payouts directly.
         _persist_slot_mapping_simple(
             db, therapist,
             slot_mapping=data.slot_mapping,
             slot_prices=data.slot_prices,
+            slot_payouts=data.slot_payouts,
         )
 
     db.commit()
@@ -368,6 +377,7 @@ def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_adm
             calendly_event_type_uri=et.calendly_event_type_uri,
             amount_cents=et.amount_cents,
             currency=et.currency,
+            payout_cents=et.payout_cents,
         )
         for et in event_types
     ]
@@ -420,16 +430,18 @@ def admin_update_slot_mapping(
                 slot_mapping=data.slot_mapping,
                 slot_prices=data.slot_prices,
                 validation_data=validation_data,
+                slot_payouts=data.slot_payouts,
             )
         except HTTPException:
             db.rollback()
             raise
     else:
-        # No PAT: persist booking links + prices directly.
+        # No PAT: persist booking links + prices + payouts directly.
         created = _persist_slot_mapping_simple(
             db, therapist,
             slot_mapping=data.slot_mapping,
             slot_prices=data.slot_prices,
+            slot_payouts=data.slot_payouts,
         )
 
     db.commit()
@@ -440,6 +452,7 @@ def admin_update_slot_mapping(
             calendly_event_type_uri=et.calendly_event_type_uri,
             amount_cents=et.amount_cents,
             currency=et.currency,
+            payout_cents=et.payout_cents,
         )
         for et in sorted(created, key=lambda e: e.duration_minutes)
     ]

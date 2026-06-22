@@ -48,6 +48,7 @@ class SlotMappingInfo(BaseModel):
     scheduling_url: str
     amount_cents: int | None = None
     currency: str | None = None
+    payout_cents: int | None = None
 
 
 # Request schemas

@@ -10,7 +10,7 @@ from app.services.bot.menus import build_reschedule_menu
 from app.services.bot.reschedule import get_upcoming_sessions_with_links
 
 
-def _seed_client_session(db_session):
+def _seed_client_session(db_session, hours_ahead: int = 48):
     user = User(
         neon_auth_sub="reschedule-links-therapist-sub",
         email="reschedule-links-therapist@test.com",
@@ -41,7 +41,7 @@ def _seed_client_session(db_session):
     db_session.commit()
     db_session.refresh(client)
 
-    start_time = datetime.now(timezone.utc) + timedelta(days=1)
+    start_time = datetime.now(timezone.utc) + timedelta(hours=hours_ahead)
     session = TherapySession(
         client_id=client.id,
         therapist_id=therapist.id,
@@ -95,3 +95,51 @@ def test_reschedule_menu_never_shows_raw_api_links_when_invitee_links_missing(db
     assert "api.calendly.com" not in message
     assert "help reschedule" in message.lower()
     assert "help cancel" in message.lower()
+
+
+def test_within_24h_blocks_links_and_directs_to_admin(db_session):
+    client = _seed_client_session(db_session, hours_ahead=2)
+
+    with (
+        patch("app.services.bot.reschedule.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.services.bot.reschedule.get_invitee_links_with_pat",
+            return_value={
+                "reschedule_url": "https://calendly.com/reschedulings/ABC123",
+                "cancel_url": "https://calendly.com/cancellations/ABC123",
+            },
+        ) as mock_links,
+    ):
+        upcoming = get_upcoming_sessions_with_links(db_session, client.id)
+
+    # Within the cutoff: flagged, no links fetched.
+    assert upcoming[0]["within_cutoff"] is True
+    assert upcoming[0]["reschedule_url"] is None
+    assert upcoming[0]["cancel_url"] is None
+    mock_links.assert_not_called()
+
+    message = build_reschedule_menu(upcoming, admin_whatsapp="+85291234567")
+    assert "within 24 hours" in message.lower()
+    assert "+85291234567" in message
+    assert "calendly.com" not in message
+
+
+def test_outside_24h_allows_links(db_session):
+    client = _seed_client_session(db_session, hours_ahead=48)
+
+    with (
+        patch("app.services.bot.reschedule.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.services.bot.reschedule.get_invitee_links_with_pat",
+            return_value={
+                "reschedule_url": "https://calendly.com/reschedulings/ABC123",
+                "cancel_url": "https://calendly.com/cancellations/ABC123",
+            },
+        ),
+    ):
+        upcoming = get_upcoming_sessions_with_links(db_session, client.id)
+
+    assert upcoming[0]["within_cutoff"] is False
+    message = build_reschedule_menu(upcoming, admin_whatsapp="+85291234567")
+    assert "https://calendly.com/reschedulings/ABC123" in message
+    assert "within 24 hours" not in message.lower()

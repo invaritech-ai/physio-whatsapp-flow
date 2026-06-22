@@ -842,7 +842,12 @@ def handle_reschedule_request(client, body: str, db: Session) -> tuple[str, str]
     from app.services.bot.reschedule import get_upcoming_sessions_with_links
 
     upcoming_sessions = get_upcoming_sessions_with_links(db, client.id)
-    return (states.IDLE, menus.build_reschedule_menu(upcoming_sessions))
+    return (
+        states.IDLE,
+        menus.build_reschedule_menu(
+            upcoming_sessions, admin_whatsapp=settings.admin_whatsapp_number
+        ),
+    )
 
 
 HANDLER_MAP = {

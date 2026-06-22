@@ -44,3 +44,24 @@ class TherapistPayrollListResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class TherapistPayrollDetailSessionItem(BaseModel):
+    session_id: int
+    client_name: str | None
+    start_time: datetime
+    duration_minutes: int
+    payout_cents: int
+    currency: str
+
+
+class TherapistPayrollDetailResponse(BaseModel):
+    therapist_id: int
+    therapist_name: str
+    period_start: datetime
+    period_end: datetime
+    currency: str
+    total_sessions: int
+    total_minutes: int
+    total_pay_cents: int
+    sessions: list[TherapistPayrollDetailSessionItem]

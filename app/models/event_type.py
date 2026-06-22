@@ -26,3 +26,6 @@ class TherapistEventType(SQLModel, table=True):
     # precedence over client billing plans when resolving the expected charge.
     amount_cents: int | None = Field(default=None)
     currency: str | None = Field(default=None, max_length=8)
+    # Optional therapist compensation (payout) for completing a session of this
+    # duration — drives payroll. Independent of the client-facing amount_cents.
+    payout_cents: int | None = Field(default=None)
