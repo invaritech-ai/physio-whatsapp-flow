@@ -3,9 +3,10 @@
 import json
 import re
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
@@ -43,9 +44,13 @@ from app.services.idempotency import (
     fail_idempotency_record,
     get_or_create_idempotency_record,
 )
-from app.services.invoice_generation import generate_and_store_invoice_pdf_url
+from app.services.invoice_generation import (
+    generate_and_store_invoice_pdf_url,
+    render_invoice_pdf_bytes,
+)
 from app.services.invoice_storage import resolve_invoice_pdf_url
 from app.services.invoice_whatsapp import send_invoice_whatsapp
+from app.services.naming import invoice_filename
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
@@ -365,18 +370,89 @@ def generate_invoice(
     return _generate_invoice_impl(payload, admin, db)
 
 
-def _generate_invoice_impl(
+@router.post("/preview")
+def preview_invoice(
     payload: InvoiceGenerateRequest,
-    admin: User,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Render a receipt PDF for preview without persisting anything.
+
+    Resolves the same fields as ``generate`` (so the preview matches the final
+    receipt) and streams the PDF inline. No ``Receipt`` row is created, nothing is
+    uploaded to storage, financial totals are untouched, and no WhatsApp message is
+    sent (``send_whatsapp`` is ignored).
+    """
+    _ = admin
+    fields = _resolve_invoice_fields(payload, db)
+    now = datetime.now(timezone.utc)
+    pdf_bytes = render_invoice_pdf_bytes(
+        invoice_id=0,  # placeholder — no record exists for a preview
+        client_id=fields.client.id,
+        client_name=fields.client.name,
+        client_address=fields.client.address,
+        client_phone=fields.client.phone_e164,
+        amount_cents=fields.amount_cents,
+        currency=fields.currency,
+        description=fields.description,
+        diagnosis=fields.diagnosis,
+        session_start_at=fields.effective_session_start_at,
+        therapist_name=fields.therapist_name,
+        therapist_license_number=fields.therapist_license_number,
+        payment_mode=fields.payment_mode,
+        special_notes=fields.special_notes,
+        issued_at=now,
+    )
+    # Name the preview file after the appointment date (spec 2.6), same as the
+    # persisted receipt would be (invoice_id 0 is a preview placeholder).
+    preview_filename = invoice_filename(
+        invoice_id=0,
+        client_name=fields.client.name,
+        date_value=fields.effective_session_start_at,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{preview_filename}"'},
+    )
+
+
+def _clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+@dataclass
+class _ResolvedInvoiceFields:
+    """Receipt fields resolved from a generate/preview request.
+
+    Read-only: resolving these performs no writes and acquires no row locks, so the
+    same logic backs both the persisting ``generate`` flow and the ``preview`` flow.
+    """
+
+    client: Client
+    session_row: TherapySession | None
+    service_type: str
+    amount_cents: int
+    currency: str
+    description: str
+    payment_mode: str
+    diagnosis: str
+    special_notes: str
+    trainer_name: str | None
+    reference_note: str | None
+    therapist_id: int | None
+    therapist_name: str | None
+    therapist_license_number: str | None
+    effective_session_start_at: datetime
+
+
+def _resolve_invoice_fields(
+    payload: InvoiceGenerateRequest,
     db: Session,
-) -> InvoiceDetailResponse:
-
-    def _clean_optional_text(value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = value.strip()
-        return cleaned or None
-
+) -> _ResolvedInvoiceFields:
     client = _ensure_client_exists(db, payload.client_id)
     session_row: TherapySession | None = None
     if payload.session_id is not None:
@@ -475,11 +551,44 @@ def _generate_invoice_impl(
         or "-"
     )
     special_notes = _clean_optional_text(payload.special_notes) or special_note_preset_value or "-"
-    trainer_name = _clean_optional_text(payload.trainer_name)
-    reference_note = _clean_optional_text(payload.reference_note)
-    description = payload.description.strip()
 
-    currency = payload.currency.upper()
+    return _ResolvedInvoiceFields(
+        client=client,
+        session_row=session_row,
+        service_type=service_type,
+        amount_cents=amount_cents,
+        currency=payload.currency.upper(),
+        description=payload.description.strip(),
+        payment_mode=payment_mode,
+        diagnosis=diagnosis,
+        special_notes=special_notes,
+        trainer_name=_clean_optional_text(payload.trainer_name),
+        reference_note=_clean_optional_text(payload.reference_note),
+        therapist_id=therapist_id,
+        therapist_name=therapist_name,
+        therapist_license_number=therapist_license_number,
+        effective_session_start_at=effective_session_start_at,
+    )
+
+
+def _generate_invoice_impl(
+    payload: InvoiceGenerateRequest,
+    admin: User,
+    db: Session,
+) -> InvoiceDetailResponse:
+    fields = _resolve_invoice_fields(payload, db)
+    client = fields.client
+    session_row = fields.session_row
+    amount_cents = fields.amount_cents
+    currency = fields.currency
+    description = fields.description
+    diagnosis = fields.diagnosis
+    special_notes = fields.special_notes
+    therapist_name = fields.therapist_name
+    therapist_license_number = fields.therapist_license_number
+    payment_mode = fields.payment_mode
+    effective_session_start_at = fields.effective_session_start_at
+
     financial = _get_or_create_client_financial_locked(
         db,
         client_id=payload.client_id,
@@ -490,10 +599,10 @@ def _generate_invoice_impl(
     invoice = Receipt(
         client_id=payload.client_id,
         session_id=session_row.id if session_row else None,
-        therapist_id=therapist_id,
-        service_type=service_type,
-        trainer_name=trainer_name,
-        reference_note=reference_note,
+        therapist_id=fields.therapist_id,
+        service_type=fields.service_type,
+        trainer_name=fields.trainer_name,
+        reference_note=fields.reference_note,
         amount_cents=amount_cents,
         currency=currency,
         description=description,
@@ -518,7 +627,7 @@ def _generate_invoice_impl(
             currency=currency,
             description=description,
             diagnosis=diagnosis,
-            session_start_at=effective_session_start_at if effective_session_start_at else now,
+            session_start_at=effective_session_start_at,
             therapist_name=therapist_name,
             therapist_license_number=therapist_license_number,
             payment_mode=payment_mode,
