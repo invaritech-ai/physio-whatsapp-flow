@@ -128,7 +128,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Idempotency-Key is required for FE retries on payment/invoice POSTs.
     allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key"],
-    expose_headers=["X-Request-ID", "X-Response-Time-Ms"],
+    # Content-Disposition lets the FE read the server-provided (appointment-dated)
+    # filename for receipt preview/PDF downloads.
+    expose_headers=["X-Request-ID", "X-Response-Time-Ms", "Content-Disposition"],
 )
 
 app.add_middleware(RequestContextMiddleware)
