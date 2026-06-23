@@ -50,6 +50,7 @@ from app.services.invoice_generation import (
 )
 from app.services.invoice_storage import resolve_invoice_pdf_url
 from app.services.invoice_whatsapp import send_invoice_whatsapp
+from app.services.naming import invoice_filename
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 
@@ -402,10 +403,17 @@ def preview_invoice(
         special_notes=fields.special_notes,
         issued_at=now,
     )
+    # Name the preview file after the appointment date (spec 2.6), same as the
+    # persisted receipt would be (invoice_id 0 is a preview placeholder).
+    preview_filename = invoice_filename(
+        invoice_id=0,
+        client_name=fields.client.name,
+        date_value=fields.effective_session_start_at or now,
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": 'inline; filename="receipt-preview.pdf"'},
+        headers={"Content-Disposition": f'inline; filename="{preview_filename}"'},
     )
 
 
