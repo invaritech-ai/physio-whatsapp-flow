@@ -396,7 +396,7 @@ def preview_invoice(
         currency=fields.currency,
         description=fields.description,
         diagnosis=fields.diagnosis,
-        session_start_at=fields.effective_session_start_at or now,
+        session_start_at=fields.effective_session_start_at,
         therapist_name=fields.therapist_name,
         therapist_license_number=fields.therapist_license_number,
         payment_mode=fields.payment_mode,
@@ -408,7 +408,7 @@ def preview_invoice(
     preview_filename = invoice_filename(
         invoice_id=0,
         client_name=fields.client.name,
-        date_value=fields.effective_session_start_at or now,
+        date_value=fields.effective_session_start_at,
     )
     return Response(
         content=pdf_bytes,
@@ -627,7 +627,7 @@ def _generate_invoice_impl(
             currency=currency,
             description=description,
             diagnosis=diagnosis,
-            session_start_at=effective_session_start_at if effective_session_start_at else now,
+            session_start_at=effective_session_start_at,
             therapist_name=therapist_name,
             therapist_license_number=therapist_license_number,
             payment_mode=payment_mode,
