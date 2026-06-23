@@ -860,6 +860,79 @@ def test_get_client_receipting_summary_returns_running_totals_and_pagination(cli
     assert len(page_2_payload["receipts"]) == 1
 
 
+def test_preview_invoice_returns_pdf_without_persisting(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-preview")
+    client_row, session_row = _create_client_and_session(
+        db_session,
+        therapist_id=therapist.id,
+        phone="+85290100020",
+    )
+    db_session.add(
+        ClientFinancial(
+            client_id=client_row.id,
+            total_paid_cents=90000,
+            total_receipted_cents=15000,
+            currency="HKD",
+        )
+    )
+    db_session.commit()
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/preview",
+            json={
+                "client_id": client_row.id,
+                "session_id": session_row.id,
+                "amount_cents": 65000,
+                "currency": "HKD",
+                "description": "Physio session invoice",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF")
+
+    # No receipt persisted and financials untouched.
+    receipts = db_session.exec(
+        select(Receipt).where(Receipt.client_id == client_row.id)
+    ).all()
+    assert receipts == []
+    financial = db_session.exec(
+        select(ClientFinancial).where(ClientFinancial.client_id == client_row.id)
+    ).first()
+    assert financial is not None
+    assert financial.total_receipted_cents == 15000
+
+
+def test_preview_invoice_applies_same_validation_as_generate(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="invoice-preview-validation")
+    client_row = Client(phone_e164="+85290100021", name="Preview Validation Client")
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+
+    with _admin_auth_context(admin):
+        response = client.post(
+            "/api/v1/admin/invoices/preview",
+            json={
+                "client_id": client_row.id,
+                "therapist_id": therapist.id,
+                "service_type": "supervised_physio",
+                "amount_cents": 50000,
+                "currency": "HKD",
+                "description": "Supervised Physiotherapy Exercise",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "manual_session_start_at_required"
+
+
 def test_generate_invoice_uses_invoice_presets(client, db_session: Session):
     admin = _create_admin(db_session)
     therapist = _create_therapist(db_session, suffix="invoice-presets")
