@@ -143,3 +143,21 @@ def test_outside_24h_allows_links(db_session):
     message = build_reschedule_menu(upcoming, admin_whatsapp="+85291234567")
     assert "https://calendly.com/reschedulings/ABC123" in message
     assert "less than 24 hours" not in message.lower()
+
+
+def test_footer_hidden_when_all_sessions_within_cutoff():
+    """The 'manage your appointments' footer only shows when something is manageable."""
+    within = {
+        "start_time": "Thursday, June 25 at 02:16 AM",
+        "therapist_name": "Aditi",
+        "within_cutoff": True,
+        "reschedule_url": None,
+        "cancel_url": None,
+    }
+    outside = {**within, "start_time": "Friday, June 26 at 02:24 PM", "within_cutoff": False}
+
+    only_within = build_reschedule_menu([within], admin_whatsapp="+85291234567")
+    assert "click the links above" not in only_within.lower()
+
+    mixed = build_reschedule_menu([within, outside], admin_whatsapp="+85291234567")
+    assert "click the links above" in mixed.lower()

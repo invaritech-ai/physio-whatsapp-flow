@@ -182,6 +182,7 @@ def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | N
 
     lines = ["Here are your upcoming appointments:\n"]
 
+    any_manageable = False
     for idx, session in enumerate(upcoming_sessions, 1):
         lines.append(f"\n{idx}. {session['start_time']}")
         lines.append(f"   Therapist: {session['therapist_name']}")
@@ -193,6 +194,7 @@ def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | N
             lines.append("")
             lines.append(f"   To make any changes, please contact us directly{contact_suffix}.")
             continue
+        any_manageable = True
         reschedule_url = session.get("reschedule_url")
         cancel_url = session.get("cancel_url")
         if reschedule_url:
@@ -204,7 +206,10 @@ def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | N
         else:
             lines.append("   ❌ Cancel: Please reply 'help cancel' and admin will assist.")
 
-    lines.append("\n💡 Click the links above to manage your appointments.")
+    # Only show the manage-your-appointments footer when at least one
+    # appointment is outside the 24h cutoff (i.e. actually manageable here).
+    if any_manageable:
+        lines.append("\n💡 Click the links above to manage your appointments.")
 
     return "\n".join(lines)
 
