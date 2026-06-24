@@ -6,7 +6,6 @@ import logging
 from sqlmodel import Session, select
 from sqlmodel import func
 
-from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.models import Session as TherapySession
 from app.models import Therapist
@@ -15,6 +14,10 @@ from app.services.timezone_utils import as_utc
 
 
 logger = logging.getLogger(__name__)
+
+# Reschedule/cancel via WhatsApp is blocked within this many hours of the
+# appointment; clients are directed to the admin WhatsApp number instead.
+RESCHEDULE_CUTOFF_HOURS = 24
 
 
 def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list[dict]:
@@ -44,7 +47,7 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
 
     sessions = db.exec(stmt).all()
 
-    cutoff = timedelta(hours=settings.reschedule_min_hours_advance)
+    cutoff = timedelta(hours=RESCHEDULE_CUTOFF_HOURS)
 
     result = []
     for session in sessions:
