@@ -166,19 +166,30 @@ def build_invalid_input_message(valid_options: list[str]) -> str:
     return f"Sorry, I didn't understand that. 😕\n\nPlease reply with: {options_str}"
 
 
-def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:
-    """Build menu showing upcoming sessions with reschedule/cancel links."""
+def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | None = None) -> str:
+    """Build menu showing upcoming sessions with reschedule/cancel links.
+
+    Appointments within the cutoff (``within_cutoff``) cannot be changed via
+    WhatsApp — the client is directed to the admin instead.
+    """
     if not upcoming_sessions:
         return (
             "You don't have any upcoming appointments. 📅\n\n"
             "To book a new appointment, just send 'menu' to return to the main menu!"
         )
 
+    admin_contact = f"contact our admin at {admin_whatsapp}" if admin_whatsapp else "contact our team"
+
     lines = ["Here are your upcoming appointments:\n"]
 
     for idx, session in enumerate(upcoming_sessions, 1):
         lines.append(f"\n{idx}. {session['start_time']}")
         lines.append(f"   Therapist: {session['therapist_name']}")
+        if session.get("within_cutoff"):
+            lines.append(
+                f"   ⏰ Within 24 hours of the appointment — to change or cancel, please {admin_contact}."
+            )
+            continue
         reschedule_url = session.get("reschedule_url")
         cancel_url = session.get("cancel_url")
         if reschedule_url:
