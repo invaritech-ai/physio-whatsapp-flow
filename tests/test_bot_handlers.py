@@ -1025,6 +1025,6 @@ class TestNoTherapistMatch:
         next_state, response = handle_awaiting_days(client, "1", db_session)
 
         assert next_state == states.IDLE
-        assert "no therapists" in response.lower()
+        assert "couldn't find an available therapist" in response.lower()
         assert client.conversation_data is None
 

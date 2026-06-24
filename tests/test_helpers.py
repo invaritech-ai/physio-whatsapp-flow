@@ -213,8 +213,10 @@ class TestSendAndLog:
 
         twilio_sid = send_and_log(db_session, phone, body, sample_client.id)
 
-        # Verify Twilio was called with whatsapp: prefix
-        mock_send_whatsapp.assert_called_once_with(f"whatsapp:{phone}", body, None)
+        # Verify Twilio was called with whatsapp: prefix (template args default to None)
+        mock_send_whatsapp.assert_called_once_with(
+            f"whatsapp:{phone}", body, None, content_sid=None, content_variables=None
+        )
         assert twilio_sid.startswith("SM")  # Mock returns unique SIDs starting with SM
 
         # Verify message was logged

@@ -78,7 +78,10 @@ def test_calendly_webhook_uses_db_stored_signing_key(client, db_session):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ignored", "event": "invitee.unknown"}
+    body = response.json()
+    # Response also carries a trace_id for observability; assert the rest.
+    assert body["status"] == "ignored"
+    assert body["event"] == "invitee.unknown"
 
 
 def test_calendly_webhook_rejects_when_db_signing_key_missing(client):
