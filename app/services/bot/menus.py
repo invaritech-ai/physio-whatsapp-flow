@@ -188,11 +188,11 @@ def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | N
         lines.append(f"   Therapist: {session['therapist_name']}")
         if session.get("within_cutoff"):
             lines.append(
-                "   ⏰ Sorry, this appointment is less than 24 hours away, so we're "
+                "⏰ Sorry, this appointment is less than 24 hours away, so we're "
                 "unable to reschedule or cancel it via this auto-channel."
             )
             lines.append("")
-            lines.append(f"   To make any changes, please contact us directly{contact_suffix}.")
+            lines.append(f"To make any changes, please contact us directly{contact_suffix}.")
             continue
         any_manageable = True
         reschedule_url = session.get("reschedule_url")
