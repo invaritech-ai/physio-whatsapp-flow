@@ -1,7 +1,39 @@
 from __future__ import annotations
 
+import os
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Cache for the bot-only-suspension email file: (path, mtime) -> frozenset.
+_bot_only_emails_cache: dict[str, tuple[float, frozenset[str]]] = {}
+
+
+def _load_bot_only_suspend_emails(path: str) -> set[str]:
+    """Read lowercased emails from ``path`` (one per line; '#' comments and
+    blank lines ignored). Cached by mtime; missing/unreadable file -> empty set."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return set()
+
+    cached = _bot_only_emails_cache.get(path)
+    if cached is not None and cached[0] == mtime:
+        return set(cached[1])
+
+    emails: set[str] = set()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                entry = line.strip()
+                if not entry or entry.startswith("#"):
+                    continue
+                emails.add(entry.lower())
+    except OSError:
+        return set()
+
+    _bot_only_emails_cache[path] = (mtime, frozenset(emails))
+    return emails
 
 
 class Settings(BaseSettings):
@@ -71,6 +103,13 @@ class Settings(BaseSettings):
     auth_enforce_access_ttl: bool = False
     auth_max_access_token_ttl_seconds: int = 600
 
+    # Path to a file listing therapist emails whose "suspension" only removes
+    # them from the WhatsApp bot (their Therapist profile is deactivated) while
+    # keeping login and full dashboard access. One email per line; blank lines
+    # and lines starting with '#' are ignored; compared case-insensitively. Read
+    # the parsed set via the `bot_only_suspend_emails_set` property.
+    bot_only_suspend_emails_file: str = "data/bot_only_suspend_emails.txt"
+
     app_env: str = "development"
     debug_mode: bool = False
     # When true, outbound WhatsApp uses print-only (no Twilio API). Independent of DEBUG_MODE
@@ -89,6 +128,14 @@ class Settings(BaseSettings):
     booking_followup_enabled: bool = False
     booking_followup_first_delay_seconds: int = 3600
     booking_followup_second_delay_seconds: int = 21600
+
+    @property
+    def bot_only_suspend_emails_set(self) -> set[str]:
+        """Lowercased set of bot-only-suspension therapist emails, read from
+        ``bot_only_suspend_emails_file``. Cached by file mtime so edits are
+        picked up without a restart while avoiding a re-read on every request.
+        Missing file -> empty set (feature disabled)."""
+        return _load_bot_only_suspend_emails(self.bot_only_suspend_emails_file)
 
     @property
     def sync_interval_seconds(self) -> int:

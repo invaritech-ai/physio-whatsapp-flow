@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, func, select
 
-from app.core.auth import get_current_admin
+from app.core.auth import get_current_admin, is_bot_only_suspend_email
 from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.db.session import get_session
@@ -132,6 +132,7 @@ def list_therapists(admin: User = Depends(get_current_admin), db: Session = Depe
                 is_active=therapist.is_active,
                 email=user.email,
                 specialty_count=specialty_count_map.get(therapist.id, 0),
+                is_bot_only_suspend=is_bot_only_suspend_email(user.email),
             )
         )
 
