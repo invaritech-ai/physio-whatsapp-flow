@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     business_phone: str = "63121852"
     business_email: str = "hello@movementfitnesshk.com"
 
+    # Admin WhatsApp number shown to clients who try to reschedule/cancel within
+    # the cutoff (the cutoff itself is a fixed 24h constant in bot.reschedule).
+    admin_whatsapp_number: str | None = None
+
     neon_auth_url: str | None = None
     neon_jwks_url: str | None = None
     neon_jwt_issuer: str | None = None
