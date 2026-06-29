@@ -47,6 +47,10 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
         "message": "The specified client does not exist",
         "status_code": 404,
     },
+    "client_phone_already_exists": {
+        "message": "A client with this phone number already exists",
+        "status_code": 400,
+    },
     "session_not_found": {
         "message": "The specified session does not exist",
         "status_code": 404,
