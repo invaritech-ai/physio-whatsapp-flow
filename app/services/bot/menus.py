@@ -166,19 +166,40 @@ def build_invalid_input_message(valid_options: list[str]) -> str:
     return f"Sorry, I didn't understand that. 😕\n\nPlease reply with: {options_str}"
 
 
-def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:
-    """Build menu showing upcoming sessions with reschedule/cancel links."""
+def build_reschedule_menu(upcoming_sessions: list[dict], admin_whatsapp: str | None = None) -> str:
+    """Build menu showing upcoming sessions with reschedule/cancel links.
+
+    Appointments within the cutoff (``within_cutoff``) cannot be changed via
+    WhatsApp — the client is directed to the admin instead.
+    """
     if not upcoming_sessions:
         return (
             "You don't have any upcoming appointments. 📅\n\n"
             "To book a new appointment, just send 'menu' to return to the main menu!"
         )
 
-    lines = ["Here are your upcoming appointments:\n"]
+    contact_line = (
+        f"To make any changes, please contact us directly at: 📞 {admin_whatsapp}"
+        if admin_whatsapp
+        else "To make any changes, please contact us directly."
+    )
 
+    lines = ["📅 Here are your upcoming appointments:\n"]
+
+    any_manageable = False
     for idx, session in enumerate(upcoming_sessions, 1):
         lines.append(f"\n{idx}. {session['start_time']}")
         lines.append(f"   Therapist: {session['therapist_name']}")
+        if session.get("within_cutoff"):
+            lines.append("")
+            lines.append(
+                "⏰ Sorry, this appointment is less than 24 hours away, so we're "
+                "unable to reschedule or cancel it via this auto-channel."
+            )
+            lines.append("")
+            lines.append(contact_line)
+            continue
+        any_manageable = True
         reschedule_url = session.get("reschedule_url")
         cancel_url = session.get("cancel_url")
         if reschedule_url:
@@ -190,7 +211,10 @@ def build_reschedule_menu(upcoming_sessions: list[dict]) -> str:
         else:
             lines.append("   ❌ Cancel: Please reply 'help cancel' and admin will assist.")
 
-    lines.append("\n💡 Click the links above to manage your appointments.")
+    # Only show the manage-your-appointments footer when at least one
+    # appointment is outside the 24h cutoff (i.e. actually manageable here).
+    if any_manageable:
+        lines.append("\n💡 Click the links above to manage your appointments.")
 
     return "\n".join(lines)
 
