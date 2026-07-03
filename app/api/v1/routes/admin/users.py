@@ -308,6 +308,28 @@ def update_user_status(
 
     target_user.is_active = data.is_active
     target_user.updated_at = datetime.now(timezone.utc)
+
+    # Cascade to the therapist profile so suspension also removes the
+    # therapist from client-facing (WhatsApp bot) flows immediately.
+    therapist_profile_change: bool | None = None
+    therapist = db.exec(
+        select(Therapist).where(Therapist.user_id == target_user.id)
+    ).first()
+    if therapist:
+        if not data.is_active:
+            if therapist.is_active:
+                therapist.is_active = False
+                therapist_profile_change = False
+                db.add(therapist)
+        elif therapist.calendly_user_uri:
+            # Restore bookability only for therapists who completed
+            # onboarding; un-onboarded profiles stay inactive until they
+            # finish onboarding themselves.
+            if not therapist.is_active:
+                therapist.is_active = True
+                therapist_profile_change = True
+                db.add(therapist)
+
     revoke_user_sessions(
         target_user,
         reason=f"status_change:{previous_is_active}->{data.is_active}",
@@ -323,6 +345,7 @@ def update_user_status(
         details={
             "previous_is_active": previous_is_active,
             "new_is_active": data.is_active,
+            "therapist_profile_is_active_set_to": therapist_profile_change,
         },
         commit=False,
     )

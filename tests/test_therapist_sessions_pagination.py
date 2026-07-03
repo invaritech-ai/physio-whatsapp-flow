@@ -142,7 +142,7 @@ def test_therapist_sessions_total_is_computed_before_pagination(client, db_sessi
         therapist_id=therapist.id,
         start_time=now - timedelta(days=2),
     )
-    _create_session(
+    newest_past = _create_session(
         db_session,
         client_id=client_row.id,
         therapist_id=therapist.id,
@@ -176,7 +176,8 @@ def test_therapist_sessions_total_is_computed_before_pagination(client, db_sessi
     assert past_payload["total"] == 3
     assert len(past_payload["items"]) == 1
     assert past_payload["has_more"] is True
-    assert past_payload["items"][0]["id"] == oldest_past.id
+    # Past sessions are ordered most-recent-first.
+    assert past_payload["items"][0]["id"] == newest_past.id
 
     assert upcoming_response.status_code == 200
     upcoming_payload = upcoming_response.json()
@@ -190,9 +191,15 @@ def test_therapist_sessions_limit_max_is_enforced(client, db_session: Session):
     user, _ = _create_therapist_user(db_session, suffix="limit")
 
     with _therapist_auth(user):
-        response = client.get(
+        over_limit = client.get(
+            "/api/v1/therapist/sessions?limit=501",
+            headers=_auth_headers(),
+        )
+        within_limit = client.get(
             "/api/v1/therapist/sessions?limit=101",
             headers=_auth_headers(),
         )
 
-    assert response.status_code == 422
+    # Max page size is 500.
+    assert over_limit.status_code == 422
+    assert within_limit.status_code == 200

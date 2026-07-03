@@ -46,5 +46,5 @@ def test_write_latex_invoice_pdf_file_uses_canonical_filename(monkeypatch, tmp_p
         issued_at=issued_at,
     )
 
-    assert destination.name == "jane-doe_2026-05-06_AFIXEDSTRING_99.pdf"
+    assert destination.name == "jane-doe_2026-05-06_MOVEMENT_PHYSIOTHERAPY_RECEIPT_99.pdf"
     assert destination.exists()
