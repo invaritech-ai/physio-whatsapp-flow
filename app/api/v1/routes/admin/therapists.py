@@ -9,7 +9,14 @@ from app.core.auth import get_current_admin, is_bot_only_suspend_email
 from app.core.config import settings
 from app.core.encryption import decrypt_string
 from app.db.session import get_session
-from app.models import Therapist, TherapistEventType, TherapistSpecialty, TherapistSpecialtyMap, User
+from app.models import (
+    Session as TherapySession,
+    Therapist,
+    TherapistEventType,
+    TherapistSpecialty,
+    TherapistSpecialtyMap,
+    User,
+)
 from app.api.v1.schemas.admin_session import (
     AdminAvailableTimeSlot,
     AdminAvailableTimesResponse,
@@ -260,16 +267,35 @@ def get_therapist_available_times(
         event_type.calendly_event_type_uri, pat, start_utc, end_utc
     )
 
+    # Calendly doesn't know about manual in-app bookings, so drop slots that overlap
+    # an existing non-cancelled session for this therapist (times stored naive UTC).
+    booked = db.exec(
+        select(TherapySession.start_time, TherapySession.end_time).where(
+            TherapySession.therapist_id == therapist_id,
+            TherapySession.status != "cancelled",
+            TherapySession.start_time < end_utc.replace(tzinfo=None),
+            TherapySession.end_time > start_utc.replace(tzinfo=None),
+        )
+    ).all()
+
     slots: list[AdminAvailableTimeSlot] = []
     for item in raw_slots:
         raw_start = item.get("start_time")
         if not raw_start:
             continue
         slot_start = as_utc(datetime.fromisoformat(raw_start.replace("Z", "+00:00")))
+        slot_end = slot_start + timedelta(minutes=duration_minutes)
+        slot_start_naive = slot_start.replace(tzinfo=None)
+        slot_end_naive = slot_end.replace(tzinfo=None)
+        if any(
+            booked_start < slot_end_naive and booked_end > slot_start_naive
+            for booked_start, booked_end in booked
+        ):
+            continue
         slots.append(
             AdminAvailableTimeSlot(
                 start_time=slot_start,
-                end_time=slot_start + timedelta(minutes=duration_minutes),
+                end_time=slot_end,
                 scheduling_url=item.get("scheduling_url"),
             )
         )

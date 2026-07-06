@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -5,6 +6,8 @@ from typing import Any
 import requests
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 CALENDLY_API_TOKEN = settings.calendly_api_token or os.getenv("CALENDLY_API_TOKEN")
 BASE_URL = "https://api.calendly.com"
@@ -281,3 +284,51 @@ def get_event_type_available_times_with_pat(
         pass
 
     return []
+
+
+def create_event_invitee_with_pat(
+    event_type_uri: str,
+    calendly_pat: str,
+    start_time: datetime,
+    invitee_name: str,
+    invitee_email: str,
+    invitee_timezone: str | None = None,
+) -> dict[str, Any] | None:
+    """Book a Calendly event via the Scheduling API (Create Event Invitee).
+
+    Requires a paid Calendly plan on the therapist's account. On success returns
+    the created invitee resource, whose `event` field is the scheduled event URI
+    and `uri` field is the invitee URI.
+
+    Returns None on any failure (unsupported plan, slot taken, network error).
+    """
+    url = f"{BASE_URL}/invitees"
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+    invitee: dict[str, Any] = {"name": invitee_name, "email": invitee_email}
+    if invitee_timezone:
+        invitee["timezone"] = invitee_timezone
+    payload = {
+        "event_type": event_type_uri,
+        "start_time": start_time.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "invitee": invitee,
+    }
+
+    try:
+        response = requests.post(url, headers=pat_headers, json=payload, timeout=20)
+        if response.status_code == 201:
+            resource = response.json().get("resource")
+            return resource if isinstance(resource, dict) else None
+        logger.warning(
+            "Calendly create-invitee failed status=%s body=%s event_type=%s start=%s",
+            response.status_code,
+            response.text[:500],
+            event_type_uri,
+            payload["start_time"],
+        )
+    except Exception:
+        logger.exception("Calendly create-invitee request errored event_type=%s", event_type_uri)
+
+    return None

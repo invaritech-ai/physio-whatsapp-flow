@@ -19,9 +19,17 @@ from app.core.auth import get_current_admin
 from app.db.session import get_session
 from app.models import BillingPlan, Client, ClientPlanAssignment, SessionNote, Therapist, User
 from app.models import Session as TherapySession
-from app.services.calendly import get_event_type_available_times_with_pat
+import logging
+
+from app.core.config import settings
+from app.services.calendly import (
+    create_event_invitee_with_pat,
+    get_event_type_available_times_with_pat,
+)
 from app.services.timezone_utils import as_utc, normalize_query_datetime, to_preferred_timezone
 from app.services.pricing import load_active_plan_map, resolve_expected_charge
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/sessions", tags=["Admin - Sessions"])
 _DIAGNOSIS_PATTERN = re.compile(r"diagnosis\s*:\s*(.+)", re.IGNORECASE)
@@ -245,7 +253,10 @@ def create_session(
         _resolve_active_event_type,
         _resolve_therapist_pat,
     )
-    from app.api.v1.routes.webhooks import _seed_session_note_from_previous_session
+    from app.api.v1.routes.webhooks import (
+        _notify_booking_confirmed,
+        _seed_session_note_from_previous_session,
+    )
 
     client = db.get(Client, payload.client_id)
     if not client:
@@ -285,6 +296,8 @@ def create_session(
     start_naive = start_utc.replace(tzinfo=None)
     end_naive = end_utc.replace(tzinfo=None)
 
+    calendly_event_uri: str | None = None
+    calendly_invitee_uri: str | None = None
     if not free_booking:
         # In-app overlap guard closes the validate->commit race against other in-app bookings.
         conflict = db.exec(
@@ -298,27 +311,75 @@ def create_session(
         if conflict:
             raise HTTPException(status_code=409, detail="slot_unavailable")
 
-    session = TherapySession(
-        client_id=client.id,
-        therapist_id=therapist.id,
-        start_time=start_naive,
-        end_time=end_naive,
-        duration_minutes=payload.duration_minutes,
-        source="manual",
-        status="scheduled",
-        calendly_event_uri=None,
-        calendly_invitee_uri=None,
-        # Suppress booking confirmation / reminders for admin-created manual sessions.
-        reminder_sent=True,
-        therapist_notified=True,
-    )
-    db.add(session)
-    db.flush()
-    _seed_session_note_from_previous_session(
-        db, session_row=session, therapist_user_id=therapist.user_id
-    )
-    db.commit()
-    db.refresh(session)
+        # Book the slot on Calendly too (Scheduling API), so it's blocked for
+        # outside bookings and lands on the therapist's synced calendars.
+        # Best-effort: on failure the session is still created in-app only.
+        invitee_resource = create_event_invitee_with_pat(
+            event_type.calendly_event_type_uri,
+            pat,
+            start_utc,
+            invitee_name=client.name or "Client",
+            invitee_email=(client.email or settings.business_email),
+            invitee_timezone=therapist.preferred_timezone,
+        )
+        if invitee_resource:
+            calendly_event_uri = invitee_resource.get("event")
+            calendly_invitee_uri = invitee_resource.get("uri")
+        else:
+            logger.warning(
+                "Calendly booking failed for quick-book; creating in-app-only session "
+                "client_id=%s therapist_id=%s start=%s",
+                client.id,
+                therapist.id,
+                start_utc.isoformat(),
+            )
+
+    # The invitee.created webhook can race this request and insert the session
+    # first; if it did, adopt that row instead of creating a duplicate.
+    session = None
+    if calendly_event_uri:
+        session = db.exec(
+            select(TherapySession).where(
+                TherapySession.calendly_event_uri == calendly_event_uri
+            )
+        ).first()
+
+    if session:
+        session.client_id = client.id
+        session.therapist_id = therapist.id
+        session.start_time = start_naive
+        session.end_time = end_naive
+        session.duration_minutes = payload.duration_minutes
+        session.status = "scheduled"
+        session.updated_at = datetime.now(timezone.utc)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+    else:
+        session = TherapySession(
+            client_id=client.id,
+            therapist_id=therapist.id,
+            start_time=start_naive,
+            end_time=end_naive,
+            duration_minutes=payload.duration_minutes,
+            source="calendly" if calendly_event_uri else "manual",
+            status="scheduled",
+            calendly_event_uri=calendly_event_uri,
+            calendly_invitee_uri=calendly_invitee_uri,
+            reminder_sent=False,
+            therapist_notified=False,
+        )
+        db.add(session)
+        db.flush()
+        _seed_session_note_from_previous_session(
+            db, session_row=session, therapist_user_id=therapist.user_id
+        )
+        db.commit()
+        db.refresh(session)
+
+    # Same notifications as a Calendly webhook booking: WhatsApp confirmation to the
+    # client and an in-app notification for the therapist.
+    _notify_booking_confirmed(db=db, session=session, client=client, therapist=therapist)
 
     plan_map = load_active_plan_map(db, client_ids={client.id})
     return _build_detail_response(
