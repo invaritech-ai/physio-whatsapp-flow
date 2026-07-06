@@ -293,12 +293,18 @@ def create_event_invitee_with_pat(
     invitee_name: str,
     invitee_email: str,
     invitee_timezone: str | None = None,
+    invitee_phone_e164: str | None = None,
 ) -> dict[str, Any] | None:
     """Book a Calendly event via the Scheduling API (Create Event Invitee).
 
     Requires a paid Calendly plan on the therapist's account. On success returns
     the created invitee resource, whose `event` field is the scheduled event URI
     and `uri` field is the invitee URI.
+
+    The event type is fetched first to mirror its configured location and answer
+    its custom questions (both are rejected as 400 if omitted). Phone-type
+    questions are answered with the invitee's phone so the invitee.created
+    webhook can resolve the client the same way as bot-driven bookings.
 
     Returns None on any failure (unsupported plan, slot taken, network error).
     """
@@ -310,11 +316,45 @@ def create_event_invitee_with_pat(
     invitee: dict[str, Any] = {"name": invitee_name, "email": invitee_email}
     if invitee_timezone:
         invitee["timezone"] = invitee_timezone
-    payload = {
+    payload: dict[str, Any] = {
         "event_type": event_type_uri,
         "start_time": start_time.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
         "invitee": invitee,
     }
+
+    try:
+        et_response = requests.get(event_type_uri, headers=pat_headers, timeout=20)
+        resource = et_response.json().get("resource", {}) if et_response.status_code == 200 else {}
+    except Exception:
+        resource = {}
+
+    locations = resource.get("locations") or []
+    if locations:
+        loc = locations[0]
+        location: dict[str, Any] = {"kind": loc.get("kind")}
+        # Kinds like outbound_call / ask_invitee need an invitee-supplied value.
+        loc_value = loc.get("location") or invitee_phone_e164
+        if loc_value:
+            location["location"] = loc_value
+        payload["location"] = location
+
+    questions_and_answers = []
+    for question in resource.get("custom_questions") or []:
+        if not question.get("enabled", True):
+            continue
+        is_phone = question.get("type") == "phone_number"
+        if not question.get("required") and not (is_phone and invitee_phone_e164):
+            continue
+        answer = invitee_phone_e164 if is_phone else None
+        questions_and_answers.append(
+            {
+                "question": question.get("name"),
+                "position": question.get("position"),
+                "answer": answer or "Booked by clinic admin",
+            }
+        )
+    if questions_and_answers:
+        payload["questions_and_answers"] = questions_and_answers
 
     try:
         response = requests.post(url, headers=pat_headers, json=payload, timeout=20)

@@ -321,6 +321,7 @@ def create_session(
             invitee_name=client.name or "Client",
             invitee_email=(client.email or settings.business_email),
             invitee_timezone=therapist.preferred_timezone,
+            invitee_phone_e164=client.phone_e164,
         )
         if invitee_resource:
             calendly_event_uri = invitee_resource.get("event")
