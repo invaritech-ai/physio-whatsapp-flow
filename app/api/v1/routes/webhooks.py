@@ -472,11 +472,13 @@ def _notify_booking_confirmed(
                     },
                 )
             else:
+                client_local_dt = to_preferred_timezone(session.start_time, client_tz)
                 client_local_text = _format_local_timestamp(session.start_time, client_tz)
+                tz_label = client_local_dt.strftime("%Z") or client_tz
                 message = (
                     f"Booking confirmed, {client_name}! ✅\n\n"
                     f"Therapist: {therapist.display_name}\n"
-                    f"Time: {client_local_text} ({client_tz})\n\n"
+                    f"Time: {client_local_text} ({tz_label})\n\n"
                     "If you need to reschedule or cancel, reply with 'reschedule'."
                 )
                 send_and_log(
