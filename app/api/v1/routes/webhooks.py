@@ -29,7 +29,7 @@ from app.services.booking_intents import (
 )
 from app.services.calendly import get_scheduled_event_with_pat
 from app.services.bot.helpers import send_and_log
-from app.services.timezone_utils import to_preferred_timezone
+from app.services.timezone_utils import resolve_client_timezone, to_preferred_timezone
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -442,15 +442,21 @@ def _notify_booking_confirmed(
     dirty = False
     local_start_text = _format_local_timestamp(session.start_time, therapist.preferred_timezone)
     therapist_tz = therapist.preferred_timezone or settings.invoice_timezone or "UTC"
+    # Client-facing times use the client's timezone (inferred from their phone
+    # country code), so a client in India isn't shown an unlabeled HK time.
+    client_tz = resolve_client_timezone(client.phone_e164, therapist.preferred_timezone)
 
     if not session.reminder_sent:
         try:
             client_name = client.name or "there"
             template_sid = (settings.twilio_whatsapp_session_booked_content_sid or "").strip()
             if template_sid:
-                local_dt = to_preferred_timezone(session.start_time, therapist.preferred_timezone)
+                local_dt = to_preferred_timezone(session.start_time, client_tz)
                 date_str = local_dt.strftime("%a, %b %d, %Y")
                 time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+                tz_abbrev = local_dt.strftime("%Z")
+                if tz_abbrev:
+                    time_str = f"{time_str} ({tz_abbrev})"
                 send_and_log(
                     db=db,
                     phone_e164=client.phone_e164,
@@ -466,10 +472,13 @@ def _notify_booking_confirmed(
                     },
                 )
             else:
+                client_local_dt = to_preferred_timezone(session.start_time, client_tz)
+                client_local_text = _format_local_timestamp(session.start_time, client_tz)
+                tz_label = client_local_dt.strftime("%Z") or client_tz
                 message = (
                     f"Booking confirmed, {client_name}! ✅\n\n"
                     f"Therapist: {therapist.display_name}\n"
-                    f"Time: {local_start_text} ({therapist_tz})\n\n"
+                    f"Time: {client_local_text} ({tz_label})\n\n"
                     "If you need to reschedule or cancel, reply with 'reschedule'."
                 )
                 send_and_log(

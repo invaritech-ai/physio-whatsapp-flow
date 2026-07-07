@@ -7,10 +7,11 @@ from sqlmodel import Session, select
 from sqlmodel import func
 
 from app.core.encryption import decrypt_string
+from app.models import Client
 from app.models import Session as TherapySession
 from app.models import Therapist
 from app.services.calendly import get_invitee_links_with_pat
-from app.services.timezone_utils import as_utc
+from app.services.timezone_utils import as_utc, resolve_client_timezone, to_preferred_timezone
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
     sessions = db.exec(stmt).all()
 
     cutoff = timedelta(hours=RESCHEDULE_CUTOFF_HOURS)
+    client = db.get(Client, client_id)
 
     result = []
     for session in sessions:
@@ -55,8 +57,17 @@ def get_upcoming_sessions_with_links(db: Session, client_id: int | None) -> list
         therapist = db.get(Therapist, session.therapist_id)
         therapist_name = therapist.display_name if therapist else "Unknown"
 
-        # Format start time
-        start_time_str = session.start_time.strftime("%A, %B %d at %I:%M %p")
+        # Format start time in the client's timezone (inferred from phone country
+        # code, falling back to the therapist's timezone). Stored times are UTC-naive.
+        client_tz = resolve_client_timezone(
+            client.phone_e164 if client else None,
+            therapist.preferred_timezone if therapist else None,
+        )
+        local_dt = to_preferred_timezone(session.start_time, client_tz)
+        start_time_str = local_dt.strftime("%A, %B %d at %I:%M %p")
+        tz_abbrev = local_dt.strftime("%Z")
+        if tz_abbrev:
+            start_time_str = f"{start_time_str} ({tz_abbrev})"
 
         # Within the cutoff (e.g. <24h away) reschedule/cancel via WhatsApp is blocked:
         # the client is directed to the admin instead, so we don't fetch/show links.

@@ -6,12 +6,14 @@ from unittest.mock import patch
 from sqlmodel import Session, select
 
 from app.models import (
+    AuthEvent,
     BillingPlan,
     Client,
     ClientPlanAssignment,
     Session as TherapySession,
     SessionNote,
     Therapist,
+    TherapistEventType,
     User,
 )
 
@@ -125,6 +127,194 @@ def _admin_auth_context(admin: User):
             "iat": _epoch(datetime.now(timezone.utc)),
         },
     )
+
+
+def test_quick_book_session_notifies_client_and_therapist(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="notify")
+    therapist.calendly_pat_encrypted = "encrypted-pat"
+    db_session.add(therapist)
+    db_session.add(
+        TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri="https://api.calendly.com/event_types/QUICKBOOK_45",
+            duration_minutes=45,
+            scheduling_url="https://calendly.com/dr-notify/45min",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    client_row = _create_client(db_session, phone="+85295550011", name="Quick Book Client")
+
+    start = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
+    start_iso = start.isoformat().replace("+00:00", "Z")
+
+    with (
+        _admin_auth_context(admin),
+        patch("app.api.v1.routes.admin.therapists.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.admin.sessions.get_event_type_available_times_with_pat",
+            return_value=[{"start_time": start_iso}],
+        ),
+        patch(
+            "app.api.v1.routes.admin.sessions.create_event_invitee_with_pat",
+            return_value={
+                "uri": "https://api.calendly.com/scheduled_events/QB_EVENT/invitees/QB_INVITEE",
+                "event": "https://api.calendly.com/scheduled_events/QB_EVENT",
+            },
+        ) as mock_book,
+        patch("app.api.v1.routes.webhooks.send_and_log", return_value="SM-QUICKBOOK-1") as mock_send,
+    ):
+        response = client.post(
+            "/api/v1/admin/sessions",
+            json={
+                "client_id": client_row.id,
+                "therapist_id": therapist.id,
+                "duration_minutes": 45,
+                "start_time": start_iso,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    session_row = db_session.get(TherapySession, response.json()["id"])
+    assert session_row is not None
+    # The slot is booked on Calendly too, and the event/invitee URIs are stored
+    # so the follow-up invitee.created webhook dedupes onto this row.
+    assert mock_book.call_count == 1
+    assert session_row.calendly_event_uri == "https://api.calendly.com/scheduled_events/QB_EVENT"
+    assert (
+        session_row.calendly_invitee_uri
+        == "https://api.calendly.com/scheduled_events/QB_EVENT/invitees/QB_INVITEE"
+    )
+    assert session_row.source == "calendly"
+    # Same as a Calendly booking: client WhatsApp confirmation + therapist notification.
+    assert mock_send.call_count == 1
+    assert mock_send.call_args.kwargs["phone_e164"] == client_row.phone_e164
+    assert session_row.reminder_sent is True
+    assert session_row.therapist_notified is True
+
+    events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == therapist.user_id,
+            AuthEvent.event_type == "therapist.notification.booking_confirmed",
+        )
+    ).all()
+    assert len(events) == 1
+
+
+def test_quick_book_falls_back_to_in_app_session_when_calendly_booking_fails(
+    client, db_session: Session
+):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="fallback")
+    therapist.calendly_pat_encrypted = "encrypted-pat"
+    db_session.add(therapist)
+    db_session.add(
+        TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri="https://api.calendly.com/event_types/FALLBACK_45",
+            duration_minutes=45,
+            scheduling_url="https://calendly.com/dr-fallback/45min",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    client_row = _create_client(db_session, phone="+85295550013", name="Fallback Client")
+
+    start = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
+    start_iso = start.isoformat().replace("+00:00", "Z")
+
+    with (
+        _admin_auth_context(admin),
+        patch("app.api.v1.routes.admin.therapists.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.admin.sessions.get_event_type_available_times_with_pat",
+            return_value=[{"start_time": start_iso}],
+        ),
+        patch(
+            "app.api.v1.routes.admin.sessions.create_event_invitee_with_pat",
+            return_value=None,
+        ),
+        patch("app.api.v1.routes.webhooks.send_and_log", return_value="SM-QUICKBOOK-2"),
+    ):
+        response = client.post(
+            "/api/v1/admin/sessions",
+            json={
+                "client_id": client_row.id,
+                "therapist_id": therapist.id,
+                "duration_minutes": 45,
+                "start_time": start_iso,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 201
+    session_row = db_session.get(TherapySession, response.json()["id"])
+    assert session_row is not None
+    assert session_row.calendly_event_uri is None
+    assert session_row.source == "manual"
+    assert session_row.status == "scheduled"
+
+
+def test_available_times_excludes_slots_already_booked_in_app(client, db_session: Session):
+    admin = _create_admin(db_session)
+    therapist = _create_therapist(db_session, suffix="avail")
+    therapist.calendly_pat_encrypted = "encrypted-pat"
+    db_session.add(therapist)
+    db_session.add(
+        TherapistEventType(
+            therapist_id=therapist.id,
+            calendly_event_type_uri="https://api.calendly.com/event_types/AVAIL_45",
+            duration_minutes=45,
+            scheduling_url="https://calendly.com/dr-avail/45min",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    client_row = _create_client(db_session, phone="+85295550012", name="Avail Client")
+
+    day_start = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    taken = day_start.replace(hour=10, minute=30)
+    free = day_start.replace(hour=11, minute=15)
+    # Calendly still reports both slots — it doesn't know about manual in-app bookings.
+    calendly_slots = [
+        {"start_time": taken.isoformat().replace("+00:00", "Z")},
+        {"start_time": free.isoformat().replace("+00:00", "Z")},
+    ]
+    _create_session(
+        db_session,
+        client_id=client_row.id,
+        therapist_id=therapist.id,
+        start_time=taken.replace(tzinfo=None),
+        duration_minutes=45,
+        status="scheduled",
+    )
+
+    with (
+        _admin_auth_context(admin),
+        patch("app.api.v1.routes.admin.therapists.decrypt_string", return_value="plain-pat"),
+        patch(
+            "app.api.v1.routes.admin.therapists.get_event_type_available_times_with_pat",
+            return_value=calendly_slots,
+        ),
+    ):
+        response = client.get(
+            f"/api/v1/admin/therapists/{therapist.id}/available-times",
+            params={
+                "duration_minutes": 45,
+                "start": day_start.isoformat(),
+                "end": (day_start + timedelta(days=1)).isoformat(),
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    slots = response.json()["slots"]
+    assert len(slots) == 1
+    assert datetime.fromisoformat(slots[0]["start_time"]) == free
 
 
 def test_list_admin_sessions_returns_paginated_response(client, db_session: Session):

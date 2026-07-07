@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -5,6 +6,8 @@ from typing import Any
 import requests
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 CALENDLY_API_TOKEN = settings.calendly_api_token or os.getenv("CALENDLY_API_TOKEN")
 BASE_URL = "https://api.calendly.com"
@@ -281,3 +284,91 @@ def get_event_type_available_times_with_pat(
         pass
 
     return []
+
+
+def create_event_invitee_with_pat(
+    event_type_uri: str,
+    calendly_pat: str,
+    start_time: datetime,
+    invitee_name: str,
+    invitee_email: str,
+    invitee_timezone: str | None = None,
+    invitee_phone_e164: str | None = None,
+) -> dict[str, Any] | None:
+    """Book a Calendly event via the Scheduling API (Create Event Invitee).
+
+    Requires a paid Calendly plan on the therapist's account. On success returns
+    the created invitee resource, whose `event` field is the scheduled event URI
+    and `uri` field is the invitee URI.
+
+    The event type is fetched first to mirror its configured location and answer
+    its custom questions (both are rejected as 400 if omitted). Phone-type
+    questions are answered with the invitee's phone so the invitee.created
+    webhook can resolve the client the same way as bot-driven bookings.
+
+    Returns None on any failure (unsupported plan, slot taken, network error).
+    """
+    url = f"{BASE_URL}/invitees"
+    pat_headers = {
+        "Authorization": f"Bearer {calendly_pat}",
+        "Content-Type": "application/json",
+    }
+    invitee: dict[str, Any] = {"name": invitee_name, "email": invitee_email}
+    if invitee_timezone:
+        invitee["timezone"] = invitee_timezone
+    payload: dict[str, Any] = {
+        "event_type": event_type_uri,
+        "start_time": start_time.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
+        "invitee": invitee,
+    }
+
+    try:
+        et_response = requests.get(event_type_uri, headers=pat_headers, timeout=20)
+        resource = et_response.json().get("resource", {}) if et_response.status_code == 200 else {}
+    except Exception:
+        resource = {}
+
+    locations = resource.get("locations") or []
+    if locations:
+        loc = locations[0]
+        location: dict[str, Any] = {"kind": loc.get("kind")}
+        # Kinds like outbound_call / ask_invitee need an invitee-supplied value.
+        loc_value = loc.get("location") or invitee_phone_e164
+        if loc_value:
+            location["location"] = loc_value
+        payload["location"] = location
+
+    questions_and_answers = []
+    for question in resource.get("custom_questions") or []:
+        if not question.get("enabled", True):
+            continue
+        is_phone = question.get("type") == "phone_number"
+        if not question.get("required") and not (is_phone and invitee_phone_e164):
+            continue
+        answer = invitee_phone_e164 if is_phone else None
+        questions_and_answers.append(
+            {
+                "question": question.get("name"),
+                "position": question.get("position"),
+                "answer": answer or "Booked by clinic admin",
+            }
+        )
+    if questions_and_answers:
+        payload["questions_and_answers"] = questions_and_answers
+
+    try:
+        response = requests.post(url, headers=pat_headers, json=payload, timeout=20)
+        if response.status_code == 201:
+            resource = response.json().get("resource")
+            return resource if isinstance(resource, dict) else None
+        logger.warning(
+            "Calendly create-invitee failed status=%s body=%s event_type=%s start=%s",
+            response.status_code,
+            response.text[:500],
+            event_type_uri,
+            payload["start_time"],
+        )
+    except Exception:
+        logger.exception("Calendly create-invitee request errored event_type=%s", event_type_uri)
+
+    return None
