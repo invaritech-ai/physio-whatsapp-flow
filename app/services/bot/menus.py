@@ -73,7 +73,8 @@ def build_duration_menu(name: str) -> str:
         "How long would you like your session to be?\n\n"
         "1️⃣ 45 minutes - Standard Appointment\n"
         "2️⃣ 30 minutes\n"
-        "Please reply with 1 or 2. `Menu` to go back to main menu."
+        "3️⃣ 60 minutes\n"
+        "Please reply with 1, 2 or 3. `Menu` to go back to main menu."
     )
 
 

@@ -611,17 +611,17 @@ def handle_awaiting_duration(client, body: str, db: Session) -> tuple[str, str]:
     """
     Handle AWAITING_DURATION state - validate and save session duration.
 
-    Valid choices: 1 (45min), 2 (30min)
+    Valid choices: 1 (45min), 2 (30min), 3 (60min)
     """
-    choice = validate_numbered_choice(body, [1, 2])
+    choice = validate_numbered_choice(body, [1, 2, 3])
 
     if choice is None:
         return (
             states.AWAITING_DURATION,
-            menus.build_invalid_input_message(["1", "2"]),
+            menus.build_invalid_input_message(["1", "2", "3"]),
         )
 
-    duration_map = {1: 45, 2: 30}
+    duration_map = {1: 45, 2: 30, 3: 60}
     duration = duration_map[choice]
     conv_data = update_conversation_data(client, duration=duration)
     db.add(client)
