@@ -43,6 +43,15 @@ def build_welcome_menu() -> str:
     )
 
 
+def build_preferred_name_prompt(name: str) -> str:
+    """Ask the client what they'd like to be called (after the official name)."""
+    return (
+        f"Thanks, {name}! 😊\n\n"
+        "And what would you like us to call you? "
+        "(Reply 'skip' to use your first name.)"
+    )
+
+
 def build_booking_path_menu(name: str, can_manage_booking: bool = True) -> str:
     """Build booking-path menu for clients without a preferred therapist shortcut."""
     manage_line = "3️⃣ Reschedule or cancel\n\n" if can_manage_booking else ""
@@ -64,7 +73,8 @@ def build_duration_menu(name: str) -> str:
         "How long would you like your session to be?\n\n"
         "1️⃣ 45 minutes - Standard Appointment\n"
         "2️⃣ 30 minutes\n"
-        "Please reply with 1 or 2. `Menu` to go back to main menu."
+        "3️⃣ 60 minutes\n"
+        "Please reply with 1, 2 or 3. `Menu` to go back to main menu."
     )
 
 
@@ -248,20 +258,33 @@ def build_therapist_pick_menu(therapists: list[tuple[int, str]]) -> str:
 def build_by_name_available_duration_menu(
     therapist_name: str,
     duration_options_minutes: list[int],
+    *,
+    is_fallback: bool = True,
 ) -> str:
-    """Build menu for durations available for a selected therapist."""
+    """Build menu for durations available for a selected therapist.
+
+    ``is_fallback`` True is shown when the client's chosen duration wasn't
+    available; False is the first prompt for a therapist (shows only the
+    durations that therapist actually offers).
+    """
     if not duration_options_minutes:
         return (
             f"Sorry, {therapist_name} does not currently have bookable durations.\n\n"
             "Please type 'menu' to restart."
         )
 
-    lines = [
-        f"{therapist_name} does not offer your previous duration choice right now.",
-        "",
-        "Please choose one of the available durations:",
-        "",
-    ]
+    if is_fallback:
+        lines = [
+            f"{therapist_name} does not offer your previous duration choice right now.",
+            "",
+            "Please choose one of the available durations:",
+            "",
+        ]
+    else:
+        lines = [
+            f"How long would you like your session with {therapist_name} to be?",
+            "",
+        ]
     for idx, duration in enumerate(duration_options_minutes, 1):
         label = "45 minutes - Standard Appointment" if duration == 45 else f"{duration} minutes"
         lines.append(f"{_get_specialty_emoji(idx)} {label}")
