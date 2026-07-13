@@ -581,6 +581,33 @@ def admin_update_slot_mapping(
     return [_slot_info(et) for et in sorted(created, key=lambda e: e.duration_minutes)]
 
 
+@router.put("/{therapist_id}/calendly-pat", response_model=ValidateCalendlyResponse)
+def admin_set_therapist_calendly_pat(
+    therapist_id: int,
+    data: ValidateCalendlyRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Set/replace a therapist's Calendly Personal Access Token (admin).
+
+    Validates the token, then stores it encrypted and updates the therapist's
+    Calendly user URI. Returns the validation preview (event types found).
+    """
+    _ = admin
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+    pat = data.calendly_pat.strip()
+    valid, validation_data, errors = validate_calendly_pat(pat)
+    if not valid:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly token")
+    therapist.calendly_user_uri = validation_data["user_uri"]
+    therapist.calendly_pat_encrypted = encrypt_string(pat)
+    db.add(therapist)
+    db.commit()
+    return _build_validate_calendly_response(validation_data)
+
+
 def _resolve_active_event_type(
     db: Session, therapist_id: int, duration_minutes: int
 ) -> TherapistEventType:

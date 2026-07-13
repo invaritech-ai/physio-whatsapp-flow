@@ -716,3 +716,63 @@ def test_admin_update_slot_mapping_replaces_links_and_payouts(client, db_session
         select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
     ).all()
     assert {r.duration_minutes for r in rows} == {30, 60}
+
+
+def test_admin_set_therapist_calendly_pat(client, db_session: Session):
+    """Admin can set/replace a therapist's Calendly PAT: it is validated then
+    stored encrypted and the Calendly user URI is updated (req 2.4)."""
+    from unittest.mock import patch
+
+    create = client.post(
+        "/api/v1/admin/therapists",
+        json={"email": "pat@test.com", "display_name": "Dr PAT"},
+    )
+    assert create.status_code == 201
+    therapist_id = create.json()["id"]
+
+    validation = {
+        "valid": True,
+        "user_uri": "https://api.calendly.com/users/XYZ",
+        "name": "Dr PAT",
+        "email": "pat@test.com",
+        "event_types_found": 0,
+        "event_types": [],
+        "warnings": [],
+    }
+    with patch(
+        "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+        return_value=(True, validation, []),
+    ), patch(
+        "app.api.v1.routes.admin.therapists.encrypt_string",
+        return_value="ENC(pat-token)",
+    ):
+        resp = client.put(
+            f"/api/v1/admin/therapists/{therapist_id}/calendly-pat",
+            json={"calendly_pat": "pat-token"},
+        )
+    assert resp.status_code == 200
+
+    therapist = db_session.get(Therapist, therapist_id)
+    db_session.refresh(therapist)
+    assert therapist.calendly_pat_encrypted == "ENC(pat-token)"
+    assert therapist.calendly_user_uri == "https://api.calendly.com/users/XYZ"
+
+
+def test_admin_set_therapist_calendly_pat_rejects_invalid(client, db_session: Session):
+    from unittest.mock import patch
+
+    create = client.post(
+        "/api/v1/admin/therapists",
+        json={"email": "badpat@test.com", "display_name": "Dr Bad"},
+    )
+    therapist_id = create.json()["id"]
+
+    with patch(
+        "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+        return_value=(False, {}, ["Invalid token"]),
+    ):
+        resp = client.put(
+            f"/api/v1/admin/therapists/{therapist_id}/calendly-pat",
+            json={"calendly_pat": "bad"},
+        )
+    assert resp.status_code == 400
