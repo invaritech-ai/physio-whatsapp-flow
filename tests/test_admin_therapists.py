@@ -632,3 +632,56 @@ def test_pending_therapist_links_to_real_sub_on_first_login(client, db_session: 
     )
     assert linked.id == user_id
     assert linked.neon_auth_sub == "real-neon-sub-xyz"
+
+
+def test_create_therapist_with_offered_durations_provisions_link_less_slots(client, db_session: Session):
+    """Admin create with slot_durations + payouts (no Calendly link yet) creates
+    link-less event types carrying the payout (req 2.4 full create form)."""
+    from app.models import TherapistEventType
+
+    response = client.post(
+        "/api/v1/admin/therapists",
+        json={
+            "email": "slots@test.com",
+            "display_name": "Dr Slots",
+            "license_number": "PT700700",
+            "slot_durations": ["15", "60"],
+            "slot_payouts": {"15": 20000, "60": 90000},
+        },
+    )
+    assert response.status_code == 201
+    therapist_id = response.json()["id"]
+
+    rows = db_session.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
+    ).all()
+    by_duration = {r.duration_minutes: r for r in rows}
+    assert set(by_duration.keys()) == {15, 60}
+    assert by_duration[15].scheduling_url is None
+    assert by_duration[15].payout_cents == 20000
+    assert by_duration[60].payout_cents == 90000
+
+
+def test_create_therapist_with_booking_links_provisions_slots(client, db_session: Session):
+    """Admin create with slot_mapping (booking links, no PAT) creates bookable slots."""
+    from app.models import TherapistEventType
+
+    response = client.post(
+        "/api/v1/admin/therapists",
+        json={
+            "email": "links@test.com",
+            "display_name": "Dr Links",
+            "slot_mapping": {"30": "https://calendly.com/dr/30", "45": "https://calendly.com/dr/45"},
+            "slot_payouts": {"30": 30000},
+        },
+    )
+    assert response.status_code == 201
+    therapist_id = response.json()["id"]
+
+    rows = db_session.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
+    ).all()
+    by_duration = {r.duration_minutes: r for r in rows}
+    assert by_duration[30].scheduling_url == "https://calendly.com/dr/30"
+    assert by_duration[30].payout_cents == 30000
+    assert by_duration[45].scheduling_url == "https://calendly.com/dr/45"
