@@ -154,6 +154,36 @@ class UpdateSpecialtiesRequest(BaseModel):
         default=[], description="List of new specialty names to create and assign"
     )
 
+# Business booking slots a therapist may map. 30/45 are required; 60 is optional
+# (added for req 3.2 / platform quick-book). 15-minute is intentionally excluded —
+# it is a session-plan/billing duration only, not a bookable appointment length.
+REQUIRED_SLOT_DURATIONS = {"30", "45"}
+ALLOWED_SLOT_DURATIONS = {"30", "45", "60"}
+
+
+def _validate_slot_mapping_keys(slot_mapping: dict[str, str]) -> dict[str, str]:
+    """Shared validation: require 30/45, allow optional 60, reject anything else,
+    and return the normalized (stripped, non-empty-URL) mapping."""
+    provided_keys = {key.strip() for key in slot_mapping.keys()}
+    missing = REQUIRED_SLOT_DURATIONS - provided_keys
+    if missing:
+        raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
+    extra = provided_keys - ALLOWED_SLOT_DURATIONS
+    if extra:
+        raise ValueError(
+            f"Unexpected durations: {', '.join(sorted(extra))}. "
+            f"Allowed: {', '.join(sorted(ALLOWED_SLOT_DURATIONS))}."
+        )
+    normalized: dict[str, str] = {}
+    for duration_key, url in slot_mapping.items():
+        normalized_key = duration_key.strip()
+        normalized_url = url.strip()
+        if not normalized_url:
+            raise ValueError(f"Scheduling URL cannot be empty for duration {normalized_key}.")
+        normalized[normalized_key] = normalized_url
+    return normalized
+
+
 class SaveCalendlyRequest(BaseModel):
     """Request to save Calendly PAT with explicit slot mapping.
 
@@ -181,30 +211,12 @@ class SaveCalendlyRequest(BaseModel):
     )
     slot_mapping: dict[str, str] = Field(
         ...,
-        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'. Both may share the same URL.",
+        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'; '60' optional. Slots may share the same URL.",
     )
 
     @model_validator(mode="after")
     def validate_slot_mapping(self) -> "SaveCalendlyRequest":
-        required_keys = {"30", "45"}
-        provided_keys = {key.strip() for key in self.slot_mapping.keys()}
-        missing = required_keys - provided_keys
-        if missing:
-            raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
-        extra = provided_keys - required_keys
-        if extra:
-            raise ValueError(
-                f"Unexpected durations: {', '.join(sorted(extra))}. Only 30 and 45 allowed."
-            )
-
-        normalized_mapping: dict[str, str] = {}
-        for duration_key, url in self.slot_mapping.items():
-            normalized_key = duration_key.strip()
-            normalized_url = url.strip()
-            if not normalized_url:
-                raise ValueError(f"Scheduling URL cannot be empty for duration {normalized_key}.")
-            normalized_mapping[normalized_key] = normalized_url
-        self.slot_mapping = normalized_mapping
+        self.slot_mapping = _validate_slot_mapping_keys(self.slot_mapping)
         return self
 
 
@@ -213,26 +225,12 @@ class UpdateSlotMappingRequest(BaseModel):
 
     slot_mapping: dict[str, str] = Field(
         ...,
-        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'.",
+        description="Mapping of business slot duration (minutes) to Calendly scheduling URL. Required keys: '30' and '45'; '60' optional.",
     )
 
     @model_validator(mode="after")
     def validate_slot_mapping(self) -> "UpdateSlotMappingRequest":
-        required_keys = {"30", "45"}
-        provided_keys = {key.strip() for key in self.slot_mapping.keys()}
-        missing = required_keys - provided_keys
-        if missing:
-            raise ValueError(f"Missing required durations: {', '.join(sorted(missing))}")
-        extra = provided_keys - required_keys
-        if extra:
-            raise ValueError(f"Unexpected durations: {', '.join(sorted(extra))}. Only 30 and 45 allowed.")
-        normalized: dict[str, str] = {}
-        for k, url in self.slot_mapping.items():
-            url = url.strip()
-            if not url:
-                raise ValueError(f"Scheduling URL cannot be empty for duration {k.strip()}.")
-            normalized[k.strip()] = url
-        self.slot_mapping = normalized
+        self.slot_mapping = _validate_slot_mapping_keys(self.slot_mapping)
         return self
 
 

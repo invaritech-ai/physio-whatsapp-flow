@@ -1465,3 +1465,58 @@ class TestAuthorization:
 
             assert response.status_code == 200
             assert response.json()["is_active"] is False
+
+
+class TestSlotMappingDurationValidation:
+    """Schema validation for bookable slot durations (req 3.2 / platform quick-book).
+
+    30 & 45 required; 60 optional; 15 (and anything else) rejected — 15 is a
+    session-plan/billing duration, not a bookable appointment length.
+    """
+
+    def _save_request(self, mapping):
+        from app.api.v1.schemas.therapist_onboarding import SaveCalendlyRequest
+
+        return SaveCalendlyRequest(calendly_pat="pat-token", slot_mapping=mapping)
+
+    def test_accepts_optional_60_slot(self):
+        req = self._save_request(
+            {
+                "30": "https://calendly.com/t/30",
+                "45": "https://calendly.com/t/45",
+                "60": "https://calendly.com/t/60",
+            }
+        )
+        assert set(req.slot_mapping.keys()) == {"30", "45", "60"}
+
+    def test_accepts_just_required_30_45(self):
+        req = self._save_request(
+            {"30": "https://calendly.com/t/30", "45": "https://calendly.com/t/45"}
+        )
+        assert set(req.slot_mapping.keys()) == {"30", "45"}
+
+    def test_rejects_15_minute_slot(self):
+        with pytest.raises(ValueError):
+            self._save_request(
+                {
+                    "15": "https://calendly.com/t/15",
+                    "30": "https://calendly.com/t/30",
+                    "45": "https://calendly.com/t/45",
+                }
+            )
+
+    def test_rejects_missing_required_duration(self):
+        with pytest.raises(ValueError):
+            self._save_request({"30": "https://calendly.com/t/30"})
+
+    def test_update_request_accepts_optional_60(self):
+        from app.api.v1.schemas.therapist_onboarding import UpdateSlotMappingRequest
+
+        req = UpdateSlotMappingRequest(
+            slot_mapping={
+                "30": "https://calendly.com/t/30",
+                "45": "https://calendly.com/t/45",
+                "60": "https://calendly.com/t/60",
+            }
+        )
+        assert "60" in req.slot_mapping
