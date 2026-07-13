@@ -22,3 +22,6 @@ class TherapistEventType(SQLModel, table=True):
     duration_minutes: int
     scheduling_url: str  # Public booking link
     is_active: bool = Field(default=True)
+    # Optional therapist compensation (payout) for completing a session of this
+    # duration — drives payroll. Independent of any client-facing charge.
+    payout_cents: int | None = Field(default=None)

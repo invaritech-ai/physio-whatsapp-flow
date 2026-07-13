@@ -9,17 +9,11 @@ class AdminActionCenterDebugIds(BaseModel):
     """Optional debug IDs for card-to-table parity verification."""
 
     pending_access_request_ids: list[int] = Field(default_factory=list)
-    clients_missing_plan_30_ids: list[int] = Field(default_factory=list)
-    clients_missing_plan_45_ids: list[int] = Field(default_factory=list)
+    # Client IDs missing an active plan assignment, keyed by str(duration_minutes).
+    clients_missing_plan_ids_by_duration: dict[str, list[int]] = Field(default_factory=dict)
     clients_missing_any_plan_assignment_ids: list[int] = Field(default_factory=list)
     past_sessions_missing_payment_record_ids: list[int] = Field(default_factory=list)
     active_clients_missing_financial_profile_ids: list[int] = Field(default_factory=list)
-    # Backward-compatible aliases used by some FE surfaces.
-    clients_missing_plan_30: list[int] = Field(default_factory=list)
-    clients_missing_plan_45: list[int] = Field(default_factory=list)
-    active_clients_missing_any_plan_assignment: list[int] = Field(default_factory=list)
-    past_sessions_missing_payment_record: list[int] = Field(default_factory=list)
-    active_clients_missing_financial_profile: list[int] = Field(default_factory=list)
 
 
 class AdminActionCenterSummaryResponse(BaseModel):
@@ -33,8 +27,8 @@ class AdminActionCenterSummaryResponse(BaseModel):
     therapists_missing_license: int
     therapists_missing_calendly: int
     therapists_missing_specialties: int
-    clients_missing_plan_30: int
-    clients_missing_plan_45: int
+    # Count of active clients missing an active plan assignment, keyed by str(duration_minutes).
+    clients_missing_plan_by_duration: dict[str, int]
     active_clients_missing_any_plan_assignment: int
     clients_with_receipting_backlog: int
     past_sessions_missing_payment_record: int

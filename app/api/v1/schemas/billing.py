@@ -33,7 +33,9 @@ class BillingPlanCreate(BaseModel):
     @model_validator(mode="after")
     def validate_duration(self) -> "BillingPlanCreate":
         if self.duration_minutes not in SUPPORTED_PLAN_DURATIONS:
-            raise ValueError("duration_minutes must be one of 30 or 45 for v1")
+            raise ValueError(
+                f"duration_minutes must be one of {sorted(SUPPORTED_PLAN_DURATIONS)}"
+            )
         return self
 
 
@@ -49,7 +51,9 @@ class BillingPlanUpdate(BaseModel):
     @model_validator(mode="after")
     def validate_duration(self) -> "BillingPlanUpdate":
         if self.duration_minutes is not None and self.duration_minutes not in SUPPORTED_PLAN_DURATIONS:
-            raise ValueError("duration_minutes must be one of 30 or 45 for v1")
+            raise ValueError(
+                f"duration_minutes must be one of {sorted(SUPPORTED_PLAN_DURATIONS)}"
+            )
         return self
 
 
@@ -80,14 +84,18 @@ class ClientPlanAssignmentUpsertItem(BaseModel):
     @model_validator(mode="after")
     def validate_duration(self) -> "ClientPlanAssignmentUpsertItem":
         if self.duration_minutes not in SUPPORTED_PLAN_DURATIONS:
-            raise ValueError("duration_minutes must be one of 30 or 45 for v1")
+            raise ValueError(
+                f"duration_minutes must be one of {sorted(SUPPORTED_PLAN_DURATIONS)}"
+            )
         return self
 
 
 class ClientPlanAssignmentsUpsertRequest(BaseModel):
     """Transactional upsert request for client plan assignments."""
 
-    assignments: list[ClientPlanAssignmentUpsertItem] = Field(min_length=1, max_length=2)
+    assignments: list[ClientPlanAssignmentUpsertItem] = Field(
+        min_length=1, max_length=len(SUPPORTED_PLAN_DURATIONS)
+    )
 
     @model_validator(mode="after")
     def validate_unique_durations(self) -> "ClientPlanAssignmentsUpsertRequest":
@@ -111,11 +119,12 @@ class ClientPlanAssignmentSummary(BaseModel):
 
 
 class ClientPlanAssignmentsResponse(BaseModel):
-    """Deterministic client assignment response for duration 30 and 45."""
+    """Client assignment response keyed by supported duration (str minutes)."""
 
     client_id: int
-    duration_30: ClientPlanAssignmentSummary | None
-    duration_45: ClientPlanAssignmentSummary | None
+    # Keys are string forms of SUPPORTED_PLAN_DURATIONS (e.g. "15", "30", "45", "60");
+    # value is None when the client has no active assignment for that duration.
+    assignments: dict[str, ClientPlanAssignmentSummary | None]
 
 
 class PaymentRecordCreateRequest(BaseModel):
