@@ -63,6 +63,24 @@ class TestCreateTherapist:
         assert therapist is not None
         assert therapist.user_id == user.id
 
+    def test_create_therapist_without_neon_sub_uses_pending_sentinel(self, client, db_session: Session):
+        """Admin-provisioned therapist (no neon_auth_sub) gets a pending: sentinel + is_female."""
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "pending@test.com",
+                "display_name": "Dr Pending",
+                "license_number": "PT900900",
+                "is_female": True,
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["is_female"] is True
+
+        user = db_session.get(User, data["user_id"])
+        assert user.neon_auth_sub == "pending:pending@test.com"
+
     def test_create_therapist_without_calendly(self, client, db_session: Session):
         """Create therapist without Calendly link (optional)."""
         response = client.post(
@@ -588,3 +606,29 @@ class TestSpecialtyAssignment:
         assert len(data) == 2
         specialty_names = {s["name"] for s in data}
         assert specialty_names == {"Sports Rehab", "Orthopedic"}
+
+
+def test_pending_therapist_links_to_real_sub_on_first_login(client, db_session: Session):
+    """An admin-provisioned (pending:) therapist is relinked to the real Neon sub
+    by email on first login, so the created record becomes usable."""
+    from app.core.auth import get_current_approved_user
+
+    resp = client.post(
+        "/api/v1/admin/therapists",
+        json={
+            "email": "linkme@test.com",
+            "display_name": "Dr Link",
+            "license_number": "PT111222",
+        },
+    )
+    assert resp.status_code == 201
+    user_id = resp.json()["user_id"]
+    assert db_session.get(User, user_id).neon_auth_sub == "pending:linkme@test.com"
+
+    linked = get_current_approved_user(
+        "therapist",
+        {"user_id": "real-neon-sub-xyz", "email": "linkme@test.com"},
+        db_session,
+    )
+    assert linked.id == user_id
+    assert linked.neon_auth_sub == "real-neon-sub-xyz"

@@ -13,19 +13,23 @@ class TherapistCreate(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "neon_auth_sub": "auth-therapist-123",
                 "email": "dr.smith@clinic.com",
                 "display_name": "Dr. Smith",
                 "license_number": "PT203315",
+                "is_female": False,
                 "calendly_user_uri": "https://api.calendly.com/users/XXXXX",
             }
         }
     )
 
-    neon_auth_sub: str = Field(..., min_length=1, description="Neon Auth subject ID")
+    # Optional: when omitted (admin-provisioned therapist), the account is created
+    # with a pending sentinel sub and linked to the real Neon identity by email on
+    # first login. Callers that already hold a Neon sub may still pass it.
+    neon_auth_sub: str | None = Field(default=None, min_length=1, description="Neon Auth subject ID")
     email: EmailStr = Field(..., description="Therapist email (unique)")
     display_name: str = Field(..., min_length=1, max_length=100)
     license_number: str | None = Field(default=None, min_length=3, max_length=64)
+    is_female: bool = False
     calendly_user_uri: str | None = Field(None, description="Calendly user URI")
 
 
