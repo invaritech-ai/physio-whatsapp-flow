@@ -189,6 +189,15 @@ def get_therapist(therapist_id: int, admin: User = Depends(get_current_admin), d
     )
 
 
+def _slot_info(et: TherapistEventType) -> SlotMappingInfo:
+    return SlotMappingInfo(
+        duration_minutes=et.duration_minutes,
+        scheduling_url=et.scheduling_url,
+        calendly_event_type_uri=et.calendly_event_type_uri,
+        payout_cents=et.payout_cents,
+    )
+
+
 @router.get("/{therapist_id}/slots", response_model=list[SlotMappingInfo])
 def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_session)):
     """Get active booking slots (scheduling URLs) for a therapist."""
@@ -202,15 +211,7 @@ def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_adm
         .order_by(TherapistEventType.duration_minutes)
     ).all()
 
-    return [
-        SlotMappingInfo(
-            duration_minutes=et.duration_minutes,
-            scheduling_url=et.scheduling_url,
-            calendly_event_type_uri=et.calendly_event_type_uri,
-            payout_cents=et.payout_cents,
-        )
-        for et in event_types
-    ]
+    return [_slot_info(et) for et in event_types]
 
 
 @router.put("/{therapist_id}/payouts", response_model=list[SlotMappingInfo])
@@ -257,23 +258,7 @@ def set_therapist_payouts(
 
     db.commit()
 
-    refreshed = db.exec(
-        select(TherapistEventType)
-        .where(
-            TherapistEventType.therapist_id == therapist_id,
-            TherapistEventType.is_active == True,  # noqa: E712
-        )
-        .order_by(TherapistEventType.duration_minutes)
-    ).all()
-    return [
-        SlotMappingInfo(
-            duration_minutes=et.duration_minutes,
-            scheduling_url=et.scheduling_url,
-            calendly_event_type_uri=et.calendly_event_type_uri,
-            payout_cents=et.payout_cents,
-        )
-        for et in refreshed
-    ]
+    return [_slot_info(et) for et in sorted(event_types, key=lambda e: e.duration_minutes)]
 
 
 def _resolve_active_event_type(
