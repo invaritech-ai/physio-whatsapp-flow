@@ -29,8 +29,10 @@ from app.api.v1.schemas.therapist import (
     TherapistUpdate,
     TherapistResponse,
     TherapistListResponse,
+    TherapistPayoutUpdateRequest,
     SpecialtyAssignment,
 )
+from app.services.pricing import SUPPORTED_PLAN_DURATIONS
 from app.api.v1.schemas.therapist_onboarding import SlotMappingInfo
 from app.api.v1.schemas.specialty import SpecialtyResponse
 from app.services.calendly_webhooks import CalendlyWebhookError, check_webhook_registration
@@ -205,8 +207,72 @@ def get_therapist_slots(therapist_id: int, admin: User = Depends(get_current_adm
             duration_minutes=et.duration_minutes,
             scheduling_url=et.scheduling_url,
             calendly_event_type_uri=et.calendly_event_type_uri,
+            payout_cents=et.payout_cents,
         )
         for et in event_types
+    ]
+
+
+@router.put("/{therapist_id}/payouts", response_model=list[SlotMappingInfo])
+def set_therapist_payouts(
+    therapist_id: int,
+    data: TherapistPayoutUpdateRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Set per-duration therapist compensation (payout) used by payroll.
+
+    Updates payout_cents on the therapist's existing active event types. Each
+    requested duration must be supported and already have an active event type.
+    """
+    _ = admin
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    event_types = db.exec(
+        select(TherapistEventType).where(
+            TherapistEventType.therapist_id == therapist_id,
+            TherapistEventType.is_active == True,  # noqa: E712
+        )
+    ).all()
+    by_duration = {et.duration_minutes: et for et in event_types}
+
+    for duration_str, cents in data.payouts.items():
+        try:
+            duration = int(duration_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"invalid_duration:{duration_str}")
+        if duration not in SUPPORTED_PLAN_DURATIONS:
+            raise HTTPException(status_code=400, detail=f"unsupported_duration:{duration}")
+        if cents < 0:
+            raise HTTPException(status_code=400, detail="payout_cents_must_be_non_negative")
+        event_type = by_duration.get(duration)
+        if not event_type:
+            raise HTTPException(
+                status_code=400, detail=f"no_active_event_type_for_duration:{duration}"
+            )
+        event_type.payout_cents = cents
+        db.add(event_type)
+
+    db.commit()
+
+    refreshed = db.exec(
+        select(TherapistEventType)
+        .where(
+            TherapistEventType.therapist_id == therapist_id,
+            TherapistEventType.is_active == True,  # noqa: E712
+        )
+        .order_by(TherapistEventType.duration_minutes)
+    ).all()
+    return [
+        SlotMappingInfo(
+            duration_minutes=et.duration_minutes,
+            scheduling_url=et.scheduling_url,
+            calendly_event_type_uri=et.calendly_event_type_uri,
+            payout_cents=et.payout_cents,
+        )
+        for et in refreshed
     ]
 
 

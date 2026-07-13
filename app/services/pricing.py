@@ -6,7 +6,9 @@ from sqlmodel import Session, select
 
 from app.models import BillingPlan, ClientPlanAssignment, Session as TherapySession
 
-SUPPORTED_PLAN_DURATIONS = {30, 45}
+# Ordered tuple: drives plan-side validation and deterministic ordering of
+# duration-keyed responses. Plans/billing/payroll support these durations.
+SUPPORTED_PLAN_DURATIONS = (15, 30, 45, 60)
 
 
 def load_active_plan_map(

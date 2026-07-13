@@ -39,6 +39,18 @@ class TherapistUpdate(BaseModel):
     calendly_user_uri: str | None = None
 
 
+class TherapistPayoutUpdateRequest(BaseModel):
+    """Admin request to set per-duration therapist payouts (compensation).
+
+    Keys are string minutes (e.g. "15", "60"); values are payout in cents. Each
+    duration must already have an active event type for the therapist.
+    """
+
+    payouts: dict[str, int] = Field(
+        ..., description="Map of duration (minutes) -> therapist payout in cents"
+    )
+
+
 class SpecialtyAssignment(BaseModel):
     """Request schema for assigning specialty to therapist."""
 
