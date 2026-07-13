@@ -685,3 +685,34 @@ def test_create_therapist_with_booking_links_provisions_slots(client, db_session
     assert by_duration[30].scheduling_url == "https://calendly.com/dr/30"
     assert by_duration[30].payout_cents == 30000
     assert by_duration[45].scheduling_url == "https://calendly.com/dr/45"
+
+
+def test_admin_update_slot_mapping_replaces_links_and_payouts(client, db_session: Session):
+    """Admin edit: PUT /slot-mapping (no PAT) replaces a therapist's slots with the
+    given booking links + payouts (req 2.4 edit form)."""
+    from app.models import TherapistEventType
+
+    create = client.post(
+        "/api/v1/admin/therapists",
+        json={"email": "editslots@test.com", "display_name": "Dr Edit"},
+    )
+    assert create.status_code == 201
+    therapist_id = create.json()["id"]
+
+    resp = client.put(
+        f"/api/v1/admin/therapists/{therapist_id}/slot-mapping",
+        json={
+            "slot_mapping": {"30": "https://calendly.com/e/30", "60": "https://calendly.com/e/60"},
+            "slot_payouts": {"30": 30000, "60": 90000},
+        },
+    )
+    assert resp.status_code == 200
+    by_duration = {r["duration_minutes"]: r for r in resp.json()}
+    assert by_duration[30]["scheduling_url"] == "https://calendly.com/e/30"
+    assert by_duration[30]["payout_cents"] == 30000
+    assert by_duration[60]["payout_cents"] == 90000
+
+    rows = db_session.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
+    ).all()
+    assert {r.duration_minutes for r in rows} == {30, 60}

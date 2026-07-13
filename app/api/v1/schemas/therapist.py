@@ -66,6 +66,21 @@ class TherapistPayoutUpdateRequest(BaseModel):
     )
 
 
+class AdminValidateCalendlyForTherapistRequest(BaseModel):
+    """Admin validate request; uses the therapist's stored PAT unless one is given."""
+
+    calendly_pat: str | None = Field(default=None, min_length=1)
+
+
+class AdminSlotMappingUpdateRequest(BaseModel):
+    """Admin update of a therapist's booking-link slot mapping + per-slot payouts."""
+
+    slot_mapping: dict[str, str] = Field(..., description="duration -> Calendly scheduling URL")
+    slot_payouts: dict[str, int] | None = Field(default=None, description="duration -> therapist payout in cents")
+    # Optional: only needed when the therapist has no stored Calendly PAT yet.
+    calendly_pat: str | None = Field(default=None, min_length=1)
+
+
 class SpecialtyAssignment(BaseModel):
     """Request schema for assigning specialty to therapist."""
 

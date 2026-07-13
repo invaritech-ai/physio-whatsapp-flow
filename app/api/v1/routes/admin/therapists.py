@@ -34,6 +34,8 @@ from app.services.calendly import get_event_type_available_times_with_pat
 from app.services.therapist_onboarding import sync_event_types, validate_calendly_pat
 from app.services.timezone_utils import as_utc
 from app.api.v1.schemas.therapist import (
+    AdminSlotMappingUpdateRequest,
+    AdminValidateCalendlyForTherapistRequest,
     TherapistCreate,
     TherapistUpdate,
     TherapistResponse,
@@ -514,6 +516,69 @@ def set_therapist_payouts(
     db.commit()
 
     return [_slot_info(et) for et in sorted(event_types, key=lambda e: e.duration_minutes)]
+
+
+@router.post("/{therapist_id}/validate-calendly", response_model=ValidateCalendlyResponse)
+def admin_validate_calendly_for_therapist(
+    therapist_id: int,
+    data: AdminValidateCalendlyForTherapistRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Validate a therapist's Calendly (stored PAT by default) and preview event types."""
+    _ = admin
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+    pat = (data.calendly_pat or "").strip() or _resolve_therapist_pat(therapist)
+    valid, validation_data, errors = validate_calendly_pat(pat)
+    if not valid:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly token")
+    return _build_validate_calendly_response(validation_data)
+
+
+@router.put("/{therapist_id}/slot-mapping", response_model=list[SlotMappingInfo])
+def admin_update_slot_mapping(
+    therapist_id: int,
+    data: AdminSlotMappingUpdateRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_session),
+):
+    """Admin: replace a therapist's booking-link slot mapping and per-slot payouts."""
+    _ = admin
+    therapist = db.get(Therapist, therapist_id)
+    if not therapist:
+        raise HTTPException(status_code=404, detail="Therapist not found")
+
+    provided_pat = (data.calendly_pat or "").strip()
+    if provided_pat:
+        # PAT given: validate, store it, and resolve event-type URIs from Calendly.
+        valid, validation_data, errors = validate_calendly_pat(provided_pat)
+        if not valid:
+            raise HTTPException(status_code=400, detail=errors[0] if errors else "Invalid Calendly token")
+        therapist.calendly_user_uri = validation_data["user_uri"]
+        therapist.calendly_pat_encrypted = encrypt_string(provided_pat)
+        db.add(therapist)
+        try:
+            created = _persist_slot_mapping_with_prices(
+                db, therapist,
+                slot_mapping=data.slot_mapping,
+                validation_data=validation_data,
+                slot_payouts=data.slot_payouts,
+            )
+        except HTTPException:
+            db.rollback()
+            raise
+    else:
+        # No PAT: persist booking links + payouts directly.
+        created = _persist_slot_mapping_simple(
+            db, therapist,
+            slot_mapping=data.slot_mapping,
+            slot_payouts=data.slot_payouts,
+        )
+
+    db.commit()
+    return [_slot_info(et) for et in sorted(created, key=lambda e: e.duration_minutes)]
 
 
 def _resolve_active_event_type(
