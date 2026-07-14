@@ -45,7 +45,7 @@ class SlotMappingInfo(BaseModel):
 
     duration_minutes: int
     calendly_event_type_uri: str | None = None
-    scheduling_url: str
+    scheduling_url: str | None = None
     payout_cents: int | None = None
 
 

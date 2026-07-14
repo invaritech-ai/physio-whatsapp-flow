@@ -63,6 +63,24 @@ class TestCreateTherapist:
         assert therapist is not None
         assert therapist.user_id == user.id
 
+    def test_create_therapist_without_neon_sub_uses_pending_sentinel(self, client, db_session: Session):
+        """Admin-provisioned therapist (no neon_auth_sub) gets a pending: sentinel + is_female."""
+        response = client.post(
+            "/api/v1/admin/therapists",
+            json={
+                "email": "pending@test.com",
+                "display_name": "Dr Pending",
+                "license_number": "PT900900",
+                "is_female": True,
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["is_female"] is True
+
+        user = db_session.get(User, data["user_id"])
+        assert user.neon_auth_sub == "pending:pending@test.com"
+
     def test_create_therapist_without_calendly(self, client, db_session: Session):
         """Create therapist without Calendly link (optional)."""
         response = client.post(
@@ -588,3 +606,173 @@ class TestSpecialtyAssignment:
         assert len(data) == 2
         specialty_names = {s["name"] for s in data}
         assert specialty_names == {"Sports Rehab", "Orthopedic"}
+
+
+def test_pending_therapist_links_to_real_sub_on_first_login(client, db_session: Session):
+    """An admin-provisioned (pending:) therapist is relinked to the real Neon sub
+    by email on first login, so the created record becomes usable."""
+    from app.core.auth import get_current_approved_user
+
+    resp = client.post(
+        "/api/v1/admin/therapists",
+        json={
+            "email": "linkme@test.com",
+            "display_name": "Dr Link",
+            "license_number": "PT111222",
+        },
+    )
+    assert resp.status_code == 201
+    user_id = resp.json()["user_id"]
+    assert db_session.get(User, user_id).neon_auth_sub == "pending:linkme@test.com"
+
+    linked = get_current_approved_user(
+        "therapist",
+        {"user_id": "real-neon-sub-xyz", "email": "linkme@test.com"},
+        db_session,
+    )
+    assert linked.id == user_id
+    assert linked.neon_auth_sub == "real-neon-sub-xyz"
+
+
+def test_create_therapist_with_offered_durations_provisions_link_less_slots(client, db_session: Session):
+    """Admin create with slot_durations + payouts (no Calendly link yet) creates
+    link-less event types carrying the payout (req 2.4 full create form)."""
+    from app.models import TherapistEventType
+
+    response = client.post(
+        "/api/v1/admin/therapists",
+        json={
+            "email": "slots@test.com",
+            "display_name": "Dr Slots",
+            "license_number": "PT700700",
+            "slot_durations": ["15", "60"],
+            "slot_payouts": {"15": 20000, "60": 90000},
+        },
+    )
+    assert response.status_code == 201
+    therapist_id = response.json()["id"]
+
+    rows = db_session.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
+    ).all()
+    by_duration = {r.duration_minutes: r for r in rows}
+    assert set(by_duration.keys()) == {15, 60}
+    assert by_duration[15].scheduling_url is None
+    assert by_duration[15].payout_cents == 20000
+    assert by_duration[60].payout_cents == 90000
+
+
+def test_create_therapist_with_booking_links_provisions_slots(client, db_session: Session):
+    """Admin create with slot_mapping (booking links, no PAT) creates bookable slots."""
+    from app.models import TherapistEventType
+
+    response = client.post(
+        "/api/v1/admin/therapists",
+        json={
+            "email": "links@test.com",
+            "display_name": "Dr Links",
+            "slot_mapping": {"30": "https://calendly.com/dr/30", "45": "https://calendly.com/dr/45"},
+            "slot_payouts": {"30": 30000},
+        },
+    )
+    assert response.status_code == 201
+    therapist_id = response.json()["id"]
+
+    rows = db_session.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
+    ).all()
+    by_duration = {r.duration_minutes: r for r in rows}
+    assert by_duration[30].scheduling_url == "https://calendly.com/dr/30"
+    assert by_duration[30].payout_cents == 30000
+    assert by_duration[45].scheduling_url == "https://calendly.com/dr/45"
+
+
+def test_admin_update_slot_mapping_replaces_links_and_payouts(client, db_session: Session):
+    """Admin edit: PUT /slot-mapping (no PAT) replaces a therapist's slots with the
+    given booking links + payouts (req 2.4 edit form)."""
+    from app.models import TherapistEventType
+
+    create = client.post(
+        "/api/v1/admin/therapists",
+        json={"email": "editslots@test.com", "display_name": "Dr Edit"},
+    )
+    assert create.status_code == 201
+    therapist_id = create.json()["id"]
+
+    resp = client.put(
+        f"/api/v1/admin/therapists/{therapist_id}/slot-mapping",
+        json={
+            "slot_mapping": {"30": "https://calendly.com/e/30", "60": "https://calendly.com/e/60"},
+            "slot_payouts": {"30": 30000, "60": 90000},
+        },
+    )
+    assert resp.status_code == 200
+    by_duration = {r["duration_minutes"]: r for r in resp.json()}
+    assert by_duration[30]["scheduling_url"] == "https://calendly.com/e/30"
+    assert by_duration[30]["payout_cents"] == 30000
+    assert by_duration[60]["payout_cents"] == 90000
+
+    rows = db_session.exec(
+        select(TherapistEventType).where(TherapistEventType.therapist_id == therapist_id)
+    ).all()
+    assert {r.duration_minutes for r in rows} == {30, 60}
+
+
+def test_admin_set_therapist_calendly_pat(client, db_session: Session):
+    """Admin can set/replace a therapist's Calendly PAT: it is validated then
+    stored encrypted and the Calendly user URI is updated (req 2.4)."""
+    from unittest.mock import patch
+
+    create = client.post(
+        "/api/v1/admin/therapists",
+        json={"email": "pat@test.com", "display_name": "Dr PAT"},
+    )
+    assert create.status_code == 201
+    therapist_id = create.json()["id"]
+
+    validation = {
+        "valid": True,
+        "user_uri": "https://api.calendly.com/users/XYZ",
+        "name": "Dr PAT",
+        "email": "pat@test.com",
+        "event_types_found": 0,
+        "event_types": [],
+        "warnings": [],
+    }
+    with patch(
+        "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+        return_value=(True, validation, []),
+    ), patch(
+        "app.api.v1.routes.admin.therapists.encrypt_string",
+        return_value="ENC(pat-token)",
+    ):
+        resp = client.put(
+            f"/api/v1/admin/therapists/{therapist_id}/calendly-pat",
+            json={"calendly_pat": "pat-token"},
+        )
+    assert resp.status_code == 200
+
+    therapist = db_session.get(Therapist, therapist_id)
+    db_session.refresh(therapist)
+    assert therapist.calendly_pat_encrypted == "ENC(pat-token)"
+    assert therapist.calendly_user_uri == "https://api.calendly.com/users/XYZ"
+
+
+def test_admin_set_therapist_calendly_pat_rejects_invalid(client, db_session: Session):
+    from unittest.mock import patch
+
+    create = client.post(
+        "/api/v1/admin/therapists",
+        json={"email": "badpat@test.com", "display_name": "Dr Bad"},
+    )
+    therapist_id = create.json()["id"]
+
+    with patch(
+        "app.api.v1.routes.admin.therapists.validate_calendly_pat",
+        return_value=(False, {}, ["Invalid token"]),
+    ):
+        resp = client.put(
+            f"/api/v1/admin/therapists/{therapist_id}/calendly-pat",
+            json={"calendly_pat": "bad"},
+        )
+    assert resp.status_code == 400

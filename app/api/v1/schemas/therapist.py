@@ -13,20 +13,35 @@ class TherapistCreate(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "neon_auth_sub": "auth-therapist-123",
                 "email": "dr.smith@clinic.com",
                 "display_name": "Dr. Smith",
                 "license_number": "PT203315",
+                "is_female": False,
                 "calendly_user_uri": "https://api.calendly.com/users/XXXXX",
             }
         }
     )
 
-    neon_auth_sub: str = Field(..., min_length=1, description="Neon Auth subject ID")
+    # Optional: when omitted (admin-provisioned therapist), the account is created
+    # with a pending sentinel sub and linked to the real Neon identity by email on
+    # first login. Callers that already hold a Neon sub may still pass it.
+    neon_auth_sub: str | None = Field(default=None, min_length=1, description="Neon Auth subject ID")
     email: EmailStr = Field(..., description="Therapist email (unique)")
     display_name: str = Field(..., min_length=1, max_length=100)
     license_number: str | None = Field(default=None, min_length=3, max_length=64)
+    is_female: bool = False
     calendly_user_uri: str | None = Field(None, description="Calendly user URI")
+    # Optional: when provided, the therapist is set up via Calendly at create time —
+    # the PAT is validated + stored encrypted so the therapist is immediately bookable.
+    calendly_pat: str | None = Field(default=None, min_length=1, description="Calendly Personal Access Token")
+    # Optional explicit slot mapping {duration_minutes(str): scheduling_url}. When given
+    # (with calendly_pat), event types are created from it; otherwise they are auto-synced.
+    slot_mapping: dict[str, str] | None = Field(default=None, description="Map of duration -> Calendly scheduling URL")
+    # Session lengths (duration minutes as strings) the therapist offers, with no
+    # booking link yet. Booking links are added later from the edit screen.
+    slot_durations: list[str] | None = Field(default=None, description="Session lengths offered, no URL yet")
+    # Optional per-duration therapist payout in cents, keyed by duration minutes.
+    slot_payouts: dict[str, int] | None = Field(default=None, description="Map of duration -> therapist payout in cents")
 
 
 class TherapistUpdate(BaseModel):
@@ -49,6 +64,21 @@ class TherapistPayoutUpdateRequest(BaseModel):
     payouts: dict[str, int] = Field(
         ..., description="Map of duration (minutes) -> therapist payout in cents"
     )
+
+
+class AdminValidateCalendlyForTherapistRequest(BaseModel):
+    """Admin validate request; uses the therapist's stored PAT unless one is given."""
+
+    calendly_pat: str | None = Field(default=None, min_length=1)
+
+
+class AdminSlotMappingUpdateRequest(BaseModel):
+    """Admin update of a therapist's booking-link slot mapping + per-slot payouts."""
+
+    slot_mapping: dict[str, str] = Field(..., description="duration -> Calendly scheduling URL")
+    slot_payouts: dict[str, int] | None = Field(default=None, description="duration -> therapist payout in cents")
+    # Optional: only needed when the therapist has no stored Calendly PAT yet.
+    calendly_pat: str | None = Field(default=None, min_length=1)
 
 
 class SpecialtyAssignment(BaseModel):

@@ -335,6 +335,18 @@ def get_current_approved_user(
         select(User).where(User.neon_auth_sub == neon_auth_sub)
     ).first()
 
+    if not user and email:
+        # Admin-provisioned account: link a pending therapist record to this real
+        # Neon identity by email on first login. Only relink "pending:" sentinels
+        # so a real account is never hijacked via an email collision.
+        provisioned = db.exec(select(User).where(User.email == email)).first()
+        if provisioned and provisioned.neon_auth_sub.startswith("pending:"):
+            provisioned.neon_auth_sub = neon_auth_sub
+            db.add(provisioned)
+            db.commit()
+            db.refresh(provisioned)
+            user = provisioned
+
     if not user:
         access_request = get_or_create_access_request(db, neon_auth_sub, email)
         if access_request.status == "rejected":
