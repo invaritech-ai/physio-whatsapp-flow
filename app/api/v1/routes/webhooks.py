@@ -1163,6 +1163,31 @@ async def handle_invitee_created(db: Session, payload: dict) -> dict:
             client=client,
             therapist=therapist,
         )
+        if is_rescheduled:
+            # Calendly only ever subscribes to invitee.created/invitee.canceled, so
+            # handle_invitee_rescheduled never runs in production and this is the only
+            # place a reschedule can be announced as one. _notify_booking_confirmed is
+            # a no-op for the therapist here (session.therapist_notified is already
+            # True from the original booking), so without this the therapist would see
+            # nothing at all for a reschedule.
+            # ponytail: dedupe reason is session:<id>:rescheduled, so a session
+            # rescheduled twice notifies once. Key the reason on the new start_time if
+            # repeat reschedules need to alert separately.
+            try:
+                _notify_therapist_session_update(
+                    db=db,
+                    session=session,
+                    therapist=therapist,
+                    client=client,
+                    event_type="therapist.notification.booking_rescheduled",
+                    action="rescheduled",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create therapist reschedule notification session_id=%s therapist_id=%s",
+                    session.id,
+                    therapist.id,
+                )
         try:
             _append_calendly_operational_events(
                 db=db,
@@ -1249,7 +1274,10 @@ async def handle_invitee_canceled(db: Session, payload: dict) -> dict:
 
         therapist = db.get(Therapist, session.therapist_id)
         client = db.get(Client, session.client_id) if session.client_id else None
-        if therapist:
+        # A reschedule reaches us as canceled(rescheduled=True) + created. Announcing
+        # this leg would tell everyone the appointment was cancelled when it was only
+        # moved; the companion invitee.created raises the "rescheduled" notifications.
+        if therapist and not payload.get("rescheduled"):
             try:
                 _notify_therapist_session_update(
                     db=db,

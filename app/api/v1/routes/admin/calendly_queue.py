@@ -128,7 +128,9 @@ def _transition_queue_item(
     now = datetime.now(timezone.utc)
     details["queue_status"] = target_status
     details["queue_updated_at"] = now.isoformat()
-    row.reason = target_status
+    # Status lives in details["queue_status"] only. `reason` is the append-side dedupe
+    # key (session:<id>:calendly:<action>) — overwriting it here made the next webhook
+    # for the same session miss the dedupe and insert a duplicate row.
     row.details_json = json.dumps(details, default=str)
     db.add(row)
     db.commit()

@@ -264,6 +264,8 @@ async def test_cancel_then_created_reschedule_flow_keeps_single_scheduled_sessio
     cancel_result = await handle_invitee_canceled(db_session, cancel_payload)
     assert cancel_result["status"] == "success"
     db_session.refresh(old_session)
+    # The session is still parked as cancelled so out-of-order delivery stays
+    # deterministic, but nobody is told it was cancelled — it was only moved.
     assert old_session.status == "cancelled"
     cancel_events = db_session.exec(
         select(AuthEvent).where(
@@ -271,8 +273,7 @@ async def test_cancel_then_created_reschedule_flow_keeps_single_scheduled_sessio
             AuthEvent.event_type == "therapist.notification.booking_cancelled",
         )
     ).all()
-    assert len(cancel_events) == 1
-    assert cancel_events[0].reason == f"session:{old_session.id}:cancelled"
+    assert cancel_events == []
 
     created_payload = {
         "event": "https://api.calendly.com/scheduled_events/NEW",
@@ -309,3 +310,38 @@ async def test_cancel_then_created_reschedule_flow_keeps_single_scheduled_sessio
     assert old_session.calendly_event_uri == "https://api.calendly.com/scheduled_events/NEW"
     assert old_session.calendly_invitee_uri == "https://api.calendly.com/scheduled_events/NEW/invitees/NEWI"
     assert _as_utc(old_session.start_time) == datetime(2026, 3, 4, 12, 0, tzinfo=timezone.utc)
+
+    # Still no cancellation notice, and the reschedule is announced exactly once —
+    # on the therapist bell and on the admin operations queue.
+    assert (
+        db_session.exec(
+            select(AuthEvent).where(
+                AuthEvent.event_type == "therapist.notification.booking_cancelled",
+            )
+        ).all()
+        == []
+    )
+    reschedule_events = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.user_id == therapist.user_id,
+            AuthEvent.event_type == "therapist.notification.booking_rescheduled",
+        )
+    ).all()
+    assert len(reschedule_events) == 1
+    assert reschedule_events[0].reason == f"session:{old_session.id}:rescheduled"
+
+    admin_queue = db_session.exec(
+        select(AuthEvent).where(
+            AuthEvent.event_type == "admin.calendly.queue.invitee.rescheduled",
+        )
+    ).all()
+    assert len(admin_queue) == 1
+    assert admin_queue[0].reason == f"session:{old_session.id}:calendly:rescheduled"
+    assert (
+        db_session.exec(
+            select(AuthEvent).where(
+                AuthEvent.event_type == "admin.calendly.queue.invitee.canceled",
+            )
+        ).all()
+        == []
+    )

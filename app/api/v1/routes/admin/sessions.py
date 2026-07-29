@@ -432,6 +432,7 @@ def update_session(
 
     row = _ensure_session_exists(db, session_id)
     now = datetime.now(timezone.utc)
+    previous_status = row.status
 
     if "status" in payload.model_fields_set and payload.status is not None:
         row.status = payload.status
@@ -487,6 +488,22 @@ def update_session(
 
     client = db.get(Client, row.client_id)
     therapist = db.get(Therapist, row.therapist_id)
+
+    # An admin-initiated cancellation must raise the same notifications a
+    # Calendly-initiated one does (req 2.9): therapist bell + admin operations
+    # queue. Fires only on the transition into "cancelled", so re-clicking the
+    # already-selected status button is a no-op. Never fails the request — the
+    # status change is already committed above.
+    if row.status == "cancelled" and previous_status != "cancelled" and therapist:
+        try:
+            _notify_session_cancelled(db=db, session=row, therapist=therapist, client=client)
+        except Exception:
+            logger.exception(
+                "Failed to raise cancellation notifications session_id=%s therapist_id=%s",
+                row.id,
+                therapist.id,
+            )
+
     plan_map = load_active_plan_map(db, client_ids={row.client_id})
     return _build_detail_response(
         row,
@@ -494,6 +511,42 @@ def update_session(
         therapist_name=therapist.display_name if therapist else None,
         preferred_timezone=admin.preferred_timezone,
         plan_map=plan_map,
+    )
+
+
+def _notify_session_cancelled(
+    *,
+    db: Session,
+    session: TherapySession,
+    therapist: Therapist,
+    client: Client | None,
+) -> None:
+    """Raise therapist + admin-queue notifications for a cancelled session.
+
+    Reuses the webhook helpers so an admin-initiated cancellation is
+    indistinguishable from a Calendly-initiated one on every read surface.
+    Deferred import mirrors ``create_session`` — it avoids import-order coupling
+    between the admin route modules and ``routes.webhooks``.
+    """
+    from app.api.v1.routes.webhooks import (
+        _append_calendly_operational_events,
+        _notify_therapist_session_update,
+    )
+
+    _notify_therapist_session_update(
+        db=db,
+        session=session,
+        therapist=therapist,
+        client=client,
+        event_type="therapist.notification.booking_cancelled",
+        action="cancelled",
+    )
+    _append_calendly_operational_events(
+        db=db,
+        webhook_event_type="invitee.canceled",
+        session=session,
+        therapist=therapist,
+        client=client,
     )
 
 
