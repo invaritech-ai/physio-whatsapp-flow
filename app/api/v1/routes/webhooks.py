@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.process_trace import (
     CHANNEL_CALENDLY_WEBHOOK,
     attach_trace_to_result,
+    get_trace_id,
     new_trace_id,
     process_trace,
     reset_trace_id,
@@ -251,7 +252,116 @@ async def process_calendly_event(
             result_status=out.get("status"),
             result_keys=sorted(out.keys()),
         )
+        # Raise a loud, persisted alert whenever a verified webhook did NOT save a session,
+        # so silent data loss (e.g. unmapped event type, missing PAT, fetch failure) can no
+        # longer go unnoticed. Best-effort: never let alerting break webhook handling.
+        if _is_dropped_booking(event_type, out):
+            _record_dropped_booking_alert(
+                db=db, event_type=event_type, payload=payload, result=out
+            )
     return out
+
+
+def _is_dropped_booking(event_type: str | None, result: dict[str, Any]) -> bool:
+    """Decide whether a handler result represents a booking that should have saved but didn't."""
+    status = result.get("status")
+    if status == "success":
+        return False
+    if event_type in ("invitee.created", "invitee.rescheduled"):
+        # A created/rescheduled event must always resolve to a saved/updated session.
+        return status in ("error", "not_found")
+    if event_type == "invitee.canceled":
+        # "not_found" is expected for out-of-order or never-saved cancellations; only a
+        # genuine processing error counts as a dropped booking here.
+        return status == "error"
+    return False
+
+
+def _record_dropped_booking_alert(
+    *,
+    db: Session,
+    event_type: str | None,
+    payload: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Persist an admin alert (AuthEvent) when a verified Calendly webhook didn't save.
+
+    Best-effort and idempotent: Calendly retries on the same booking won't create
+    duplicate alerts. Never raises — alerting must not break webhook processing.
+    """
+    try:
+        status = result.get("status")
+        scheduled_event = payload.get("scheduled_event")
+        event_uri = scheduled_event.get("uri") if isinstance(scheduled_event, dict) else None
+        if not event_uri:
+            event_uri = _payload_uri(
+                payload, "event", "new_event", "new_event_uri", "old_event", "old_event_uri"
+            )
+        invitee_uri = _extract_uri(payload.get("uri")) or _payload_uri(
+            payload, "invitee", "new_invitee", "new_invitee_uri", "old_invitee", "old_invitee_uri"
+        )
+        event_type_uri = (
+            scheduled_event.get("event_type") if isinstance(scheduled_event, dict) else None
+        )
+        invitee_name = payload.get("name")
+        if isinstance(invitee_name, str) and len(invitee_name) > 120:
+            invitee_name = invitee_name[:120] + "…"
+
+        reason = f"calendly_dropped:{invitee_uri or event_uri or 'unknown'}:{status}"
+        existing = db.exec(
+            select(AuthEvent).where(
+                AuthEvent.event_type == "admin.calendly.dropped_booking",
+                AuthEvent.reason == reason,
+            )
+        ).first()
+        if existing:
+            return
+
+        details = {
+            "webhook_event_type": event_type,
+            "result_status": status,
+            "result_message": result.get("message"),
+            "calendly_event_uri": event_uri,
+            "calendly_invitee_uri": invitee_uri,
+            "calendly_event_type_uri": event_type_uri,
+            "invitee_name": invitee_name,
+            "trace_id": get_trace_id(),
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+            "alert_status": "new",
+        }
+        db.add(
+            AuthEvent(
+                event_type="admin.calendly.dropped_booking",
+                reason=reason,
+                details_json=json.dumps(details, default=str),
+            )
+        )
+        db.commit()
+
+        logger.error(
+            "DROPPED BOOKING ALERT: webhook_event=%s status=%s message=%s "
+            "event_uri=%s invitee_uri=%s event_type_uri=%s",
+            event_type,
+            status,
+            result.get("message"),
+            event_uri,
+            invitee_uri,
+            event_type_uri,
+        )
+        _calendly_trace(
+            "dropped_booking_alert",
+            webhook_event_type=event_type,
+            result_status=status,
+            calendly_event_uri=event_uri,
+            calendly_invitee_uri=invitee_uri,
+            calendly_event_type_uri=event_type_uri,
+        )
+    except Exception:
+        logger.exception("Failed to record dropped-booking alert (event_type=%s)", event_type)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _format_local_timestamp(value: datetime, preferred_timezone: str | None) -> str:
@@ -820,8 +930,32 @@ def _resolve_session_duration_minutes(
     if existing_session:
         return existing_session.duration_minutes
 
+    # Defensive fallback: no booking intent, no mapping, and no existing session to inherit
+    # from — but Calendly already told us the actual scheduled length. Trust it instead of
+    # silently dropping the booking. This guards against unmapped event types (e.g. a
+    # duplicate-named "Movement" event created by an external booking/migration tool that
+    # was never registered in therapisteventtype).
+    if scheduled_duration_minutes is not None:
+        logger.warning(
+            "No TherapistEventType mapping for therapist_id=%s event_type_uri=%s (matches=%s); "
+            "falling back to Calendly scheduled duration=%smin",
+            therapist.id,
+            event_type_uri,
+            len(matches),
+            scheduled_duration_minutes,
+        )
+        _calendly_trace(
+            "invitee_created_duration_fallback",
+            therapist_id=therapist.id,
+            calendly_event_type_uri=event_type_uri,
+            scheduled_duration_minutes=scheduled_duration_minutes,
+            mapping_matches=len(matches),
+        )
+        return scheduled_duration_minutes
+
     logger.error(
-        "Ambiguous TherapistEventType mapping therapist_id=%s event_type_uri=%s matches=%s",
+        "Cannot resolve session duration therapist_id=%s event_type_uri=%s matches=%s "
+        "and no Calendly scheduled duration available",
         therapist.id,
         event_type_uri,
         len(matches),
