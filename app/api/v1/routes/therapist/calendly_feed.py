@@ -125,7 +125,8 @@ def mark_calendly_feed_item_seen(
     details["feed_status"] = "seen"
     details["seen_at"] = now.isoformat()
     row.details_json = json.dumps(details, default=str)
-    row.reason = "seen"
+    # Status lives in details["feed_status"] only — `reason` is the append-side dedupe
+    # key (session:<id>:calendly:<action>) and must survive being marked seen.
     db.add(row)
     db.commit()
     db.refresh(row)

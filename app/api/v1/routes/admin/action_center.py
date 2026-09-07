@@ -14,6 +14,7 @@ from app.core.auth import get_current_admin
 from app.db.session import get_session
 from app.models import (
     AccessRequest,
+    AuthEvent,
     ClientFinancial,
     ClientPlanAssignment,
     PaymentRecord,
@@ -157,6 +158,28 @@ def get_action_center_summary(
         .where(ClientFinancial.id.is_(None))
     ).one()
 
+    # Untriaged appointment-change notifications, so cancellations/reschedules reach the
+    # dashboard bell instead of only the Notifications page (req 2.9). Queue status lives
+    # in the JSON blob, matched here as a substring to keep this one cheap COUNT.
+    # ponytail: couples to json.dumps' default spacing — promote queue_status to a real
+    # indexed column if this needs sorting/filtering rather than counting.
+    def _pending_queue_count(admin_event_type: str) -> int:
+        return db.exec(
+            select(func.count())
+            .select_from(AuthEvent)
+            .where(
+                AuthEvent.event_type == admin_event_type,
+                AuthEvent.details_json.like('%"queue_status": "new"%'),  # type: ignore[union-attr]
+            )
+        ).one()
+
+    appointment_cancellations_pending_review = _pending_queue_count(
+        "admin.calendly.queue.invitee.canceled"
+    )
+    appointment_reschedules_pending_review = _pending_queue_count(
+        "admin.calendly.queue.invitee.rescheduled"
+    )
+
     debug_ids: AdminActionCenterDebugIds | None = None
     if include_debug_ids:
         pending_access_request_ids = db.exec(
@@ -233,5 +256,7 @@ def get_action_center_summary(
         clients_with_receipting_backlog=clients_with_receipting_backlog,
         past_sessions_missing_payment_record=past_sessions_missing_payment_record,
         active_clients_missing_financial_profile=active_clients_missing_financial_profile,
+        appointment_cancellations_pending_review=appointment_cancellations_pending_review,
+        appointment_reschedules_pending_review=appointment_reschedules_pending_review,
         debug_ids=debug_ids,
     )

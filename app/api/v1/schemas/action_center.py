@@ -33,4 +33,7 @@ class AdminActionCenterSummaryResponse(BaseModel):
     clients_with_receipting_backlog: int
     past_sessions_missing_payment_record: int
     active_clients_missing_financial_profile: int
+    # Untriaged ("new") appointment-change notifications awaiting admin review (req 2.9).
+    appointment_cancellations_pending_review: int = 0
+    appointment_reschedules_pending_review: int = 0
     debug_ids: AdminActionCenterDebugIds | None = None
