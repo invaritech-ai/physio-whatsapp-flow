@@ -147,6 +147,7 @@ def list_clients(
         filters.append(
             or_(
                 Client.name.ilike(like),  # type: ignore[arg-type]
+                Client.preferred_name.ilike(like),  # type: ignore[arg-type]
                 Client.phone_e164.ilike(like),  # type: ignore[arg-type]
                 Client.email.ilike(like),  # type: ignore[arg-type]
             )

@@ -152,6 +152,7 @@ def test_list_clients_filters(client, db_session: Session):
         Client(
             phone_e164="+85292222222",
             name="Bob Chan",
+            preferred_name="Bobby",
             email="bob@example.com",
             preferred_therapist_id=therapist_b.id,
         )
@@ -169,6 +170,13 @@ def test_list_clients_filters(client, db_session: Session):
     assert q_payload["has_more"] is False
     assert len(q_data) == 1
     assert q_data[0]["name"] == "Alice Ng"
+
+    with _admin_auth_context(admin):
+        nick_response = client.get("/api/v1/admin/clients?q=bobby", headers=_auth_headers())
+    assert nick_response.status_code == 200
+    nick_data = nick_response.json()["items"]
+    assert len(nick_data) == 1
+    assert nick_data[0]["name"] == "Bob Chan"
 
     with _admin_auth_context(admin):
         phone_response = client.get(
